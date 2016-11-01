@@ -1,19 +1,19 @@
 {
-  "name": "ungit",
-  "author": "Fredrik Norén <fredrik.jw.noren@gmail.com>",
+  "name": "ingit",
+  "author": "Jiří Špác <capajj@gmail.com>",
   "description": "Git made easy",
   "version": "0.10.3",
   "ungitPluginApiVersion": "0.2.0",
   "scripts": {
-    "start": "node ./bin/ungit",
+    "start": "node ./bin/ingit",
     "test": "grunt test"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/FredrikNoren/ungit.git"
+    "url": "https://github.com/capaj/ingit.git"
   },
   "bin": {
-    "ungit": "./bin/ungit",
+    "ingit": "./bin/ingit",
     "0ungit-credentials-helper": "./bin/credentials-helper"
   },
   "dependencies": {
@@ -87,7 +87,7 @@
   "license": "MIT",
   "main": "public/main.js",
   "window": {
-    "title": "Ungit",
+    "title": "Ingit",
     "icon": "icon.png",
     "toolbar": false,
     "frame": false,
