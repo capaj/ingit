@@ -12,9 +12,12 @@ This project adheres to [Semantic Versioning](http://semver.org/) and
 - Whitespace ignore option for text diffs [#777](https://github.com/FredrikNoren/ungit/issues/777)
 - Fix for favorites linking in case rootPath is used @sebastianmay [#609](https://github.com/FredrikNoren/ungit/issues/609) and image diffing
 - Limit commit title to 72 characters, the rest is truncated and shown when inspecting the commit
+- Updated file watch logic to closely follow git commands in another process [#283](https://github.com/FredrikNoren/ungit/issues/283)
 
 ### Fixed
 - File diff firing increasing number of events longer it survives.
+- Fix missing ungit logo. [#812](https://github.com/FredrikNoren/ungit/issues/812)
+- Fix when stash output is empty [#818](https://github.com/FredrikNoren/ungit/issues/818)
 
 ## [0.10.3](https://github.com/FredrikNoren/ungit/compare/v0.10.2...v0.10.3)
 
