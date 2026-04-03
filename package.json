@@ -1,0 +1,19 @@
+{
+  "name": "ingit-vibe",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/server",
+    "dev:client": "npm run dev --workspace=apps/client",
+    "build": "npm run build --workspaces",
+    "build:packages": "npm run build --workspace=packages/rpc-contract && npm run build --workspace=packages/git-core && npm run build --workspace=packages/graph-core && npm run build --workspace=packages/ui",
+    "typecheck": "tsc --build"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

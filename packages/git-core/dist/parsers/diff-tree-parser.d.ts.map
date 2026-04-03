@@ -1,0 +1,1 @@
+{"version":3,"file":"diff-tree-parser.d.ts","sourceRoot":"","sources":["../../src/parsers/diff-tree-parser.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,WAAW,EAAE,MAAM,qBAAqB,CAAA;AAoBtD,wBAAsB,aAAa,CAAC,GAAG,EAAE,MAAM,EAAE,GAAG,EAAE,MAAM,GAAG,OAAO,CAAC,WAAW,EAAE,CAAC,CA2CpF"}
