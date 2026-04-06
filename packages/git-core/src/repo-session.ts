@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { RefSummary, WorktreeStatusResponse, CommitDetailResponse, ChangedPath } from '@ingit/rpc-contract'
-import { runGit, runGitLines } from './git-command.js'
+import { runGit } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
 import { CommitHydrator } from './hydrator.js'
@@ -9,6 +9,7 @@ import { parseStatus } from './parsers/status-parser.js'
 import { parseDiffTree } from './parsers/diff-tree-parser.js'
 import { streamRevList, streamRevListWithMeta } from './parsers/rev-list-parser.js'
 import type { RevListEntry, RevListEntryWithMeta } from './parsers/rev-list-parser.js'
+import { ZiggitRepo } from './ziggit-ffi.js'
 
 export interface HeadState {
   kind: 'symbolic' | 'detached'
@@ -26,6 +27,7 @@ export class RepoSession {
   readonly scheduler: GitCommandScheduler
   readonly catFile: CatFileProcess
   private readonly hydrator: CommitHydrator
+  private readonly ziggit: ZiggitRepo
 
   private constructor(
     repoId: string,
@@ -36,6 +38,7 @@ export class RepoSession {
     githubUrl: string | null,
     scheduler: GitCommandScheduler,
     catFile: CatFileProcess,
+    ziggit: ZiggitRepo,
   ) {
     this.repoId = repoId
     this.rootPath = rootPath
@@ -46,10 +49,11 @@ export class RepoSession {
     this.scheduler = scheduler
     this.catFile = catFile
     this.hydrator = new CommitHydrator(catFile)
+    this.ziggit = ziggit
   }
 
   static async open(repoPath: string): Promise<RepoSession> {
-    // Validate and resolve root path
+    // Validate and resolve root path (no ziggit equivalent for --show-toplevel)
     const { stdout: toplevel } = await runGit(
       ['rev-parse', '--show-toplevel'],
       repoPath,
@@ -62,11 +66,13 @@ export class RepoSession {
     )
     const gitDir = gitDirOut.trim()
 
-    // Resolve HEAD sha
-    const { stdout: headShaOut } = await runGit(['rev-parse', 'HEAD'], rootPath)
-    const headSha = headShaOut.trim()
+    // Open ziggit handle for this repo
+    const ziggit = new ZiggitRepo(rootPath)
 
-    // Determine if HEAD is symbolic or detached
+    // Resolve HEAD sha via ziggit FFI (no subprocess)
+    const headSha = ziggit.revParseHeadFast()
+
+    // Determine if HEAD is symbolic or detached (no ziggit equivalent)
     let headRefName: string | undefined
     let headKind: 'symbolic' | 'detached' = 'detached'
 
@@ -90,7 +96,7 @@ export class RepoSession {
       ...(headRefName ? { refName: headRefName } : {}),
     }
 
-    // Get total commit count (fast — git uses commit-graph if available)
+    // Get total commit count (no ziggit equivalent for rev-list --count)
     let totalCommitCount = 0
     try {
       const { stdout: countOut } = await runGit(['rev-list', '--count', '--exclude=refs/stash', '--all'], rootPath)
@@ -99,13 +105,10 @@ export class RepoSession {
       // fallback — not critical
     }
 
-    // Resolve GitHub URL from origin remote
+    // Resolve GitHub URL from origin remote via ziggit FFI
     let githubUrl: string | null = null
     try {
-      const { stdout: remoteOut } = await runGit(['remote', 'get-url', 'origin'], rootPath)
-      const raw = remoteOut.trim()
-      // git@github.com:org/repo.git → https://github.com/org/repo
-      // https://github.com/org/repo.git → https://github.com/org/repo
+      const raw = ziggit.remoteGetUrl('origin')
       const sshMatch = raw.match(/git@github\.com:(.+?)(?:\.git)?$/)
       const httpsMatch = raw.match(/https?:\/\/github\.com\/(.+?)(?:\.git)?$/)
       if (sshMatch) githubUrl = `https://github.com/${sshMatch[1]}`
@@ -118,7 +121,7 @@ export class RepoSession {
     const scheduler = new GitCommandScheduler(rootPath)
     const catFile = new CatFileProcess(rootPath)
 
-    return new RepoSession(repoId, rootPath, gitDir, head, totalCommitCount, githubUrl, scheduler, catFile)
+    return new RepoSession(repoId, rootPath, gitDir, head, totalCommitCount, githubUrl, scheduler, catFile, ziggit)
   }
 
   getRefs(): Promise<RefSummary[]> {
@@ -137,18 +140,18 @@ export class RepoSession {
     return parseDiffTree(this.rootPath, sha)
   }
 
-  async checkout(ref: string): Promise<void> {
-    await runGit(['checkout', ref], this.rootPath)
+  checkout(ref: string): void {
+    this.ziggit.checkout(ref)
   }
 
   async push(ref: string, remote = 'origin'): Promise<string> {
+    // No ziggit C-API for push yet — use git CLI
     const { stdout, stderr } = await runGit(['push', remote, ref], this.rootPath)
     return (stdout + stderr).trim()
   }
 
-  async fetch(remote = 'origin'): Promise<string> {
-    const { stdout, stderr } = await runGit(['fetch', remote], this.rootPath)
-    return (stdout + stderr).trim()
+  fetch(): void {
+    this.ziggit.fetch()
   }
 
   async deleteBranch(ref: string, force = false): Promise<void> {
@@ -181,5 +184,6 @@ export class RepoSession {
 
   close(): void {
     this.catFile.close()
+    this.ziggit.close()
   }
 }
