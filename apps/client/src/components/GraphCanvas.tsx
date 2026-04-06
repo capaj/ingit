@@ -89,6 +89,48 @@ function edgePath(x1: number, y1: number, x2: number, y2: number): string {
   return `M${x1},${y1}C${x1},${y1 + dy * 0.3} ${x2},${y2 - dy * 0.3} ${x2},${y2}`
 }
 
+// ---------------------------------------------------------------------------
+// Time range labels
+// ---------------------------------------------------------------------------
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function computeTimeLabels(nodes: LayoutNode[], zoom: number) {
+  if (nodes.length === 0) return []
+
+  const MIN_GAP = 22 // minimum scaled pixels between labels
+  const labels: Array<{ text: string; y: number; isMonth: boolean }> = []
+  let prevDay = -1
+  let prevMonth = -1
+  let prevYear = -1
+  let lastLabelY = -Infinity
+
+  for (const node of nodes) {
+    const date = new Date(node.row.committerUnix * 1000)
+    const day = date.getDate()
+    const month = date.getMonth()
+    const year = date.getFullYear()
+
+    if (day === prevDay && month === prevMonth && year === prevYear) continue
+    const isNewMonth = month !== prevMonth || year !== prevYear
+    prevDay = day
+    prevMonth = month
+    prevYear = year
+
+    const y = node.y * zoom
+    if (y - lastLabelY < MIN_GAP) continue
+
+    const text = isNewMonth
+      ? `${MONTH_NAMES[month]} ${day}, ${year}`
+      : `${day}`
+
+    labels.push({ text, y, isMonth: isNewMonth })
+    lastLabelY = y
+  }
+
+  return labels
+}
+
 function isRemoteRef(name: string) { return name.includes('/') }
 function refPillColor(name: string) {
   return isRemoteRef(name) ? '#94e2d5' : '#89b4fa'
@@ -334,7 +376,6 @@ export function GraphCanvas({
     }
     // Assign vertical rows to avoid overlaps
     const sorted = [...labels.values()].sort((a, b) => a.x - b.x)
-    const LABEL_HEIGHT = 22
     const CHAR_WIDTH = 7
     const LABEL_PAD = 20
     const result: Array<{ name: string; x: number; color: string; row: number }> = []
@@ -358,6 +399,11 @@ export function GraphCanvas({
     }
     return result
   }, [layout, visibleNodes, zoom])
+
+  const timeLabels = useMemo(
+    () => (layout ? computeTimeLabels(layout.nodes, zoom) : []),
+    [layout, zoom],
+  )
 
   if (!layout) {
     return (
@@ -510,6 +556,34 @@ export function GraphCanvas({
           </div>
         )}
       </div>
+
+      {/* Time range labels on the right edge */}
+      {timeLabels.map((label, i) => (
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            right: 20,
+            top: label.y - 7,
+            color: label.isMonth ? '#6c7086' : '#45475a',
+            fontSize: label.isMonth ? 11 : 10,
+            fontWeight: label.isMonth ? 600 : 400,
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            userSelect: 'none',
+          }}
+        >
+          <span style={{
+            display: 'inline-block',
+            width: label.isMonth ? 16 : 8,
+            height: 1,
+            background: label.isMonth ? '#585b70' : '#313244',
+            verticalAlign: 'middle',
+            marginRight: 4,
+          }} />
+          {label.text}
+        </div>
+      ))}
       </div>
     </div>
   )
