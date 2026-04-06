@@ -1,5 +1,3 @@
-import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process'
-
 export interface ObjectInfo {
   oid: string
   type: string
@@ -11,46 +9,31 @@ export interface ObjectContents extends ObjectInfo {
 }
 
 export class CatFileProcess {
-  private proc: ChildProcessWithoutNullStreams
+  private proc: Bun.Subprocess
   private buffer: Buffer = Buffer.alloc(0)
   private queue: Array<{
     resolve: (data: Buffer) => void
     reject: (err: unknown) => void
     neededBytes: number | null
-    headerResolver?: (line: string) => number | null
+    needsTrailingNewline: boolean
+    headerResolver?: (line: string) => { bytes: number; needsTrailingNewline: boolean } | null
   }> = []
   private closed = false
   private requestChain: Promise<void> = Promise.resolve()
 
   constructor(cwd: string) {
-    this.proc = spawn('git', ['cat-file', '--batch-command'], {
+    this.proc = Bun.spawn(['git', 'cat-file', '--batch-command'], {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'ignore',
+      onExit: (_proc, _code, _signal, error) => {
+        this.closed = true
+        this.failPending(error ?? new Error('cat-file process closed'))
+      },
     })
 
-    this.proc.stdout.on('data', (chunk: Uint8Array) => {
-      this.buffer = Buffer.concat([this.buffer, chunk] as const)
-      this.tryFlush()
-    })
-
-    this.proc.stderr.on('data', () => {
-      // suppress stderr
-    })
-
-    this.proc.on('error', (err) => {
-      for (const item of this.queue) {
-        item.reject(err)
-      }
-      this.queue = []
-    })
-
-    this.proc.on('close', () => {
-      this.closed = true
-      for (const item of this.queue) {
-        item.reject(new Error('cat-file process closed'))
-      }
-      this.queue = []
-    })
+    void this.pumpStdout()
   }
 
   private tryFlush(): void {
@@ -68,15 +51,18 @@ export class CatFileProcess {
           // missing object — resolve with empty sentinel
           item.resolve(Buffer.from(line))
           this.queue.shift()
+        } else if (bytes.bytes === 0 && !bytes.needsTrailingNewline) {
+          item.resolve(Buffer.from(line))
+          this.queue.shift()
         } else {
-          item.neededBytes = bytes
+          item.neededBytes = bytes.bytes
+          item.needsTrailingNewline = bytes.needsTrailingNewline
           // fall through to read body
         }
       }
 
       if (item.neededBytes !== null) {
-        // +1 for trailing newline
-        const total = item.neededBytes + 1
+        const total = item.neededBytes + (item.needsTrailingNewline ? 1 : 0)
         if (this.buffer.length < total) return
         const data = this.buffer.subarray(0, item.neededBytes)
         this.buffer = this.buffer.subarray(total)
@@ -86,14 +72,53 @@ export class CatFileProcess {
     }
   }
 
+  private async pumpStdout(): Promise<void> {
+    const stdout = this.proc.stdout
+    if (!stdout || typeof stdout === 'number') {
+      this.closed = true
+      this.failPending(new Error('cat-file stdout is not readable'))
+      return
+    }
+
+    const reader = stdout.getReader()
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        if (!value) continue
+
+        this.buffer = Buffer.concat([this.buffer, Buffer.from(value)] as const)
+        this.tryFlush()
+      }
+    } catch (err) {
+      this.closed = true
+      this.failPending(err)
+    } finally {
+      reader.releaseLock()
+    }
+  }
+
+  private failPending(err: unknown): void {
+    for (const item of this.queue) {
+      item.reject(err)
+    }
+    this.queue = []
+  }
+
   private sendCommand(command: string): void {
     if (this.closed) throw new Error('CatFileProcess is closed')
-    this.proc.stdin.write(command + '\n')
+    const stdin = this.proc.stdin
+    if (!stdin || typeof stdin === 'number') {
+      throw new Error('CatFileProcess stdin is not writable')
+    }
+    stdin.write(command + '\n')
+    stdin.flush()
   }
 
   private enqueue(
     command: string,
-    headerResolver: (line: string) => number | null,
+    headerResolver: (line: string) => { bytes: number; needsTrailingNewline: boolean } | null,
   ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       this.requestChain = this.requestChain.then(() => {
@@ -114,6 +139,7 @@ export class CatFileProcess {
               chainResolve()
             },
             neededBytes: null,
+            needsTrailingNewline: false,
             headerResolver,
           })
 
@@ -136,7 +162,7 @@ export class CatFileProcess {
     const data = await this.enqueue(`info ${oid}`, (line) => {
       // "<oid> <type> <size>" or "<oid> missing"
       if (line.endsWith(' missing') || line === 'missing') return null
-      return 0 // info returns just the header line, no body
+      return { bytes: 0, needsTrailingNewline: false }
     })
 
     const line = data.toString('utf8')
@@ -157,7 +183,7 @@ export class CatFileProcess {
       if (parts.length < 3) return null
       const size = parseInt(parts[2], 10)
       box.header = { oid: parts[0] ?? '', type: parts[1] ?? '', size }
-      return size
+      return { bytes: size, needsTrailingNewline: true }
     })
 
     const headerLine = data.toString('utf8')
@@ -171,7 +197,9 @@ export class CatFileProcess {
 
   close(): void {
     this.closed = true
-    this.proc.stdin.end()
-    this.proc.kill('SIGTERM')
+    const stdin = this.proc.stdin
+    if (stdin && typeof stdin !== 'number') {
+      stdin.end()
+    }
   }
 }

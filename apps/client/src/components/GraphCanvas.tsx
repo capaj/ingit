@@ -202,15 +202,17 @@ export function GraphCanvas({
     }
   }, [layout, histWindow, onRequestMore])
 
-  // Ctrl+wheel zoom — must be on document to intercept before browser zoom
+  // Ctrl+wheel zoom — capture phase on document so we intercept before the
+  // browser's native page-zoom handler processes it.
+  // Read scrollRef lazily inside the handler so we don't miss it when
+  // the component initially renders without layout (early return).
   useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
     const handler = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return
-      // Only handle if mouse is over our container
-      if (!el.contains(e.target as Node)) return
+      const el = scrollRef.current
+      if (!el || !el.contains(e.target as Node)) return
       e.preventDefault()
+      e.stopPropagation()
 
       const rect = el.getBoundingClientRect()
       const mouseY = e.clientY - rect.top + el.scrollTop
@@ -226,8 +228,8 @@ export function GraphCanvas({
       const newScrollTop = (mouseY / oldZoom) * newZoom - (e.clientY - rect.top)
       el.scrollTop = Math.max(0, newScrollTop)
     }
-    document.addEventListener('wheel', handler, { passive: false })
-    return () => document.removeEventListener('wheel', handler)
+    document.addEventListener('wheel', handler, { passive: false, capture: true })
+    return () => document.removeEventListener('wheel', handler, { capture: true })
   }, [])
 
   // Request more commits when zoomed out far enough to see beyond loaded range
@@ -375,7 +377,7 @@ export function GraphCanvas({
   return (
     <div
       ref={scrollRef}
-      style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e' }}
+      style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e', touchAction: 'pan-x pan-y' }}
       onClick={() => setActivePopover(null)}
     >
       {/* Sticky branch lane labels at top of viewport */}

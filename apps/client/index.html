@@ -17,6 +17,12 @@
 </head>
 <body>
   <div id="root"></div>
+  <script>
+    // Prevent browser Ctrl+wheel zoom globally — must run before any other script
+    document.addEventListener('wheel', function(e) {
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); }
+    }, { passive: false, capture: true });
+  </script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

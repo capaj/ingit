@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { createAbortError, readStreamText } from './bun-process.js'
 
 export class GitCommandError extends Error {
   readonly code: number
@@ -30,48 +30,62 @@ export function runGit(
   cwd: string,
   opts: GitRunOptions = {},
 ): Promise<GitRunResult> {
+  return runGitWithBun(args, cwd, opts)
+}
+
+async function runGitWithBun(
+  args: string[],
+  cwd: string,
+  opts: GitRunOptions,
+): Promise<GitRunResult> {
   const { timeout = 30000, signal } = opts
 
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'))
-      return
-    }
+  if (signal?.aborted) {
+    throw createAbortError()
+  }
 
-    const child = execFile('git', args, { cwd, timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
-      if (signal?.aborted) {
-        reject(new DOMException('Aborted', 'AbortError'))
-        return
-      }
-
-      if (err) {
-        const code = (err as NodeJS.ErrnoException & { code?: unknown }).code
-        const exitCode = typeof code === 'number' ? code : -1
-        // execFile wraps non-zero exit as an error; extract actual exit code
-        const exitSignal = (err as NodeJS.ErrnoException & { signal?: string }).signal
-        if (exitSignal === 'SIGTERM') {
-          reject(new DOMException('Aborted', 'AbortError'))
-          return
-        }
-        const realCode = (err as { code?: unknown }).code === 'ETIMEDOUT'
-          ? -1
-          : ((err as NodeJS.ErrnoException & { status?: number }).status ?? exitCode)
-        reject(new GitCommandError(args, realCode, stderr as unknown as string))
-        return
-      }
-
-      resolve({ stdout: stdout as unknown as string, stderr: stderr as unknown as string, code: 0 })
-    })
-
-    if (signal) {
-      const onAbort = () => {
-        child.kill('SIGTERM')
-        reject(new DOMException('Aborted', 'AbortError'))
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      child.on('close', () => signal.removeEventListener('abort', onAbort))
-    }
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    stdin: null,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    signal,
+    killSignal: 'SIGTERM',
   })
+
+  let timedOut = false
+  const timeoutId = timeout > 0
+    ? setTimeout(() => {
+      timedOut = true
+      proc.kill('SIGTERM')
+    }, timeout)
+    : null
+
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      readStreamText(proc.stdout),
+      readStreamText(proc.stderr),
+    ])
+
+    if (signal?.aborted || proc.signalCode === 'SIGTERM' && signal?.aborted) {
+      throw createAbortError()
+    }
+
+    if (timedOut) {
+      throw new GitCommandError(args, -1, stderr)
+    }
+
+    if (code !== 0) {
+      throw new GitCommandError(args, code, stderr)
+    }
+
+    return { stdout, stderr, code }
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId)
+    }
+  }
 }
 
 export async function runGitLines(

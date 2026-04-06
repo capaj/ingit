@@ -1,20 +1,19 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-
-const execFileAsync = promisify(execFile)
-
 export interface GitInfo {
   path: string
   version: string
 }
 
 async function which(cmd: string): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync('which', [cmd], { encoding: 'utf8' })
-    return stdout.trim()
-  } catch {
+  const proc = Bun.spawnSync(['which', cmd], {
+    stdout: 'pipe',
+    stderr: 'ignore',
+  })
+
+  if (!proc.success) {
     throw new Error(`Command not found: ${cmd}`)
   }
+
+  return proc.stdout?.toString('utf8').trim() ?? ''
 }
 
 export async function detectGit(): Promise<GitInfo> {
@@ -27,8 +26,14 @@ export async function detectGit(): Promise<GitInfo> {
 
   let versionOutput: string
   try {
-    const { stdout } = await execFileAsync('git', ['--version'], { encoding: 'utf8' })
-    versionOutput = stdout.trim()
+    const proc = Bun.spawnSync(['git', '--version'], {
+      stdout: 'pipe',
+      stderr: 'ignore',
+    })
+    if (!proc.success) {
+      throw new Error('git --version failed')
+    }
+    versionOutput = proc.stdout?.toString('utf8').trim() ?? ''
   } catch {
     throw new Error('Failed to run git --version')
   }
