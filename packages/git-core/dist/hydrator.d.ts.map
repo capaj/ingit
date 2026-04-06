@@ -1,1 +1,0 @@
-{"version":3,"file":"hydrator.d.ts","sourceRoot":"","sources":["../src/hydrator.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,oBAAoB,EAAE,MAAM,qBAAqB,CAAA;AAC/D,OAAO,KAAK,EAAE,cAAc,EAAE,MAAM,uBAAuB,CAAA;AA+B3D,qBAAa,cAAc;IACzB,OAAO,CAAC,OAAO,CAAgB;gBAEnB,OAAO,EAAE,cAAc;IAI7B,aAAa,CAAC,GAAG,EAAE,MAAM,GAAG,OAAO,CAAC,oBAAoB,CAAC;CA0EhE"}

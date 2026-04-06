@@ -10,6 +10,8 @@ export interface OpenRepoResponse {
   repoId: RepoId
   rootPath: string
   currentWorktreePath: string
+  totalCommitCount: number
+  githubUrl: string | null
   head: {
     kind: 'symbolic' | 'detached'
     refName?: string

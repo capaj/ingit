@@ -1,8 +1,21 @@
 import type { CommitDetailResponse, CommitDiffResponse, ChangedPath } from '@ingit/rpc-contract'
 
+interface PRInfo {
+  number: number
+  title: string
+  url: string
+  state: string
+  mergedAt: string | null
+}
+
 interface CommitDetailProps {
   commit: CommitDetailResponse | null
   diff: CommitDiffResponse | null
+  branchName?: string | null
+  prs?: PRInfo[]
+  githubUrl?: string | null
+  onCheckout?: (sha: string) => void
+  onNavigate?: (sha: string) => void
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -35,7 +48,7 @@ function formatDate(unix: number): string {
   })
 }
 
-export function CommitDetail({ commit, diff }: CommitDetailProps) {
+export function CommitDetail({ commit, diff, branchName, prs, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
   if (!commit) {
     return (
       <div
@@ -82,14 +95,21 @@ export function CommitDetail({ commit, diff }: CommitDetailProps) {
       >
         <div
           style={{
-            fontFamily: 'monospace',
-            fontSize: 11,
-            color: '#89b4fa',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
             marginBottom: 8,
-            letterSpacing: '0.04em',
           }}
         >
-          {shortSha}
+          <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#89b4fa', letterSpacing: '0.04em' }}>
+            {shortSha}
+          </span>
+          {onNavigate && (
+            <SmallButton label="Navigate to" onClick={() => onNavigate(commit.sha)} />
+          )}
+          {onCheckout && (
+            <SmallButton label="Checkout" onClick={() => onCheckout(commit.sha)} />
+          )}
         </div>
         <p
           style={{
@@ -106,19 +126,95 @@ export function CommitDetail({ commit, diff }: CommitDetailProps) {
 
         <MetaRow label="Author" value={`${commit.authorName} <${commit.authorEmail}>`} />
         <MetaRow label="Date" value={formatDate(commit.authorUnix)} />
+        {branchName && <MetaRow label="Branch" value={branchName} />}
         {(commit.committerName !== commit.authorName ||
           commit.committerUnix !== commit.authorUnix) && (
-          <>
-            <MetaRow label="Committer" value={`${commit.committerName} <${commit.committerEmail}>`} />
-            <MetaRow label="Commit date" value={formatDate(commit.committerUnix)} />
-          </>
-        )}
+            <>
+              <MetaRow label="Committer" value={`${commit.committerName} <${commit.committerEmail}>`} />
+              <MetaRow label="Commit date" value={formatDate(commit.committerUnix)} />
+            </>
+          )}
         {commit.parents.length > 0 && (
-          <MetaRow
-            label="Parents"
-            value={commit.parents.map((p) => p.slice(0, 8)).join(' ')}
-            mono
-          />
+          <div style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}>
+            <span style={{ color: '#6c7086', minWidth: 76, flexShrink: 0 }}>Parents</span>
+            <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {commit.parents.map((p) => (
+                <span
+                  key={p}
+                  onClick={() => onNavigate?.(p)}
+                  style={{
+                    fontFamily: 'monospace',
+                    color: '#89b4fa',
+                    cursor: onNavigate ? 'pointer' : 'default',
+                    textDecoration: onNavigate ? 'underline' : 'none',
+                  }}
+                >
+                  {p.slice(0, 8)}
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
+
+        {/* Merge info */}
+        {commit.parents.length > 1 && (
+          <div style={{ fontSize: 12, color: '#a6adc8', marginBottom: 3 }}>
+            <span style={{ color: '#6c7086' }}>Merge: </span>
+            merged into{' '}
+            <span
+              onClick={() => onNavigate?.(commit.parents[0])}
+              style={{ color: '#89b4fa', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'monospace' }}
+            >{commit.parents[0].slice(0, 8)}</span>
+            {' '}from{' '}
+            <span
+              onClick={() => onNavigate?.(commit.parents[1])}
+              style={{ color: '#a6e3a1', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'monospace' }}
+            >{commit.parents[1].slice(0, 8)}</span>
+          </div>
+        )}
+
+        {/* PR links */}
+        {prs && prs.length > 0 && (
+          <div style={{ marginTop: 6, marginBottom: 4 }}>
+            {prs.map(pr => (
+              <a
+                key={pr.number}
+                href={pr.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  background: pr.mergedAt ? '#a6e3a120' : '#89b4fa20',
+                  border: `1px solid ${pr.mergedAt ? '#a6e3a160' : '#89b4fa60'}`,
+                  color: pr.mergedAt ? '#a6e3a1' : '#89b4fa',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textDecoration: 'none',
+                  marginRight: 4,
+                }}
+              >
+                PR #{pr.number}: {pr.title.length > 40 ? pr.title.slice(0, 40) + '…' : pr.title}
+              </a>
+            ))}
+          </div>
+        )}
+
+        {/* GitHub commit link */}
+        {githubUrl && (
+          <div style={{ marginTop: 4, marginBottom: 4 }}>
+            <a
+              href={`${githubUrl}/commit/${commit.sha}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: 11, color: '#6c7086', textDecoration: 'underline' }}
+            >
+              View on GitHub
+            </a>
+          </div>
         )}
 
         {commit.refs.length > 0 && (
@@ -149,6 +245,8 @@ export function CommitDetail({ commit, diff }: CommitDetailProps) {
             padding: '10px 16px',
             borderBottom: '1px solid #313244',
             flexShrink: 0,
+            maxHeight: 200,
+            overflowY: 'auto',
           }}
         >
           <pre
@@ -282,5 +380,28 @@ function FileRow({ cp }: { cp: ChangedPath }) {
         {displayPath}
       </span>
     </div>
+  )
+}
+
+function SmallButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      style={{
+        background: '#313244',
+        border: '1px solid #45475a',
+        borderRadius: 4,
+        color: '#cdd6f4',
+        fontSize: 11,
+        padding: '2px 8px',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = '#45475a' }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = '#313244' }}
+    >
+      {label}
+    </button>
   )
 }

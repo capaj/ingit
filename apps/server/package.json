@@ -5,17 +5,20 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx --watch src/main.ts"
+    "dev": "bun --watch src/main.ts"
   },
   "dependencies": {
     "@ingit/git-core": "*",
     "@ingit/graph-core": "*",
     "@ingit/rpc-contract": "*",
-    "ws": "^8.18.0"
+    "@orpc/contract": "^1.13.13",
+    "@orpc/server": "^1.13.13",
+    "ws": "^8.20.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.0",
+    "@types/node": "^25.5.2",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.21.0"
   }
 }

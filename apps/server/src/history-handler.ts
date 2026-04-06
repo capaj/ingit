@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { Projection } from '@ingit/graph-core'
 import { runGit } from '@ingit/git-core'
-import type { RepoSession, RevListEntry } from '@ingit/git-core'
+import type { RepoSession, RevListEntryWithMeta } from '@ingit/git-core'
 import type {
   HistoryQuery,
   HistoryWindowResponse,
@@ -28,7 +28,6 @@ async function resolveAnchorSha(
     case 'sha':
       return anchor.value ?? null
     case 'row':
-      // Cannot resolve a row anchor without a loaded projection; fall back to HEAD
       return session.head.sha
     case 'mergeBase': {
       if (!anchor.value || !anchor.secondaryValue) return session.head.sha
@@ -53,30 +52,35 @@ function buildRevListArgs(query: HistoryQuery, anchorSha: string | null): string
   if (query.firstParent) args.push('--first-parent')
   if (query.topoOrder) args.push('--topo-order')
 
-  const { scope } = query
-  switch (scope.kind) {
-    case 'all':
-      args.push('--all')
-      break
-    case 'ref':
-      args.push(scope.value ?? (anchorSha ?? 'HEAD'))
-      break
-    case 'range':
-      if (scope.value && scope.secondaryValue) {
-        args.push(`${scope.value}..${scope.secondaryValue}`)
-      } else {
+  const { scope, anchor } = query
+
+  // If anchor is a specific SHA, start from that SHA (not --all)
+  // so we get commits around that point in history
+  if (anchor.kind === 'sha' && anchor.value) {
+    args.push(anchor.value)
+  } else {
+    switch (scope.kind) {
+      case 'all':
+        args.push('--exclude=refs/stash', '--all')
+        break
+      case 'ref':
         args.push(scope.value ?? (anchorSha ?? 'HEAD'))
-      }
-      break
-    case 'path':
-      // path filtering: start from anchorSha and filter by path
-      args.push(anchorSha ?? 'HEAD', '--', scope.value ?? '')
-      break
-    default:
-      args.push(anchorSha ?? 'HEAD')
+        break
+      case 'range':
+        if (scope.value && scope.secondaryValue) {
+          args.push(`${scope.value}..${scope.secondaryValue}`)
+        } else {
+          args.push(scope.value ?? (anchorSha ?? 'HEAD'))
+        }
+        break
+      case 'path':
+        args.push(anchorSha ?? 'HEAD', '--', scope.value ?? '')
+        break
+      default:
+        args.push(anchorSha ?? 'HEAD')
+    }
   }
 
-  // Include parents in output so topology edges can be computed
   args.push('--parents')
 
   const total = query.beforeRows + query.afterRows
@@ -93,7 +97,6 @@ export async function handleHistoryQuery(
   const anchorSha = await resolveAnchorSha(session, query)
   const revArgs = buildRevListArgs(query, anchorSha)
 
-  // Create a Projection to handle lane allocation and geometry
   const projectionId = randomBytes(8).toString('hex')
   const projection = new Projection(
     projectionId,
@@ -102,13 +105,15 @@ export async function handleHistoryQuery(
     query.topoOrder ? 'topo' : 'date',
   )
 
-  const rawEntries: Array<{ sha: string; parentShas: string[] }> = []
+  // Single git rev-list call gets topology + metadata (author, subject) together.
+  // No separate cat-file hydration needed for the graph view.
+  const rawEntries: RevListEntryWithMeta[] = []
 
   try {
-    await session.streamTopology(
+    await session.streamTopologyWithMeta(
       revArgs,
-      (entry: RevListEntry) => {
-        rawEntries.push({ sha: entry.sha, parentShas: entry.parentShas })
+      (entry: RevListEntryWithMeta) => {
+        rawEntries.push(entry)
       },
     )
   } catch (err) {
@@ -137,30 +142,33 @@ export async function handleHistoryQuery(
   }
 
   projection.appendEntries(rawEntries)
-
-  // Compute geometry for the entire loaded window (rows 0..N-1)
   const { lanes, edges } = projection.computeGeometry(0, rawEntries.length - 1)
 
-  // Hydrate commit metadata in parallel
-  const metas = await Promise.all(
-    rawEntries.map((e) => session.getCommitDetail(e.sha).catch(() => null)),
-  )
-
-  const rows: CommitRow[] = rawEntries.map((entry, i) => {
-    const meta = metas[i]
-    return {
-      row: i,
-      sha: entry.sha,
-      parentShas: entry.parentShas,
-      authorName: meta?.authorName ?? '',
-      authorEmail: meta?.authorEmail ?? '',
-      authorUnix: meta?.authorUnix ?? 0,
-      committerUnix: meta?.committerUnix ?? 0,
-      subject: meta?.subject ?? '',
-      refNames: meta?.refs ?? [],
-      lane: lanes.get(entry.sha) ?? 0,
+  // Build sha → ref names map from refs
+  const refs = await session.getRefs()
+  const shaToRefs = new Map<string, string[]>()
+  for (const ref of refs) {
+    const sha = ref.peeledSha ?? ref.targetSha
+    const existing = shaToRefs.get(sha)
+    if (existing) {
+      existing.push(ref.shortName)
+    } else {
+      shaToRefs.set(sha, [ref.shortName])
     }
-  })
+  }
+
+  const rows: CommitRow[] = rawEntries.map((entry, i) => ({
+    row: i,
+    sha: entry.sha,
+    parentShas: entry.parentShas,
+    authorName: entry.authorName,
+    authorEmail: entry.authorEmail,
+    authorUnix: entry.authorUnix,
+    committerUnix: entry.committerUnix,
+    subject: entry.subject,
+    refNames: shaToRefs.get(entry.sha) ?? [],
+    lane: lanes.get(entry.sha) ?? 0,
+  }))
 
   return {
     projectionId,

@@ -1,318 +1,533 @@
-import { useRef, useEffect, useCallback } from 'react'
-import type { HistoryWindowResponse, CommitRow, EdgeSegment } from '@ingit/rpc-contract'
+import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
+import type { HistoryWindowResponse, CommitRow } from '@ingit/rpc-contract'
 
 interface GraphCanvasProps {
   window: HistoryWindowResponse | null
+  totalCommitCount: number
   selectedSha: string | null
+  scrollToSha: string | null
+  scrollToKey: number
   onSelectCommit: (sha: string) => void
-  onScroll: (direction: 'up' | 'down') => void
+  onRequestMore: (direction: 'up' | 'down') => void
+  onRefAction?: (action: string, refName: string, sha: string) => void
 }
 
-const ROW_HEIGHT = 32
-const LANE_WIDTH = 18
-const DOT_RADIUS = 5
-const GRAPH_PAD_LEFT = 12
-const TEXT_PAD_LEFT = 10
-const FONT = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-const PILL_FONT = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+const NODE_SPACING_Y = 56
+const LANE_WIDTH = 80
+const NODE_RADIUS = 12
+const PAD_TOP = 40
+const PAD_LEFT = 40
 
 const LANE_COLORS = [
-  '#89b4fa',
-  '#a6e3a1',
-  '#f9e2af',
-  '#f38ba8',
-  '#cba6f7',
-  '#94e2d5',
-  '#fab387',
-  '#74c7ec',
+  '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
+  '#94e2d5', '#fab387', '#74c7ec', '#f5c2e7', '#b4befe',
 ]
 
-function laneColor(lane: number): string {
+function laneColor(lane: number) {
   return LANE_COLORS[lane % LANE_COLORS.length]
 }
 
-function rowY(row: number, windowStartRow: number): number {
-  return (row - windowStartRow) * ROW_HEIGHT
+interface LayoutNode {
+  row: CommitRow
+  x: number
+  y: number
+  idx: number
 }
 
-function rowCenterY(row: number, windowStartRow: number): number {
-  return rowY(row, windowStartRow) + ROW_HEIGHT / 2
+function buildLayout(rows: CommitRow[]) {
+  const sorted = [...rows].sort((a, b) => b.committerUnix - a.committerUnix)
+  let maxLane = 0
+  const nodes: LayoutNode[] = []
+  const shaToNode = new Map<string, LayoutNode>()
+  const shaToRow = new Map<string, CommitRow>()
+
+  for (let i = 0; i < sorted.length; i++) {
+    const row = sorted[i]
+    if (row.lane > maxLane) maxLane = row.lane
+    const node: LayoutNode = {
+      row,
+      x: PAD_LEFT + row.lane * LANE_WIDTH,
+      y: PAD_TOP + i * NODE_SPACING_Y,
+      idx: i,
+    }
+    nodes.push(node)
+    shaToNode.set(row.sha, node)
+    shaToRow.set(row.sha, row)
+  }
+
+  // Build sha → branch name by tracing first-parent chains from branch tips
+  // Prefer local branches over remotes; skip bare remote names like "origin"
+  const shaToBranch = new Map<string, string>()
+  for (const row of sorted) {
+    const bestRef = pickBestRef(row.refNames)
+    if (!bestRef) continue
+    let sha: string | undefined = row.sha
+    while (sha && !shaToBranch.has(sha)) {
+      shaToBranch.set(sha, bestRef)
+      const r = shaToRow.get(sha)
+      if (!r || r.parentShas.length === 0) break
+      sha = r.parentShas[0]
+    }
+  }
+
+  return {
+    nodes,
+    shaToNode,
+    shaToBranch,
+    maxLane,
+    totalHeight: sorted.length * NODE_SPACING_Y + PAD_TOP * 2,
+  }
 }
 
-function laneX(lane: number): number {
-  return GRAPH_PAD_LEFT + lane * LANE_WIDTH + LANE_WIDTH / 2
+function edgePath(x1: number, y1: number, x2: number, y2: number): string {
+  if (x1 === x2) return `M${x1},${y1}L${x2},${y2}`
+  const dy = y2 - y1
+  return `M${x1},${y1}C${x1},${y1 + dy * 0.3} ${x2},${y2 - dy * 0.3} ${x2},${y2}`
 }
+
+function isRemoteRef(name: string) { return name.includes('/') }
+function refPillColor(name: string) {
+  return isRemoteRef(name) ? '#94e2d5' : '#89b4fa'
+}
+
+/** Pick the best ref name for display: prefer local branches, skip bare remote names */
+function pickBestRef(refNames: string[]): string | null {
+  if (refNames.length === 0) return null
+  // Prefer local branches (no slash)
+  const local = refNames.find(r => !r.includes('/'))
+  if (local) return local
+  // Fall back to remote refs that look like branch names (origin/xxx), skip bare "origin"
+  const remote = refNames.find(r => r.includes('/') && r !== 'origin' && r !== 'HEAD')
+  return remote ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Compute visible window indices from scroll position
+// ---------------------------------------------------------------------------
+
+function computeVisibleRange(scrollTop: number, clientHeight: number, totalNodes: number, zoom: number) {
+  // Render 3 screens worth above and below
+  const overscan = clientHeight * 3
+  const top = scrollTop - overscan
+  const bot = scrollTop + clientHeight + overscan
+  const scaledSpacing = NODE_SPACING_Y * zoom
+  const firstIdx = Math.max(0, Math.floor((top - PAD_TOP * zoom) / scaledSpacing))
+  const lastIdx = Math.min(totalNodes - 1, Math.ceil((bot - PAD_TOP * zoom) / scaledSpacing))
+  return { firstIdx, lastIdx }
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export function GraphCanvas({
   window: histWindow,
+  totalCommitCount,
   selectedSha,
+  scrollToSha,
+  scrollToKey,
   onSelectCommit,
-  onScroll,
+  onRequestMore,
+  onRefAction,
 }: GraphCanvasProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const rafRef = useRef<number | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [zoom, setZoom] = useState(1)
+  const zoomRef = useRef(1)
+  // Force re-render counter — incremented when scroll position changes enough
+  const [, forceRender] = useReducer((x: number) => x + 1, 0)
+  const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
+  const [activePopover, setActivePopover] = useState<{
+    refName: string; sha: string; x: number; y: number
+  } | null>(null)
 
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+  const layout = useMemo(() => {
+    if (!histWindow || histWindow.rows.length === 0) return null
+    return buildLayout(histWindow.rows)
+  }, [histWindow])
 
-    const W = canvas.width
-    const H = canvas.height
-
-    // Background
-    ctx.fillStyle = '#1e1e2e'
-    ctx.fillRect(0, 0, W, H)
-
-    if (!histWindow || histWindow.rows.length === 0) {
-      ctx.fillStyle = '#45475a'
-      ctx.font = FONT
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('No commits', W / 2, H / 2)
-      return
-    }
-
-    const rows = histWindow.rows
-    const edges = histWindow.edges
-    const startRow = rows[0].row
-
-    // Compute max lane for graph area width
-    let maxLane = 0
-    for (const row of rows) {
-      if (row.lane > maxLane) maxLane = row.lane
-    }
-    const graphWidth = GRAPH_PAD_LEFT + (maxLane + 1) * LANE_WIDTH + TEXT_PAD_LEFT
-
-    // Selected row highlight
-    if (selectedSha) {
-      const selRow = rows.find((r) => r.sha === selectedSha)
-      if (selRow) {
-        const y = rowY(selRow.row, startRow)
-        ctx.fillStyle = '#313244'
-        ctx.fillRect(0, y, W, ROW_HEIGHT)
-      }
-    }
-
-    // Draw edges
-    for (const edge of edges) {
-      // Only draw edges that are at least partially visible
-      const minRow = Math.min(edge.fromRow, edge.toRow)
-      const maxRowE = Math.max(edge.fromRow, edge.toRow)
-      if (maxRowE < startRow || minRow >= startRow + rows.length) continue
-
-      const color = laneColor(edge.fromLane)
-      ctx.strokeStyle = color
-      ctx.lineWidth = 1.5
-
-      const x1 = laneX(edge.fromLane)
-      const y1 = rowCenterY(edge.fromRow, startRow)
-      const x2 = laneX(edge.toLane)
-      const y2 = rowCenterY(edge.toRow, startRow)
-
-      ctx.beginPath()
-
-      if (edge.fromLane === edge.toLane) {
-        // Straight vertical line
-        ctx.moveTo(x1, y1)
-        ctx.lineTo(x2, y2)
-      } else {
-        // Bezier curve for lane changes
-        const midY = (y1 + y2) / 2
-        ctx.moveTo(x1, y1)
-        ctx.bezierCurveTo(x1, midY, x2, midY, x2, y2)
-      }
-
-      ctx.stroke()
-    }
-
-    // Draw commit dots, text, and ref pills
-    ctx.font = FONT
-    ctx.textBaseline = 'middle'
-
-    for (const row of rows) {
-      const cx = laneX(row.lane)
-      const cy = rowCenterY(row.row, startRow)
-
-      // Dot
-      const color = laneColor(row.lane)
-      ctx.beginPath()
-      ctx.arc(cx, cy, DOT_RADIUS, 0, Math.PI * 2)
-      ctx.fillStyle = row.sha === selectedSha ? '#ffffff' : color
-      ctx.fill()
-      if (row.sha === selectedSha) {
-        ctx.strokeStyle = color
-        ctx.lineWidth = 2
-        ctx.stroke()
-      }
-
-      // Subject text
-      let textX = graphWidth
-
-      // Ref pills first (draw them before text, accumulate width used)
-      const pills = row.refNames
-      let pillX = textX
-      const pillsWidths: number[] = []
-      ctx.font = PILL_FONT
-      for (const ref of pills) {
-        const tw = ctx.measureText(ref).width
-        pillsWidths.push(tw + 10)
-      }
-      ctx.font = FONT
-
-      const totalPillWidth = pillsWidths.reduce((a, b) => a + b + 4, 0)
-      const textAreaX = textX + totalPillWidth + (pills.length > 0 ? 6 : 0)
-      const maxTextWidth = W - textAreaX - 16
-
-      // Draw subject
-      ctx.fillStyle = row.sha === selectedSha ? '#cdd6f4' : '#bac2de'
-      ctx.textAlign = 'left'
-      const subject = truncateText(ctx, row.subject, maxTextWidth)
-      ctx.fillText(subject, textAreaX, cy)
-
-      // Draw pills
-      ctx.font = PILL_FONT
-      for (let i = 0; i < pills.length; i++) {
-        const ref = pills[i]
-        const pw = pillsWidths[i]
-        const pillColor = ref.startsWith('HEAD') ? '#f38ba8' :
-                          ref.includes('/') ? '#94e2d5' : '#89b4fa'
-
-        const py = cy - 8
-        const ph = 16
-
-        ctx.fillStyle = pillColor + '33'
-        roundRect(ctx, pillX, py, pw, ph, 4)
-        ctx.fill()
-
-        ctx.strokeStyle = pillColor
-        ctx.lineWidth = 1
-        roundRect(ctx, pillX, py, pw, ph, 4)
-        ctx.stroke()
-
-        ctx.fillStyle = pillColor
-        ctx.textAlign = 'center'
-        ctx.fillText(ref, pillX + pw / 2, cy)
-
-        pillX += pw + 4
-      }
-
-      ctx.font = FONT
-    }
-  }, [histWindow, selectedSha])
-
-  // Schedule draw
+  // Scroll to a specific commit when scrollToSha changes
   useEffect(() => {
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
-    rafRef.current = requestAnimationFrame(() => {
-      draw()
-      rafRef.current = null
-    })
+    if (!scrollToSha || !layout || !scrollRef.current) return
+    const node = layout.shaToNode.get(scrollToSha)
+    if (!node) return
+    const el = scrollRef.current
+    const targetTop = node.y * zoom - el.clientHeight / 2
+    el.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+  }, [scrollToSha, scrollToKey, layout, zoom])
+
+  // Scroll + resize handler: re-render only when we're about to run out of rendered nodes
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const check = () => {
+      if (!layout) return
+      const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, zoomRef.current)
+      const prev = lastRenderedRange.current
+
+      // Re-render if we've scrolled past half the overscan
+      const margin = Math.floor((prev.lastIdx - prev.firstIdx) * 0.25)
+      if (firstIdx < prev.firstIdx + margin || lastIdx > prev.lastIdx - margin) {
+        lastRenderedRange.current = { firstIdx, lastIdx }
+        forceRender()
+      }
+
+      // Request more data when scrolled past the last loaded commit
+      if (histWindow && histWindow.hasMoreAfter && layout) {
+        const lastLoadedY = layout.nodes.length * NODE_SPACING_Y * zoomRef.current
+        const viewBottom = el.scrollTop + el.clientHeight
+        if (viewBottom > lastLoadedY - el.clientHeight) {
+          onRequestMore('down')
+        }
+      }
+    }
+
+    // Initial
+    if (layout) {
+      const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, zoomRef.current)
+      lastRenderedRange.current = { firstIdx, lastIdx }
+      forceRender()
+    }
+
+    el.addEventListener('scroll', check, { passive: true })
+    const ro = new ResizeObserver(() => check())
+    ro.observe(el)
     return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
+      el.removeEventListener('scroll', check)
+      ro.disconnect()
+    }
+  }, [layout, histWindow, onRequestMore])
+
+  // Ctrl+wheel zoom — must be on document to intercept before browser zoom
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const handler = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      // Only handle if mouse is over our container
+      if (!el.contains(e.target as Node)) return
+      e.preventDefault()
+
+      const rect = el.getBoundingClientRect()
+      const mouseY = e.clientY - rect.top + el.scrollTop
+
+      const oldZoom = zoomRef.current
+      const delta = e.deltaY > 0 ? -0.1 : 0.1
+      const newZoom = Math.max(0.1, Math.min(3, oldZoom + delta))
+
+      zoomRef.current = newZoom
+      setZoom(newZoom)
+
+      // Adjust scroll to keep the point under the cursor stable
+      const newScrollTop = (mouseY / oldZoom) * newZoom - (e.clientY - rect.top)
+      el.scrollTop = Math.max(0, newScrollTop)
+    }
+    document.addEventListener('wheel', handler, { passive: false })
+    return () => document.removeEventListener('wheel', handler)
+  }, [])
+
+  // Request more commits when zoomed out far enough to see beyond loaded range
+  useEffect(() => {
+    if (!layout || !scrollRef.current || !histWindow?.hasMoreAfter) return
+    const el = scrollRef.current
+    const visibleContentHeight = el.clientHeight / zoom
+    const loadedContentHeight = layout.nodes.length * NODE_SPACING_Y
+    if (visibleContentHeight > loadedContentHeight * 0.8) {
+      onRequestMore('down')
+    }
+  }, [zoom, layout, histWindow, onRequestMore])
+
+  // Compute visible nodes + edges based on last rendered range
+  const { visibleNodes, visibleEdges } = useMemo(() => {
+    if (!layout) return { visibleNodes: [], visibleEdges: [] }
+    const { firstIdx, lastIdx } = lastRenderedRange.current
+
+    const nodes = layout.nodes.slice(firstIdx, lastIdx + 1)
+    const visibleShas = new Set(nodes.map(n => n.row.sha))
+
+    const edges: Array<{ from: LayoutNode; to: LayoutNode; isMerge: boolean; key: string }> = []
+    // Edges from visible nodes to their parents (parent may be outside window)
+    for (const node of nodes) {
+      for (let pi = 0; pi < node.row.parentShas.length; pi++) {
+        const parent = layout.shaToNode.get(node.row.parentShas[pi])
+        if (!parent) continue
+        edges.push({
+          from: node, to: parent, isMerge: pi > 0,
+          key: `${node.row.sha}-${parent.row.sha}`,
+        })
       }
     }
-  }, [draw])
-
-  // Resize observer
-  useEffect(() => {
-    const container = containerRef.current
-    const canvas = canvasRef.current
-    if (!container || !canvas) return
-
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect
-        canvas.width = Math.floor(width)
-        canvas.height = Math.floor(height)
-        draw()
+    // Edges from non-visible nodes that connect TO visible nodes
+    for (const node of layout.nodes) {
+      if (visibleShas.has(node.row.sha)) continue
+      for (let pi = 0; pi < node.row.parentShas.length; pi++) {
+        const parent = layout.shaToNode.get(node.row.parentShas[pi])
+        if (!parent || !visibleShas.has(parent.row.sha)) continue
+        edges.push({
+          from: node, to: parent, isMerge: pi > 0,
+          key: `${node.row.sha}-${parent.row.sha}`,
+        })
       }
-    })
-    ro.observe(container)
-    return () => ro.disconnect()
-  }, [draw])
+    }
 
-  // Click handler
-  const handleClick = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!histWindow || histWindow.rows.length === 0) return
-      const rect = canvasRef.current!.getBoundingClientRect()
-      const y = e.clientY - rect.top
-      const rows = histWindow.rows
-      const startRow = rows[0].row
-      const clickedIndex = Math.floor(y / ROW_HEIGHT)
-      const row = rows[clickedIndex]
-      if (row) {
-        onSelectCommit(row.sha)
+    return { visibleNodes: nodes, visibleEdges: edges }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, lastRenderedRange.current.firstIdx, lastRenderedRange.current.lastIdx])
+
+  const handleRefClick = useCallback((e: React.MouseEvent, refName: string, sha: string, x: number, y: number) => {
+    e.stopPropagation()
+    setActivePopover({ refName, sha, x, y })
+  }, [])
+
+  const handleAction = useCallback((action: string) => {
+    if (activePopover && onRefAction) {
+      onRefAction(action, activePopover.refName, activePopover.sha)
+    }
+    setActivePopover(null)
+  }, [activePopover, onRefAction])
+
+  // Sticky lane labels: show a branch name when its tip is above the viewport
+  // AND the topmost visible commit on that lane belongs to that branch
+  const stickyLaneLabels = useMemo(() => {
+    if (!layout || !scrollRef.current) return []
+    const scrollTop = scrollRef.current.scrollTop
+
+    // Find the topmost visible commit per lane
+    const topmostPerLane = new Map<number, LayoutNode>()
+    for (const node of visibleNodes) {
+      const existing = topmostPerLane.get(node.row.lane)
+      if (!existing || node.y < existing.y) {
+        topmostPerLane.set(node.row.lane, node)
       }
-    },
-    [histWindow, onSelectCommit]
-  )
+    }
 
-  // Wheel handler
-  const handleWheel = useCallback(
-    (e: React.WheelEvent<HTMLCanvasElement>) => {
-      e.preventDefault()
-      onScroll(e.deltaY > 0 ? 'down' : 'up')
-    },
-    [onScroll]
-  )
+    const labels = new Map<number, { name: string; x: number; color: string }>()
+
+    for (const node of layout.nodes) {
+      if (node.row.refNames.length === 0) continue
+      const tipScreenY = node.y * zoom
+      if (tipScreenY >= scrollTop) continue // tip still on screen
+
+      const lane = node.row.lane
+      if (labels.has(lane)) continue
+
+      // Check that the topmost visible commit on this lane actually belongs to this branch
+      const topVisible = topmostPerLane.get(lane)
+      if (!topVisible) continue
+
+      const refName = pickBestRef(node.row.refNames)
+      if (!refName) continue
+      const topBranch = layout.shaToBranch.get(topVisible.row.sha)
+      if (topBranch !== refName) continue
+
+      labels.set(lane, {
+        name: refName,
+        x: node.x,
+        color: laneColor(lane),
+      })
+    }
+    // Assign vertical rows to avoid overlaps
+    const sorted = [...labels.values()].sort((a, b) => a.x - b.x)
+    const LABEL_HEIGHT = 22
+    const CHAR_WIDTH = 7
+    const LABEL_PAD = 20
+    const result: Array<{ name: string; x: number; color: string; row: number }> = []
+    // Track the right edge of each row
+    const rowRightEdges: number[] = []
+
+    for (const label of sorted) {
+      const labelLeft = label.x * zoom - 4
+      const labelWidth = label.name.length * CHAR_WIDTH + LABEL_PAD
+      let assignedRow = 0
+      for (let r = 0; r < rowRightEdges.length; r++) {
+        if (labelLeft >= rowRightEdges[r]) {
+          assignedRow = r
+          break
+        }
+        assignedRow = r + 1
+      }
+      if (assignedRow >= rowRightEdges.length) rowRightEdges.push(0)
+      rowRightEdges[assignedRow] = labelLeft + labelWidth + 4
+      result.push({ ...label, row: assignedRow })
+    }
+    return result
+  }, [layout, visibleNodes, zoom])
+
+  if (!layout) {
+    return (
+      <div style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#45475a', fontSize: 13 }}>
+        No commits to display
+      </div>
+    )
+  }
+
+  // Use totalCommitCount as estimate, but shrink to actual loaded count once all are loaded
+  const estimatedCount = histWindow?.hasMoreAfter === false
+    ? layout.nodes.length
+    : Math.max(totalCommitCount, layout.nodes.length)
+  const fullHeight = estimatedCount * NODE_SPACING_Y + PAD_TOP * 2
+  const scaledH = fullHeight * zoom
 
   return (
     <div
-      ref={containerRef}
-      style={{ flex: 1, height: '100%', overflow: 'hidden', position: 'relative' }}
+      ref={scrollRef}
+      style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e' }}
+      onClick={() => setActivePopover(null)}
     >
-      <canvas
-        ref={canvasRef}
-        style={{ display: 'block', width: '100%', height: '100%' }}
-        onClick={handleClick}
-        onWheel={handleWheel}
-      />
+      {/* Sticky branch lane labels at top of viewport */}
+      <div style={{
+        position: 'sticky',
+        top: 0,
+        left: 0,
+        zIndex: 5,
+        height: 0,
+        overflow: 'visible',
+        pointerEvents: 'none',
+      }}>
+        {stickyLaneLabels.map((label) => (
+          <div
+            key={label.name}
+            style={{
+              position: 'absolute',
+              left: label.x * zoom - 4,
+              top: 4 + label.row * 22,
+              padding: '2px 8px',
+              borderRadius: 4,
+              background: label.color + '20',
+              border: `1px solid ${label.color}50`,
+              color: label.color,
+              fontSize: 10,
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'auto',
+              transform: `scale(${Math.min(zoom, 1)})`,
+              transformOrigin: 'top left',
+            }}
+          >
+            {label.name}
+          </div>
+        ))}
+      </div>
+
+      {/* Outer spacer sized to scaled content for correct scrollbar */}
+      <div style={{ height: scaledH, position: 'relative' }}>
+      {/* Inner content scaled via transform */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: `${100 / zoom}%`,
+        height: fullHeight,
+        transform: `scale(${zoom})`,
+        transformOrigin: 'top left',
+      }}>
+        <svg
+          width="100%"
+          height={fullHeight}
+          style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
+        >
+          {visibleEdges.map((e) => (
+            <path
+              key={e.key}
+              d={edgePath(e.from.x, e.from.y, e.to.x, e.to.y)}
+              stroke={e.isMerge ? laneColor(e.to.row.lane) : laneColor(e.from.row.lane)}
+              strokeWidth={e.isMerge ? 2 : 3}
+              fill="none"
+              strokeLinecap="round"
+              opacity={0.8}
+            />
+          ))}
+          {visibleNodes.map((node) => {
+            const { row, x, y } = node
+            const selected = row.sha === selectedSha
+            const color = laneColor(row.lane)
+            return (
+              <g
+                key={row.sha}
+                onClick={(e) => { e.stopPropagation(); onSelectCommit(row.sha) }}
+                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+              >
+                {selected && <circle cx={x} cy={y} r={NODE_RADIUS * 2.5} fill={color} opacity={0.15} />}
+                <circle cx={x} cy={y} r={NODE_RADIUS} fill={selected ? color : '#1e1e2e'} stroke={color} strokeWidth={selected ? 3 : 2.5} />
+                {row.parentShas.length > 1 && <circle cx={x} cy={y} r={NODE_RADIUS * 0.35} fill={color} />}
+              </g>
+            )
+          })}
+        </svg>
+
+        {visibleNodes.flatMap((node) =>
+          node.row.refNames.map((refName, ri) => {
+            const color = refPillColor(refName)
+            const px = node.x + NODE_RADIUS + 8
+            const py = node.y - 10 + ri * 24
+            return (
+              <div
+                key={`${node.row.sha}-ref-${ri}`}
+                onClick={(e) => handleRefClick(e, refName, node.row.sha, px, py)}
+                style={{
+                  position: 'absolute', left: px, top: py, height: 20,
+                  padding: '0 7px', borderRadius: 4,
+                  background: color + '20', border: `1px solid ${color}60`,
+                  color, fontSize: 11, fontWeight: 600, lineHeight: '20px',
+                  whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
+                  transition: 'transform 0.3s ease, opacity 0.3s ease',
+                }}
+              >
+                {isRemoteRef(refName) ? '☁ ' : '⎇ '}{refName}
+              </div>
+            )
+          })
+        )}
+
+        {activePopover && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute', left: activePopover.x, top: activePopover.y + 24,
+              background: '#313244', border: '1px solid #45475a', borderRadius: 8,
+              padding: 4, zIndex: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 140,
+            }}
+          >
+            <div style={{ padding: '4px 10px', fontSize: 11, color: '#6c7086', fontWeight: 600 }}>
+              {activePopover.refName}
+            </div>
+            {!isRemoteRef(activePopover.refName) && (
+              <>
+                <PopoverButton label="Checkout" onClick={() => handleAction('checkout')} />
+                <PopoverButton label="Push" onClick={() => handleAction('push')} />
+              </>
+            )}
+            {isRemoteRef(activePopover.refName) && (
+              <PopoverButton label="Fetch" onClick={() => handleAction('fetch')} />
+            )}
+            <PopoverButton label="Delete" onClick={() => handleAction('delete')} danger />
+          </div>
+        )}
+      </div>
+      </div>
     </div>
   )
 }
 
-function truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
-  if (maxWidth <= 0) return ''
-  const width = ctx.measureText(text).width
-  if (width <= maxWidth) return text
-  const ellipsis = '…'
-  const eWidth = ctx.measureText(ellipsis).width
-  let lo = 0
-  let hi = text.length
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi + 1) / 2)
-    if (ctx.measureText(text.slice(0, mid)).width + eWidth <= maxWidth) {
-      lo = mid
-    } else {
-      hi = mid - 1
-    }
-  }
-  return text.slice(0, lo) + ellipsis
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.lineTo(x + w - r, y)
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
-  ctx.lineTo(x + w, y + h - r)
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-  ctx.lineTo(x + r, y + h)
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
-  ctx.lineTo(x, y + r)
-  ctx.quadraticCurveTo(x, y, x + r, y)
-  ctx.closePath()
+function PopoverButton({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'block', width: '100%', padding: '6px 10px',
+        background: 'none', border: 'none',
+        color: danger ? '#f38ba8' : '#cdd6f4',
+        fontSize: 12, textAlign: 'left', cursor: 'pointer',
+        borderRadius: 4, fontFamily: 'inherit',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = '#45475a' }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}
+    >
+      {label}
+    </button>
+  )
 }

@@ -7,13 +7,14 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/server",
-    "dev:client": "npm run dev --workspace=apps/client",
-    "build": "npm run build --workspaces",
-    "build:packages": "npm run build --workspace=packages/rpc-contract && npm run build --workspace=packages/git-core && npm run build --workspace=packages/graph-core && npm run build --workspace=packages/ui",
-    "typecheck": "tsc --build"
+    "dev": "bun run --filter '@ingit/server' dev & bun run --filter '@ingit/client' dev & wait",
+    "dev:client": "bun run --filter '@ingit/client' dev",
+    "build": "bun run --filter '*' build",
+    "build:packages": "bun run --filter '@ingit/rpc-contract' build && bun run --filter '@ingit/git-core' build && bun run --filter '@ingit/graph-core' build",
+    "typecheck": "tsc --build",
+    "bump": "bunx npm-check-updates -u --workspaces --root && bun install"
   },
   "devDependencies": {
-    "typescript": "^5.8.0"
+    "typescript": "^6.0.2"
   }
 }

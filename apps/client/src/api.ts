@@ -1,53 +1,53 @@
-import type {
-  OpenRepoRequest,
-  OpenRepoResponse,
-  RefSummary,
-  WorktreeStatusResponse,
-  HistoryQuery,
-  HistoryWindowResponse,
-  CommitDetailResponse,
-  CommitDiffResponse,
-} from '@ingit/rpc-contract'
+import { createORPCClient } from '@orpc/client'
+import { RPCLink } from '@orpc/client/websocket'
+import type { HistoryQuery } from '@ingit/rpc-contract'
 
-const BASE = ''  // same origin
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let client: any = null
+let ws: WebSocket | null = null
 
-async function fetchJson<T>(url: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + url, opts)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ code: 'unknown', message: res.statusText }))
-    throw new Error(err.message || res.statusText)
-  }
-  return res.json()
+function getWsUrl(): string {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${location.host}/rpc`
 }
 
-export function openRepo(req: OpenRepoRequest) {
-  return fetchJson<OpenRepoResponse>('/api/repo/open', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
+function ensureClient() {
+  if (client && ws && ws.readyState <= WebSocket.OPEN) return client
+
+  ws = new WebSocket(getWsUrl())
+  const link = new RPCLink({ websocket: ws })
+  client = createORPCClient(link)
+  return client
+}
+
+export function openRepo(req: { path: string }) {
+  return ensureClient().openRepo(req)
 }
 
 export function getRefs(repoId: string) {
-  return fetchJson<RefSummary[]>(`/api/repo/${repoId}/refs`)
+  return ensureClient().getRefs({ repoId })
 }
 
 export function getStatus(repoId: string) {
-  return fetchJson<WorktreeStatusResponse>(`/api/repo/${repoId}/status`)
+  return ensureClient().getStatus({ repoId })
 }
 
-export function queryHistory(repoId: string, query: HistoryQuery) {
-  return fetchJson<HistoryWindowResponse>(`/api/repo/${repoId}/history`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(query),
-  })
+export function queryHistory(_repoId: string, query: HistoryQuery) {
+  return ensureClient().queryHistory(query)
 }
 
 export function getCommitDetail(repoId: string, sha: string) {
-  return fetchJson<CommitDetailResponse>(`/api/repo/${repoId}/commit/${sha}`)
+  return ensureClient().getCommitDetail({ repoId, sha })
 }
 
 export function getCommitDiff(repoId: string, sha: string) {
-  return fetchJson<CommitDiffResponse>(`/api/repo/${repoId}/commit/${sha}/diff`)
+  return ensureClient().getCommitDiff({ repoId, sha })
+}
+
+export function getCommitPRs(repoId: string, sha: string) {
+  return ensureClient().getCommitPRs({ repoId, sha })
+}
+
+export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete', refName: string, sha: string) {
+  return ensureClient().refAction({ repoId, action, refName, sha })
 }

@@ -17,16 +17,57 @@ const KIND_LABELS: Record<RefKind, string> = {
 
 const KIND_ORDER: RefKind[] = ['head', 'remote', 'tag']
 
-export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps) {
-  const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({})
+const COLLAPSED_WIDTH = 36
 
+export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps) {
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({ head: true, remote: true, tag: true })
+  const [filter, setFilter] = useState('')
+
+  const filterLower = filter.toLowerCase()
   const groups: Record<RefKind, RefSummary[]> = { head: [], remote: [], tag: [] }
   for (const ref of refs) {
+    if (filterLower && !ref.shortName.toLowerCase().includes(filterLower)) continue
     groups[ref.kind].push(ref)
   }
 
   function toggleGroup(kind: RefKind) {
     setCollapsed((prev) => ({ ...prev, [kind]: !prev[kind] }))
+  }
+
+  if (!sidebarOpen) {
+    return (
+      <div
+        style={{
+          width: COLLAPSED_WIDTH,
+          flexShrink: 0,
+          height: '100%',
+          background: '#181825',
+          borderRight: '1px solid #313244',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          paddingTop: 8,
+          userSelect: 'none',
+        }}
+      >
+        <button
+          onClick={() => setSidebarOpen(true)}
+          title="Show refs"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: '#6c7086',
+            cursor: 'pointer',
+            fontSize: 16,
+            padding: 6,
+            lineHeight: 1,
+          }}
+        >
+          ☰
+        </button>
+      </div>
+    )
   }
 
   return (
@@ -45,22 +86,61 @@ export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps
     >
       <div
         style={{
-          padding: '12px 14px 8px',
+          padding: '8px 14px',
           fontSize: 11,
           fontWeight: 700,
           letterSpacing: '0.08em',
           color: '#6c7086',
           textTransform: 'uppercase',
           borderBottom: '1px solid #313244',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
         }}
       >
         Refs
+        <button
+          onClick={() => setSidebarOpen(false)}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: '#6c7086',
+            cursor: 'pointer',
+            fontSize: 14,
+            padding: '0 2px',
+            lineHeight: 1,
+          }}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div style={{ padding: '6px 10px', borderBottom: '1px solid #313244' }}>
+        <input
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter branches..."
+          style={{
+            width: '100%',
+            background: '#1e1e2e',
+            border: '1px solid #45475a',
+            borderRadius: 4,
+            color: '#cdd6f4',
+            fontSize: 12,
+            padding: '5px 8px',
+            outline: 'none',
+            fontFamily: 'inherit',
+          }}
+          onFocus={(e) => { e.currentTarget.style.borderColor = '#89b4fa' }}
+          onBlur={(e) => { e.currentTarget.style.borderColor = '#45475a' }}
+        />
       </div>
 
       {KIND_ORDER.map((kind) => {
         const items = groups[kind]
         if (items.length === 0) return null
-        const isCollapsed = collapsed[kind]
+        const isCollapsed = filter ? false : collapsed[kind]
 
         return (
           <div key={kind}>
@@ -146,14 +226,7 @@ export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps
                         {ref.shortName}
                       </span>
                       {(ref.ahead != null || ref.behind != null) && (
-                        <span
-                          style={{
-                            display: 'flex',
-                            gap: 4,
-                            flexShrink: 0,
-                            fontSize: 11,
-                          }}
-                        >
+                        <span style={{ display: 'flex', gap: 4, flexShrink: 0, fontSize: 11 }}>
                           {ref.ahead != null && ref.ahead > 0 && (
                             <span style={{ color: '#a6e3a1' }}>↑{ref.ahead}</span>
                           )}
