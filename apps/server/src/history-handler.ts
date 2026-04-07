@@ -14,8 +14,15 @@ async function resolveAnchorSha(
 ): Promise<string | null> {
   const { anchor } = query
   switch (anchor.kind) {
-    case 'head':
-      return session.head.sha
+    case 'head': {
+      // Resolve HEAD dynamically — session.head may be stale after checkout
+      try {
+        const { stdout } = await runGit(['rev-parse', 'HEAD'], session.rootPath)
+        return stdout.trim()
+      } catch {
+        return session.head.sha
+      }
+    }
     case 'ref': {
       if (!anchor.value) return session.head.sha
       try {
@@ -142,7 +149,17 @@ export async function handleHistoryQuery(
   }
 
   projection.appendEntries(rawEntries)
-  const { lanes, edges } = projection.computeGeometry(0, rawEntries.length - 1)
+
+  // Resolve current HEAD dynamically (session.head may be stale after checkout)
+  let headSha: string | undefined
+  try {
+    const { stdout } = await runGit(['rev-parse', 'HEAD'], session.rootPath)
+    headSha = stdout.trim()
+  } catch {
+    headSha = session.head.sha
+  }
+
+  const { lanes, edges } = projection.computeGeometry(0, rawEntries.length - 1, undefined, headSha)
 
   // Build sha → ref names map from refs
   const refs = await session.getRefs()

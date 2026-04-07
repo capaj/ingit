@@ -19,6 +19,15 @@ export class LaneAllocator {
     this.activeLanes = new Array(maxLanes).fill(null) as (string | null)[]
   }
 
+  /**
+   * Pre-reserve a specific lane for a SHA before processing begins.
+   * Used to ensure HEAD always gets lane 0.
+   */
+  reserveLane(sha: string, lane: number): void {
+    this.reserved.set(sha, lane)
+    this.activeLanes[lane] = sha
+  }
+
   assignLane(sha: string, parentShas: string[]): number {
     let lane = this.reserved.get(sha)
 
@@ -39,6 +48,10 @@ export class LaneAllocator {
     const firstParent = parentShas[0]
     if (!this.reserved.has(firstParent)) {
       this.reserved.set(firstParent, lane)
+      this.activeLanes[lane] = firstParent
+    } else if (this.reserved.get(firstParent) === lane) {
+      // Parent is already reserved in this same lane — keep it occupied
+      // so no other commit can steal the lane in between.
       this.activeLanes[lane] = firstParent
     } else {
       this.activeLanes[lane] = null

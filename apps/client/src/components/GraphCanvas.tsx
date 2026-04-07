@@ -7,6 +7,7 @@ interface GraphCanvasProps {
   selectedSha: string | null
   scrollToSha: string | null
   scrollToKey: number
+  currentBranch: string | null
   onSelectCommit: (sha: string) => void
   onRequestMore: (direction: 'up' | 'down') => void
   onRefAction?: (action: string, refName: string, sha: string) => void
@@ -172,6 +173,7 @@ export function GraphCanvas({
   selectedSha,
   scrollToSha,
   scrollToKey,
+  currentBranch,
   onSelectCommit,
   onRequestMore,
   onRefAction,
@@ -510,6 +512,7 @@ export function GraphCanvas({
         {visibleNodes.flatMap((node) =>
           node.row.refNames.map((refName, ri) => {
             const color = refPillColor(refName)
+            const isCurrent = currentBranch !== null && refName === currentBranch
             const px = node.x + NODE_RADIUS + 8
             const py = node.y - 10 + ri * 24
             return (
@@ -519,13 +522,15 @@ export function GraphCanvas({
                 style={{
                   position: 'absolute', left: px, top: py, height: 20,
                   padding: '0 7px', borderRadius: 4,
-                  background: color + '20', border: `1px solid ${color}60`,
+                  background: isCurrent ? color + '35' : color + '20',
+                  border: `1px solid ${isCurrent ? color : color + '60'}`,
                   color, fontSize: 11, fontWeight: 600, lineHeight: '20px',
                   whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
                   transition: 'transform 0.3s ease, opacity 0.3s ease',
+                  boxShadow: isCurrent ? `0 0 6px ${color}40` : 'none',
                 }}
               >
-                {isRemoteRef(refName) ? '☁ ' : '⎇ '}{refName}
+                {isRemoteRef(refName) ? '☁ ' : isCurrent ? '● ' : '⎇ '}{refName}
               </div>
             )
           })

@@ -123,12 +123,27 @@ export class Projection {
   computeGeometry(
     startRow: number,
     endRow: number,
-    fromCheckpoint?: ProjectionCheckpoint
+    fromCheckpoint?: ProjectionCheckpoint,
+    headSha?: string
   ): GeometryResult {
     const clampedStart = Math.max(0, startRow)
     const clampedEnd = Math.min(this.entries.length - 1, endRow)
 
     const allocator = new LaneAllocator()
+
+    // Reserve lane 0 for HEAD's entire first-parent chain so the checked-out
+    // branch always occupies the leftmost lane — matching Ungit's behavior
+    // where switching branches rearranges the graph.
+    if (headSha) {
+      let walkSha: string | undefined = headSha
+      while (walkSha !== undefined) {
+        allocator.reserveLane(walkSha, 0)
+        const idx = this.shaIndex.get(walkSha)
+        if (idx === undefined) break
+        const entry = this.entries[idx]
+        walkSha = entry.parentShas.length > 0 ? entry.parentShas[0] : undefined
+      }
+    }
 
     // Determine where to start the replay.
     let replayFrom = 0

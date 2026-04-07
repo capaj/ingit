@@ -16,6 +16,10 @@ function setRepoPathInUrl(repoPath: string) {
   window.location.hash = `#/repository?path=${encodeURIComponent(repoPath)}`
 }
 
+function isSessionError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('No session found')
+}
+
 function mergeHistory(
   prev: HistoryWindowResponse | null,
   incoming: HistoryWindowResponse,
@@ -218,9 +222,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   performRefAction: async (action, refName, sha) => {
-    const { repoId } = get()
-    if (!repoId) return
-    await refAction(repoId, action, refName, sha)
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+    try {
+      await refAction(repoId, action, refName, sha)
+    } catch (err) {
+      if (isSessionError(err)) {
+        const res = await openRepo({ path: repoPath })
+        repoId = res.repoId
+        set({ repoId })
+        await refAction(repoId, action, refName, sha)
+      } else {
+        throw err
+      }
+    }
     // Reload
     const [refs, hist] = await Promise.all([
       getRefs(repoId),
@@ -238,9 +254,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   checkoutSha: async (sha) => {
-    const { repoId } = get()
-    if (!repoId) return
-    await refAction(repoId, 'checkout', sha, sha)
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+    try {
+      await refAction(repoId, 'checkout', sha, sha)
+    } catch (err) {
+      if (isSessionError(err)) {
+        const res = await openRepo({ path: repoPath })
+        repoId = res.repoId
+        set({ repoId })
+        await refAction(repoId, 'checkout', sha, sha)
+      } else {
+        throw err
+      }
+    }
     const [refs, hist] = await Promise.all([
       getRefs(repoId),
       queryHistory(repoId, {

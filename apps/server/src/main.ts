@@ -75,8 +75,8 @@ async function main(): Promise<void> {
   // oRPC WebSocket handler
   const rpcHandler = new RPCHandler(router, {
     interceptors: [
-      onError((error) => {
-        console.error('RPC error:', error.error)
+      onError((err) => {
+        console.error('RPC error:', err instanceof Error ? err.stack : err)
       }),
     ],
   })

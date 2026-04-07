@@ -28,6 +28,7 @@ export interface RefSummary {
   upstream?: string
   ahead?: number
   behind?: number
+  isCurrent?: boolean
 }
 
 export interface HistoryAnchor {

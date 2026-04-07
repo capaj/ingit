@@ -140,8 +140,9 @@ export class RepoSession {
     return parseDiffTree(this.rootPath, sha)
   }
 
-  checkout(ref: string): void {
-    this.ziggit.checkout(ref)
+  async checkout(ref: string): Promise<void> {
+    // Use git CLI — ziggit FFI only does tree checkout without switching HEAD
+    await runGit(['checkout', ref], this.rootPath)
   }
 
   async push(ref: string, remote = 'origin'): Promise<string> {

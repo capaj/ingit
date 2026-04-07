@@ -208,13 +208,14 @@ export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps
                         border: 'none',
                         color: isSelected ? '#89b4fa' : '#cdd6f4',
                         fontSize: 13,
+                        fontWeight: ref.isCurrent ? 700 : 'normal',
                         cursor: 'pointer',
                         textAlign: 'left',
                         fontFamily: 'inherit',
                         overflow: 'hidden',
                       }}
                     >
-                      <RefIcon kind={ref.kind} />
+                      <RefIcon kind={ref.kind} isCurrent={ref.isCurrent} />
                       <span
                         style={{
                           flex: 1,
@@ -247,14 +248,14 @@ export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps
   )
 }
 
-function RefIcon({ kind }: { kind: RefKind }) {
+function RefIcon({ kind, isCurrent }: { kind: RefKind; isCurrent?: boolean }) {
   const style: React.CSSProperties = {
     flexShrink: 0,
     fontSize: 11,
     width: 14,
     textAlign: 'center',
   }
-  if (kind === 'head') return <span style={{ ...style, color: '#89b4fa' }}>⎇</span>
+  if (kind === 'head') return <span style={{ ...style, color: isCurrent ? '#a6e3a1' : '#89b4fa' }}>{isCurrent ? '●' : '⎇'}</span>
   if (kind === 'remote') return <span style={{ ...style, color: '#94e2d5' }}>◉</span>
   return <span style={{ ...style, color: '#f9e2af' }}>◆</span>
 }

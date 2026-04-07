@@ -23,6 +23,7 @@ export const RefSummary = z.object({
   upstream: z.string().optional(),
   ahead: z.number().optional(),
   behind: z.number().optional(),
+  isCurrent: z.boolean().optional(),
 })
 
 export const CommitRow = z.object({

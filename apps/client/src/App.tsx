@@ -43,6 +43,11 @@ export function App() {
     return null
   }, [selectedSha, historyWindow])
 
+  const currentBranch = useMemo(() => {
+    const current = refs.find(r => r.isCurrent)
+    return current?.shortName ?? null
+  }, [refs])
+
   if (status === 'no-repo') {
     return <RepoOpen onOpen={openRepoByPath} error={openError} />
   }
@@ -74,6 +79,7 @@ export function App() {
           selectedSha={selectedSha}
           scrollToSha={scrollToSha}
           scrollToKey={scrollToKey}
+          currentBranch={currentBranch}
           onSelectCommit={selectCommit}
           onRequestMore={requestMore}
           onRefAction={async (action, refName, sha) => {

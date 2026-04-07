@@ -28,6 +28,17 @@ function refKind(refname: string): RefSummary['kind'] {
 }
 
 export async function parseRefs(cwd: string): Promise<RefSummary[]> {
+  // Resolve current HEAD branch name
+  let currentRef: string | null = null
+  try {
+    const headLines = await runGitLines(['symbolic-ref', '--quiet', 'HEAD'], cwd)
+    if (headLines.length > 0 && headLines[0]) {
+      currentRef = headLines[0].trim() // e.g. "refs/heads/main"
+    }
+  } catch {
+    // detached HEAD — no current branch
+  }
+
   const lines = await runGitLines(
     [
       'for-each-ref',
@@ -64,6 +75,7 @@ export async function parseRefs(cwd: string): Promise<RefSummary[]> {
       ...(upstream?.trim() ? { upstream: upstream.trim() } : {}),
       ...(ahead !== undefined ? { ahead } : {}),
       ...(behind !== undefined ? { behind } : {}),
+      ...(currentRef && refname === currentRef ? { isCurrent: true } : {}),
     }
 
     // Skip symrefs like HEAD under refs/remotes

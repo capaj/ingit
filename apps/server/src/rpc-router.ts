@@ -1,5 +1,6 @@
 import { implement } from '@orpc/server'
 import { contract } from '@ingit/rpc-contract'
+import { runGit } from '@ingit/git-core'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
 
@@ -92,14 +93,20 @@ export const router = os.router({
     if (!session) throw new Error('No session found for this repoId')
     let message = ''
     switch (input.action) {
-      case 'checkout':
-        await session.checkout(input.refName)
+      case 'checkout': {
+        console.log(`checkout: ref="${input.refName}" cwd="${session.rootPath}"`)
+        const { stdout: cOut, stderr: cErr } = await runGit(['checkout', input.refName], session.rootPath)
+        console.log('checkout stdout:', cOut.trim())
+        console.log('checkout stderr:', cErr.trim())
+        const { stdout: headOut } = await runGit(['symbolic-ref', '--short', 'HEAD'], session.rootPath)
+        console.log('checkout: HEAD is now:', headOut.trim())
         break
+      }
       case 'push':
         message = await session.push(input.refName)
         break
       case 'fetch':
-        message = await session.fetch()
+        session.fetch()
         break
       case 'delete':
         if (input.refName.includes('/')) {
