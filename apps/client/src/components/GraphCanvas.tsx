@@ -461,40 +461,106 @@ function gaugeColor(progress: number, defaultColor: string) {
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
+type TimeLabel = {
+  key: string
+  text: string
+  y: number
+  kind: 'month' | 'day' | 'hour'
+}
+
+function shouldShowHourLabels(zoom: number) {
+  return zoom >= 1.4
+}
+
+function isSameDay(a: Date, b: Date) {
+  return a.getDate() === b.getDate()
+    && a.getMonth() === b.getMonth()
+    && a.getFullYear() === b.getFullYear()
+}
+
+function isSameHour(a: Date, b: Date) {
+  return isSameDay(a, b) && a.getHours() === b.getHours()
+}
+
+function formatFullDate(date: Date) {
+  return `${MONTH_NAMES[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`
+}
+
+function formatHourLabel(date: Date) {
+  const hours = `${date.getHours()}`.padStart(2, '0')
+  const minutes = `${date.getMinutes()}`.padStart(2, '0')
+  return `${hours}:${minutes}`
+}
+
+function formatTopTimeLabel(date: Date, zoom: number) {
+  if (shouldShowHourLabels(zoom)) {
+    return `${formatFullDate(date)} ${formatHourLabel(date)}`
+  }
+  return formatFullDate(date)
+}
+
 function computeTimeLabels(nodes: LayoutNode[], zoom: number) {
   if (nodes.length === 0) return []
 
-  const MIN_GAP = 22 // minimum scaled pixels between labels
-  const labels: Array<{ text: string; y: number; isMonth: boolean }> = []
-  let prevDay = -1
-  let prevMonth = -1
-  let prevYear = -1
+  const showHours = shouldShowHourLabels(zoom)
+  const labels: TimeLabel[] = []
+  let previousSeenDate: Date | null = null
   let lastLabelY = -Infinity
 
   for (const node of nodes) {
     const date = new Date(node.row.committerUnix * 1000)
-    const day = date.getDate()
-    const month = date.getMonth()
-    const year = date.getFullYear()
-
-    if (day === prevDay && month === prevMonth && year === prevYear) continue
-    const isNewMonth = month !== prevMonth || year !== prevYear
-    prevDay = day
-    prevMonth = month
-    prevYear = year
-
     const y = node.y * zoom
-    if (y - lastLabelY < MIN_GAP) continue
+    const isNewDay = !previousSeenDate || !isSameDay(date, previousSeenDate)
+    const isNewMonth = !previousSeenDate
+      || date.getMonth() !== previousSeenDate.getMonth()
+      || date.getFullYear() !== previousSeenDate.getFullYear()
+    const isNewHour = !previousSeenDate || !isSameHour(date, previousSeenDate)
+    previousSeenDate = date
 
-    const text = isNewMonth
-      ? `${MONTH_NAMES[month]} ${day}, ${year}`
-      : `${day}`
+    let label: TimeLabel | null = null
 
-    labels.push({ text, y, isMonth: isNewMonth })
+    if (showHours) {
+      if (isNewDay) {
+        label = { key: `${node.row.sha}:day`, text: formatFullDate(date), y, kind: 'month' }
+      } else if (isNewHour) {
+        label = { key: `${node.row.sha}:hour`, text: formatHourLabel(date), y, kind: 'hour' }
+      }
+    } else if (isNewDay) {
+      label = {
+        key: `${node.row.sha}:day`,
+        text: isNewMonth ? formatFullDate(date) : `${date.getDate()}`,
+        y,
+        kind: isNewMonth ? 'month' : 'day',
+      }
+    }
+
+    if (!label) continue
+
+    const minGap = label.kind === 'hour' ? 34 : 22
+    if (y - lastLabelY < minGap) continue
+
+    labels.push(label)
     lastLabelY = y
   }
 
   return labels
+}
+
+function findTopVisibleNode(nodes: LayoutNode[], scrollTop: number, zoom: number) {
+  if (nodes.length === 0) return null
+
+  const unscaledTop = scrollTop / zoom
+  const approxIdx = Math.max(0, Math.min(
+    nodes.length - 1,
+    Math.floor((unscaledTop - PAD_TOP) / NODE_SPACING_Y),
+  ))
+
+  let idx = approxIdx
+  while (idx + 1 < nodes.length && nodes[idx + 1].y * zoom <= scrollTop) {
+    idx++
+  }
+
+  return nodes[idx] ?? nodes[0] ?? null
 }
 
 function isRemoteRef(name: string) { return name.includes('/') }
@@ -553,6 +619,7 @@ export function GraphCanvas({
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
+  const [scrollTop, setScrollTop] = useState(0)
   const zoomRef = useRef(1)
   // Force re-render counter — incremented when scroll position changes enough
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
@@ -619,6 +686,7 @@ export function GraphCanvas({
 
     const check = () => {
       if (!layout) return
+      setScrollTop(el.scrollTop)
       if (timeLabelsLayerRef.current) {
         timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
       }
@@ -644,6 +712,7 @@ export function GraphCanvas({
 
     // Initial
     if (layout) {
+      setScrollTop(el.scrollTop)
       if (timeLabelsLayerRef.current) {
         timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
       }
@@ -664,6 +733,7 @@ export function GraphCanvas({
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !timeLabelsLayerRef.current) return
+    setScrollTop(el.scrollTop)
     timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
   }, [layout, zoom])
 
@@ -871,6 +941,19 @@ export function GraphCanvas({
     [layout, zoom],
   )
 
+  const topTimeLabel = useMemo(() => {
+    if (!layout) return null
+    const node = findTopVisibleNode(layout.nodes, scrollTop, zoom)
+    if (!node) return null
+    const date = new Date(node.row.committerUnix * 1000)
+    return formatTopTimeLabel(date, zoom)
+  }, [layout, scrollTop, zoom])
+
+  const floatingTimeLabels = useMemo(
+    () => timeLabels.filter((label) => label.y - scrollTop > 28),
+    [timeLabels, scrollTop],
+  )
+
   const selectedNode = useMemo(
     () => (layout && selectedSha ? layout.shaToNode.get(selectedSha) ?? null : null),
     [layout, selectedSha],
@@ -1002,7 +1085,6 @@ export function GraphCanvas({
 
       {/* Time range labels pinned to the right edge of the viewport */}
       <div
-        ref={timeLabelsLayerRef}
         style={{
           position: 'sticky',
           top: 0,
@@ -1014,35 +1096,57 @@ export function GraphCanvas({
           pointerEvents: 'none',
         }}
       >
-        {timeLabels.map((label, i) => (
+        {topTimeLabel && (
           <div
-            key={i}
             style={{
               position: 'absolute',
               right: 20,
-              top: label.y - 7,
-              padding: '2px 6px',
+              top: 6,
+              padding: '3px 8px',
               borderRadius: 6,
-              background: '#1e1e2e',
-              color: label.isMonth ? '#6c7086' : '#45475a',
-              fontSize: label.isMonth ? 11 : 10,
-              fontWeight: label.isMonth ? 600 : 400,
+              background: '#181825',
+              border: '1px solid #313244',
+              color: '#9399b2',
+              fontSize: 11,
+              fontWeight: 600,
               whiteSpace: 'nowrap',
-              pointerEvents: 'none',
-              userSelect: 'none',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
             }}
           >
-            <span style={{
-              display: 'inline-block',
-              width: label.isMonth ? 16 : 8,
-              height: 1,
-              background: label.isMonth ? '#585b70' : '#313244',
-              verticalAlign: 'middle',
-              marginRight: 4,
-            }} />
-            {label.text}
+            {topTimeLabel}
           </div>
-        ))}
+        )}
+        <div ref={timeLabelsLayerRef} style={{ position: 'relative' }}>
+          {floatingTimeLabels.map((label) => (
+            <div
+              key={label.key}
+              style={{
+                position: 'absolute',
+                right: 20,
+                top: label.y - 7,
+                padding: '2px 6px',
+                borderRadius: 6,
+                background: '#1e1e2e',
+                color: label.kind === 'month' ? '#6c7086' : label.kind === 'hour' ? '#585b70' : '#45475a',
+                fontSize: label.kind === 'month' ? 11 : 10,
+                fontWeight: label.kind === 'month' ? 600 : label.kind === 'hour' ? 500 : 400,
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                userSelect: 'none',
+              }}
+            >
+              <span style={{
+                display: 'inline-block',
+                width: label.kind === 'month' ? 16 : label.kind === 'hour' ? 6 : 8,
+                height: 1,
+                background: label.kind === 'month' ? '#585b70' : label.kind === 'hour' ? '#45475a' : '#313244',
+                verticalAlign: 'middle',
+                marginRight: 4,
+              }} />
+              {label.text}
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Outer spacer sized to scaled content for correct scrollbar */}
