@@ -551,6 +551,7 @@ export function GraphCanvas({
   onCommitAction,
 }: GraphCanvasProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const zoomRef = useRef(1)
   // Force re-render counter — incremented when scroll position changes enough
@@ -618,6 +619,9 @@ export function GraphCanvas({
 
     const check = () => {
       if (!layout) return
+      if (timeLabelsLayerRef.current) {
+        timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
+      }
       const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, zoomRef.current)
       const prev = lastRenderedRange.current
 
@@ -640,6 +644,9 @@ export function GraphCanvas({
 
     // Initial
     if (layout) {
+      if (timeLabelsLayerRef.current) {
+        timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
+      }
       const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, zoomRef.current)
       lastRenderedRange.current = { firstIdx, lastIdx }
       forceRender()
@@ -653,6 +660,12 @@ export function GraphCanvas({
       ro.disconnect()
     }
   }, [layout, histWindow, onRequestMore])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !timeLabelsLayerRef.current) return
+    timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
+  }, [layout, zoom])
 
   // Ctrl+wheel zoom — capture phase on document so we intercept before the
   // browser's native page-zoom handler processes it.
@@ -957,7 +970,7 @@ export function GraphCanvas({
         position: 'sticky',
         top: 0,
         left: 0,
-        zIndex: 5,
+        zIndex: 20,
         height: 0,
         overflow: 'visible',
         pointerEvents: 'none',
@@ -983,6 +996,51 @@ export function GraphCanvas({
             }}
           >
             {label.name}
+          </div>
+        ))}
+      </div>
+
+      {/* Time range labels pinned to the right edge of the viewport */}
+      <div
+        ref={timeLabelsLayerRef}
+        style={{
+          position: 'sticky',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: 0,
+          overflow: 'visible',
+          zIndex: 20,
+          pointerEvents: 'none',
+        }}
+      >
+        {timeLabels.map((label, i) => (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              right: 20,
+              top: label.y - 7,
+              padding: '2px 6px',
+              borderRadius: 6,
+              background: '#1e1e2e',
+              color: label.isMonth ? '#6c7086' : '#45475a',
+              fontSize: label.isMonth ? 11 : 10,
+              fontWeight: label.isMonth ? 600 : 400,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          >
+            <span style={{
+              display: 'inline-block',
+              width: label.isMonth ? 16 : 8,
+              height: 1,
+              background: label.isMonth ? '#585b70' : '#313244',
+              verticalAlign: 'middle',
+              marginRight: 4,
+            }} />
+            {label.text}
           </div>
         ))}
       </div>
@@ -1110,7 +1168,7 @@ export function GraphCanvas({
                 alignItems: 'center',
                 gap: 6,
                 flexWrap: 'nowrap',
-                zIndex: 6,
+                zIndex: 20,
               }}
             >
               {node.row.refNames.map((refName, ri) => {
@@ -1189,34 +1247,8 @@ export function GraphCanvas({
         )}
       </div>
 
-      {/* Time range labels on the right edge */}
-      {timeLabels.map((label, i) => (
-        <div
-          key={i}
-          style={{
-            position: 'absolute',
-            right: 20,
-            top: label.y - 7,
-            color: label.isMonth ? '#6c7086' : '#45475a',
-            fontSize: label.isMonth ? 11 : 10,
-            fontWeight: label.isMonth ? 600 : 400,
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            userSelect: 'none',
-          }}
-        >
-          <span style={{
-            display: 'inline-block',
-            width: label.isMonth ? 16 : 8,
-            height: 1,
-            background: label.isMonth ? '#585b70' : '#313244',
-            verticalAlign: 'middle',
-            marginRight: 4,
-          }} />
-          {label.text}
-        </div>
-      ))}
       </div>
+
     </div>
   )
 }
