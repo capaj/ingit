@@ -25,6 +25,11 @@ const GAUGE_RADIUS = NODE_RADIUS - 5
 const GAUGE_STROKE_WIDTH = 3.25
 const GAUGE_START_ANGLE = 230
 const GAUGE_END_ANGLE = 490
+const EDGE_CORNER_RADIUS = 12
+const EDGE_SHORT_CURVE_ROWS = 6
+const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
+const EDGE_RAIL_STAGGER_STEP = 6
+const EDGE_BUNDLE_GAP = 4
 const PAD_TOP = 40
 const PAD_LEFT = 40
 
@@ -43,6 +48,13 @@ interface LayoutNode {
   y: number
   idx: number
 }
+
+type EdgeRoutePlan =
+  | { mode: 'straight' }
+  | { mode: 'curve' }
+  | { mode: 'adjacent-hook'; laneA: number; laneB: number }
+  | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
+  | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
 
 function buildLayout(rows: CommitRow[]) {
   const sorted = [...rows].sort((a, b) => b.committerUnix - a.committerUnix)
@@ -93,6 +105,301 @@ function edgePath(x1: number, y1: number, x2: number, y2: number): string {
   if (x1 === x2) return `M${x1},${y1}L${x2},${y2}`
   const dy = y2 - y1
   return `M${x1},${y1}C${x1},${y1 + dy * 0.3} ${x2},${y2 - dy * 0.3} ${x2},${y2}`
+}
+
+function hashText(text: string) {
+  let hash = 0
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0
+  }
+  return hash
+}
+
+function pointOnCircleToward(fromX: number, fromY: number, toX: number, toY: number, radius: number) {
+  const dx = toX - fromX
+  const dy = toY - fromY
+  const dist = Math.hypot(dx, dy) || 1
+  return {
+    x: fromX + (dx / dist) * radius,
+    y: fromY + (dy / dist) * radius,
+  }
+}
+
+function roundedPolylinePath(points: Array<{ x: number; y: number }>, cornerRadius: number): string {
+  if (points.length === 0) return ''
+  if (points.length === 1) return `M${points[0].x},${points[0].y}`
+
+  let d = `M${points[0].x},${points[0].y}`
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1]
+    const current = points[i]
+    const next = points[i + 1]
+
+    const inDx = current.x - prev.x
+    const inDy = current.y - prev.y
+    const outDx = next.x - current.x
+    const outDy = next.y - current.y
+
+    const inLen = Math.hypot(inDx, inDy)
+    const outLen = Math.hypot(outDx, outDy)
+
+    if (inLen < 0.001 || outLen < 0.001) {
+      d += `L${current.x},${current.y}`
+      continue
+    }
+
+    const radius = Math.min(cornerRadius, inLen / 2, outLen / 2)
+    const entryX = current.x - (inDx / inLen) * radius
+    const entryY = current.y - (inDy / inLen) * radius
+    const exitX = current.x + (outDx / outLen) * radius
+    const exitY = current.y + (outDy / outLen) * radius
+
+    d += `L${entryX},${entryY}Q${current.x},${current.y} ${exitX},${exitY}`
+  }
+
+  const last = points[points.length - 1]
+  d += `L${last.x},${last.y}`
+  return d
+}
+
+function chooseCrossoverY(from: LayoutNode, to: LayoutNode, edgeKey: string) {
+  const rowDelta = Math.abs(to.idx - from.idx)
+  const topY = Math.min(from.y, to.y)
+  const hash = hashText(edgeKey)
+  const fractions = rowDelta > 12 ? [0.28, 0.42, 0.56, 0.7] : [0.35, 0.5, 0.65]
+  const fraction = fractions[hash % fractions.length] ?? 0.5
+  const gapOffset = Math.max(0, Math.min(rowDelta - 1, Math.round((rowDelta - 1) * fraction)))
+  const jitter = (((hash >> 3) % 3) - 1) * 4
+  return topY + NODE_SPACING_Y * (gapOffset + 0.5) + jitter
+}
+
+function countRowsMatching(
+  occupiedLanes: number[],
+  fromIdx: number,
+  toIdx: number,
+  predicate: (lane: number, rowIdx: number) => boolean,
+) {
+  const start = Math.max(0, Math.min(fromIdx, toIdx) + 1)
+  const end = Math.min(occupiedLanes.length - 1, Math.max(fromIdx, toIdx) - 1)
+  let count = 0
+
+  for (let idx = start; idx <= end; idx++) {
+    const lane = occupiedLanes[idx]
+    if (predicate(lane, idx)) count++
+  }
+
+  return count
+}
+
+function buildOuterRailPath(
+  from: LayoutNode,
+  to: LayoutNode,
+  outerRailX: number,
+) {
+  const verticalDirection = to.y > from.y ? 1 : -1
+  const start = pointOnCircleToward(from.x, from.y, outerRailX, from.y + verticalDirection * (NODE_RADIUS + 8), NODE_RADIUS - 1)
+  const end = pointOnCircleToward(to.x, to.y, outerRailX, to.y - verticalDirection * (NODE_RADIUS + 8), NODE_RADIUS - 1)
+  const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
+  const targetJoinY = to.y - verticalDirection * (NODE_RADIUS + 8)
+
+  return roundedPolylinePath(
+    [
+      start,
+      { x: outerRailX, y: sourceJoinY },
+      { x: outerRailX, y: targetJoinY },
+      end,
+    ],
+    EDGE_CORNER_RADIUS,
+  )
+}
+
+function buildAdjacentHookPath(
+  from: LayoutNode,
+  to: LayoutNode,
+  trackX: number,
+) {
+  const verticalDirection = to.y > from.y ? 1 : -1
+  const start = pointOnCircleToward(from.x, from.y, trackX, to.y, NODE_RADIUS - 1)
+  const end = pointOnCircleToward(to.x, to.y, trackX, to.y, NODE_RADIUS - 1)
+  const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
+
+  return roundedPolylinePath(
+    [
+      start,
+      { x: trackX, y: sourceJoinY },
+      { x: trackX, y: to.y },
+      end,
+    ],
+    EDGE_CORNER_RADIUS,
+  )
+}
+
+function buildInsideRailPath(
+  from: LayoutNode,
+  to: LayoutNode,
+  sourceRailX: number,
+  targetRailX: number,
+  crossoverY: number,
+) {
+  const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
+  const end = pointOnCircleToward(to.x, to.y, from.x, from.y, NODE_RADIUS - 1)
+  const verticalDirection = to.y > from.y ? 1 : -1
+  const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
+  const targetJoinY = to.y - verticalDirection * (NODE_RADIUS + 8)
+
+  return roundedPolylinePath(
+    [
+      start,
+      { x: sourceRailX, y: sourceJoinY },
+      { x: sourceRailX, y: crossoverY },
+      { x: targetRailX, y: crossoverY },
+      { x: targetRailX, y: targetJoinY },
+      end,
+    ],
+    EDGE_CORNER_RADIUS,
+  )
+}
+
+function buildStraightEdgePath(from: LayoutNode, to: LayoutNode) {
+  const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
+  const end = pointOnCircleToward(to.x, to.y, from.x, from.y, NODE_RADIUS - 1)
+  return `M${start.x},${start.y}L${end.x},${end.y}`
+}
+
+function buildCurvedEdgePath(from: LayoutNode, to: LayoutNode) {
+  const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
+  const end = pointOnCircleToward(to.x, to.y, from.x, from.y, NODE_RADIUS - 1)
+  return edgePath(start.x, start.y, end.x, end.y)
+}
+
+function planEdgeRoute(
+  from: LayoutNode,
+  to: LayoutNode,
+  edgeKey: string,
+  occupiedLanes: number[],
+): EdgeRoutePlan {
+  const laneDelta = Math.abs(from.row.lane - to.row.lane)
+  const rowDelta = Math.abs(to.idx - from.idx)
+
+  if (laneDelta === 0) {
+    return { mode: 'straight' }
+  }
+
+  if (laneDelta === 1 && rowDelta >= EDGE_SHORT_CURVE_ROWS) {
+    return {
+      mode: 'adjacent-hook',
+      laneA: Math.min(from.row.lane, to.row.lane),
+      laneB: Math.max(from.row.lane, to.row.lane),
+    }
+  }
+
+  if (rowDelta < EDGE_SHORT_CURVE_ROWS) {
+    return { mode: 'curve' }
+  }
+
+  const minLane = Math.min(from.row.lane, to.row.lane)
+  const maxLane = Math.max(from.row.lane, to.row.lane)
+  const hash = hashText(edgeKey)
+  const stagger = (hash % 3) * EDGE_RAIL_STAGGER_STEP
+  const direction = to.x > from.x ? 1 : -1
+  const railOffset = EDGE_RAIL_BASE_OFFSET + stagger
+  const sourceRailX = from.x + direction * railOffset
+  const targetRailX = to.x - direction * railOffset
+  const crossoverY = chooseCrossoverY(from, to, edgeKey)
+  const rightRailX = PAD_LEFT + maxLane * LANE_WIDTH + EDGE_RAIL_BASE_OFFSET + stagger
+  const leftRailX = PAD_LEFT + minLane * LANE_WIDTH - EDGE_RAIL_BASE_OFFSET - stagger
+
+  const insideConflicts = countRowsMatching(
+    occupiedLanes,
+    from.idx,
+    to.idx,
+    (lane) => lane > minLane && lane < maxLane,
+  )
+  const leftConflicts = countRowsMatching(
+    occupiedLanes,
+    from.idx,
+    to.idx,
+    (lane) => lane < minLane,
+  )
+  const rightConflicts = countRowsMatching(
+    occupiedLanes,
+    from.idx,
+    to.idx,
+    (lane) => lane > maxLane,
+  )
+
+  const insideScore = insideConflicts * 5 + laneDelta
+  const leftScore = leftConflicts * 2 + minLane
+  const rightScore = rightConflicts * 2 + 0.5
+
+  if (rightScore <= leftScore && rightScore < insideScore) {
+    return {
+      mode: 'outer-rail',
+      side: 'right',
+      anchorLane: maxLane,
+      innerLane: minLane,
+      outerRailX: rightRailX,
+    }
+  }
+
+  if (leftScore < insideScore) {
+    return {
+      mode: 'outer-rail',
+      side: 'left',
+      anchorLane: minLane,
+      innerLane: maxLane,
+      outerRailX: leftRailX,
+    }
+  }
+
+  return {
+    mode: 'inside-rail',
+    minLane,
+    maxLane,
+    sourceRailX,
+    targetRailX,
+    crossoverY,
+  }
+}
+
+function edgeBundleKey(plan: EdgeRoutePlan): string | null {
+  switch (plan.mode) {
+    case 'outer-rail':
+      return `${plan.mode}:${plan.side}:${plan.anchorLane}`
+    case 'inside-rail':
+      return `${plan.mode}:${plan.minLane}:${plan.maxLane}`
+    case 'adjacent-hook':
+      return `${plan.mode}:${plan.laneA}:${plan.laneB}`
+    default:
+      return null
+  }
+}
+
+function routedEdgePath(
+  from: LayoutNode,
+  to: LayoutNode,
+  plan: EdgeRoutePlan,
+  bundleOffset: number,
+): string {
+  switch (plan.mode) {
+    case 'straight':
+      return buildStraightEdgePath(from, to)
+    case 'curve':
+      return buildCurvedEdgePath(from, to)
+    case 'adjacent-hook':
+      return buildAdjacentHookPath(from, to, from.x + bundleOffset)
+    case 'inside-rail':
+      return buildInsideRailPath(
+        from,
+        to,
+        plan.sourceRailX + bundleOffset,
+        plan.targetRailX + bundleOffset,
+        plan.crossoverY,
+      )
+    case 'outer-rail':
+      return buildOuterRailPath(from, to, plan.outerRailX + bundleOffset)
+  }
 }
 
 function polarToCartesian(centerX: number, centerY: number, radius: number, angleInDegrees: number) {
@@ -231,6 +538,11 @@ export function GraphCanvas({
     [histWindow],
   )
 
+  const occupiedLanes = useMemo(
+    () => (layout ? layout.nodes.map((node) => node.row.lane) : []),
+    [layout],
+  )
+
   // Scroll to a specific commit when scrollToSha changes
   useEffect(() => {
     if (!scrollToSha || !layout || !scrollRef.current) return
@@ -361,6 +673,59 @@ export function GraphCanvas({
     return { visibleNodes: nodes, visibleEdges: edges }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, lastRenderedRange.current.firstIdx, lastRenderedRange.current.lastIdx])
+
+  const edgeRouting = useMemo(() => {
+    const plans = new Map<string, EdgeRoutePlan>()
+    const bundleGroups = new Map<string, Array<{ key: string; topIdx: number; bottomIdx: number; innerLane?: number }>>()
+
+    for (const edge of visibleEdges) {
+      const plan = planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes)
+      plans.set(edge.key, plan)
+
+      const bundleKey = edgeBundleKey(plan)
+      if (!bundleKey) continue
+
+      const group = bundleGroups.get(bundleKey)
+      const item = {
+        key: edge.key,
+        topIdx: Math.min(edge.from.idx, edge.to.idx),
+        bottomIdx: Math.max(edge.from.idx, edge.to.idx),
+        innerLane: plan.mode === 'outer-rail' ? plan.innerLane : undefined,
+      }
+      if (group) group.push(item)
+      else bundleGroups.set(bundleKey, [item])
+    }
+
+    const bundleOffsets = new Map<string, number>()
+
+    for (const items of bundleGroups.values()) {
+      const samplePlan = plans.get(items[0]?.key ?? '')
+      if (!samplePlan) continue
+
+      if (samplePlan.mode === 'outer-rail') {
+        items.sort((a, b) => {
+          const aLane = a.innerLane ?? samplePlan.innerLane
+          const bLane = b.innerLane ?? samplePlan.innerLane
+          if (samplePlan.side === 'right' && aLane !== bLane) return aLane - bLane
+          if (samplePlan.side === 'left' && aLane !== bLane) return bLane - aLane
+          return a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key)
+        })
+        for (let i = 0; i < items.length; i++) {
+          const sign = samplePlan.side === 'right' ? 1 : -1
+          bundleOffsets.set(items[i].key, i * EDGE_BUNDLE_GAP * sign)
+        }
+        continue
+      }
+
+      items.sort((a, b) => a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key))
+      const middle = (items.length - 1) / 2
+      for (let i = 0; i < items.length; i++) {
+        bundleOffsets.set(items[i].key, (i - middle) * EDGE_BUNDLE_GAP)
+      }
+    }
+
+    return { plans, bundleOffsets }
+  }, [visibleEdges, occupiedLanes])
 
   const handleRefClick = useCallback((e: React.MouseEvent, refName: string, sha: string, x: number, y: number) => {
     e.stopPropagation()
@@ -521,7 +886,12 @@ export function GraphCanvas({
           {visibleEdges.map((e) => (
             <path
               key={e.key}
-              d={edgePath(e.from.x, e.from.y, e.to.x, e.to.y)}
+              d={routedEdgePath(
+                e.from,
+                e.to,
+                edgeRouting.plans.get(e.key) ?? planEdgeRoute(e.from, e.to, e.key, occupiedLanes),
+                edgeRouting.bundleOffsets.get(e.key) ?? 0,
+              )}
               stroke={e.isMerge ? laneColor(e.to.row.lane) : laneColor(e.from.row.lane)}
               strokeWidth={e.isMerge ? 2 : 3}
               fill="none"
