@@ -43,7 +43,8 @@ const LANE_COLORS = [
 ]
 
 function laneColor(lane: number) {
-  return LANE_COLORS[lane % LANE_COLORS.length]
+  const normalized = ((lane % LANE_COLORS.length) + LANE_COLORS.length) % LANE_COLORS.length
+  return LANE_COLORS[normalized]
 }
 
 interface LayoutNode {
@@ -67,23 +68,33 @@ type EdgeRoutePlan =
   | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
 
 function buildLayout(rows: CommitRow[]) {
-  let maxLane = 0
+  let minLane = Infinity
+  let maxLane = -Infinity
   const nodes: LayoutNode[] = []
   const shaToNode = new Map<string, LayoutNode>()
   const shaToRow = new Map<string, CommitRow>()
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
+    if (row.lane < minLane) minLane = row.lane
     if (row.lane > maxLane) maxLane = row.lane
+    shaToRow.set(row.sha, row)
+  }
+
+  const leftmostLane = Number.isFinite(minLane) ? minLane : 0
+  const rightmostLane = Number.isFinite(maxLane) ? maxLane : 0
+  const laneRadius = Math.max(Math.abs(leftmostLane), Math.abs(rightmostLane))
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
     const node: LayoutNode = {
       row,
-      x: LANE_ORIGIN_X + row.lane * LANE_WIDTH,
+      x: LANE_ORIGIN_X + (row.lane + laneRadius) * LANE_WIDTH,
       y: PAD_TOP + i * NODE_SPACING_Y,
       idx: i,
     }
     nodes.push(node)
     shaToNode.set(row.sha, node)
-    shaToRow.set(row.sha, row)
   }
 
   // Build sha → branch name by tracing first-parent chains from branch tips
@@ -106,7 +117,7 @@ function buildLayout(rows: CommitRow[]) {
     shaToNode,
     shaToBranch,
     maxLane,
-    totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + (maxLane + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
+    totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + (laneRadius * 2 + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
     totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2,
   }
 }
@@ -317,8 +328,11 @@ function planEdgeRoute(
   const sourceRailX = from.x + direction * railOffset
   const targetRailX = to.x - direction * railOffset
   const crossoverY = chooseCrossoverY(from, to, edgeKey)
-  const rightRailX = LANE_ORIGIN_X + maxLane * LANE_WIDTH + EDGE_RAIL_BASE_OFFSET + stagger
-  const leftRailX = LANE_ORIGIN_X + minLane * LANE_WIDTH - EDGE_RAIL_BASE_OFFSET - stagger
+  // In the centered lane layout the outermost endpoint lane is already a safe
+  // routing rail. Do not push outer rails further away from the graph unless
+  // bundle offsets require it, or long side branches drift too far outward.
+  const rightRailX = Math.max(from.x, to.x)
+  const leftRailX = Math.min(from.x, to.x)
 
   const insideConflicts = countRowsMatching(
     occupiedLanes,
@@ -339,9 +353,10 @@ function planEdgeRoute(
     (lane) => lane > maxLane,
   )
 
+  const preferredOuterSide = from.x < to.x ? 'left' : from.x > to.x ? 'right' : 'right'
   const insideScore = insideConflicts * 5 + laneDelta
-  const leftScore = leftConflicts * 2 + minLane
-  const rightScore = rightConflicts * 2 + 0.5
+  const leftScore = leftConflicts * 2 + (preferredOuterSide === 'left' ? 0 : 0.5)
+  const rightScore = rightConflicts * 2 + (preferredOuterSide === 'right' ? 0 : 0.5)
 
   if (rightScore <= leftScore && rightScore < insideScore) {
     return {
@@ -559,6 +574,32 @@ export function GraphCanvas({
     () => (layout ? layout.nodes.map((node) => node.row.lane) : []),
     [layout],
   )
+
+  const currentBranchEdgeKeys = useMemo(() => {
+    const keys = new Set<string>()
+    if (!layout || !currentBranch) return keys
+
+    const currentTip = layout.nodes.find((node) => node.row.refNames.includes(currentBranch))
+    if (!currentTip) return keys
+
+    let sha: string | undefined = currentTip.row.sha
+    const visited = new Set<string>()
+
+    while (sha && !visited.has(sha)) {
+      visited.add(sha)
+      const node = layout.shaToNode.get(sha)
+      const firstParentSha = node?.row.parentShas[0]
+      if (!node || !firstParentSha) break
+
+      const parent = layout.shaToNode.get(firstParentSha)
+      if (!parent) break
+
+      keys.add(`${node.row.sha}-${parent.row.sha}`)
+      sha = parent.row.sha
+    }
+
+    return keys
+  }, [layout, currentBranch])
 
   // Scroll to a specific commit when scrollToSha changes
   useEffect(() => {
@@ -964,20 +1005,25 @@ export function GraphCanvas({
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
         >
           {visibleEdges.map((e) => (
-            <path
-              key={e.key}
-              d={routedEdgePath(
-                e.from,
-                e.to,
-                edgeRouting.plans.get(e.key) ?? planEdgeRoute(e.from, e.to, e.key, occupiedLanes),
-                edgeRouting.bundleOffsets.get(e.key) ?? 0,
-              )}
-              stroke={e.isMerge ? laneColor(e.to.row.lane) : laneColor(e.from.row.lane)}
-              strokeWidth={e.isMerge ? 2 : 3}
-              fill="none"
-              strokeLinecap="round"
-              opacity={0.8}
-            />
+            (() => {
+              const isCurrentBranchEdge = currentBranchEdgeKeys.has(e.key)
+              return (
+                <path
+                  key={e.key}
+                  d={routedEdgePath(
+                    e.from,
+                    e.to,
+                    edgeRouting.plans.get(e.key) ?? planEdgeRoute(e.from, e.to, e.key, occupiedLanes),
+                    edgeRouting.bundleOffsets.get(e.key) ?? 0,
+                  )}
+                  stroke={e.isMerge ? laneColor(e.to.row.lane) : laneColor(e.from.row.lane)}
+                  strokeWidth={isCurrentBranchEdge ? 4.5 : e.isMerge ? 2 : 3}
+                  fill="none"
+                  strokeLinecap="round"
+                  opacity={isCurrentBranchEdge ? 0.95 : 0.8}
+                />
+              )
+            })()
           ))}
           {visibleNodes.map((node) => {
             const { row, x, y } = node

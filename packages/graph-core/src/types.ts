@@ -4,8 +4,14 @@ export interface TopoEntry {
   row: number
 }
 
+export interface ActiveLaneEntry {
+  lane: number
+  sha: string
+}
+
 export interface LaneSnapshot {
-  activeLanes: (string | null)[]
+  activeLanes: ActiveLaneEntry[]
+  nextSideFromCenter: 'left' | 'right'
 }
 
 export interface ProjectionCheckpoint {

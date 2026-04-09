@@ -141,8 +141,8 @@ export class Projection {
     const allocator = new LaneAllocator()
 
     // Reserve lane 0 for HEAD's entire first-parent chain so the checked-out
-    // branch always occupies the leftmost lane — matching Ungit's behavior
-    // where switching branches rearranges the graph.
+    // branch stays in the visual center while side branches fan outward on
+    // both sides.
     if (headSha) {
       let walkSha: string | undefined = headSha
       while (walkSha !== undefined) {
