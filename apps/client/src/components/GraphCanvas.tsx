@@ -30,8 +30,11 @@ const EDGE_SHORT_CURVE_ROWS = 6
 const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
 const EDGE_RAIL_STAGGER_STEP = 6
 const EDGE_BUNDLE_GAP = 4
+const GRAPH_LEFT_GUTTER = 120
+const GRAPH_RIGHT_GUTTER = 520
 const PAD_TOP = 40
 const PAD_LEFT = 40
+const LANE_ORIGIN_X = PAD_LEFT + GRAPH_LEFT_GUTTER
 
 const LANE_COLORS = [
   '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
@@ -57,18 +60,17 @@ type EdgeRoutePlan =
   | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
 
 function buildLayout(rows: CommitRow[]) {
-  const sorted = [...rows].sort((a, b) => b.committerUnix - a.committerUnix)
   let maxLane = 0
   const nodes: LayoutNode[] = []
   const shaToNode = new Map<string, LayoutNode>()
   const shaToRow = new Map<string, CommitRow>()
 
-  for (let i = 0; i < sorted.length; i++) {
-    const row = sorted[i]
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
     if (row.lane > maxLane) maxLane = row.lane
     const node: LayoutNode = {
       row,
-      x: PAD_LEFT + row.lane * LANE_WIDTH,
+      x: LANE_ORIGIN_X + row.lane * LANE_WIDTH,
       y: PAD_TOP + i * NODE_SPACING_Y,
       idx: i,
     }
@@ -80,7 +82,7 @@ function buildLayout(rows: CommitRow[]) {
   // Build sha → branch name by tracing first-parent chains from branch tips
   // Prefer local branches over remotes; skip bare remote names like "origin"
   const shaToBranch = new Map<string, string>()
-  for (const row of sorted) {
+  for (const row of rows) {
     const bestRef = pickBestRef(row.refNames)
     if (!bestRef) continue
     let sha: string | undefined = row.sha
@@ -97,7 +99,8 @@ function buildLayout(rows: CommitRow[]) {
     shaToNode,
     shaToBranch,
     maxLane,
-    totalHeight: sorted.length * NODE_SPACING_Y + PAD_TOP * 2,
+    totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + (maxLane + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
+    totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2,
   }
 }
 
@@ -307,8 +310,8 @@ function planEdgeRoute(
   const sourceRailX = from.x + direction * railOffset
   const targetRailX = to.x - direction * railOffset
   const crossoverY = chooseCrossoverY(from, to, edgeKey)
-  const rightRailX = PAD_LEFT + maxLane * LANE_WIDTH + EDGE_RAIL_BASE_OFFSET + stagger
-  const leftRailX = PAD_LEFT + minLane * LANE_WIDTH - EDGE_RAIL_BASE_OFFSET - stagger
+  const rightRailX = LANE_ORIGIN_X + maxLane * LANE_WIDTH + EDGE_RAIL_BASE_OFFSET + stagger
+  const leftRailX = LANE_ORIGIN_X + minLane * LANE_WIDTH - EDGE_RAIL_BASE_OFFSET - stagger
 
   const insideConflicts = countRowsMatching(
     occupiedLanes,
@@ -822,7 +825,9 @@ export function GraphCanvas({
   const estimatedCount = histWindow?.hasMoreAfter === false
     ? layout.nodes.length
     : Math.max(totalCommitCount, layout.nodes.length)
+  const fullWidth = layout.totalWidth
   const fullHeight = estimatedCount * NODE_SPACING_Y + PAD_TOP * 2
+  const scaledW = fullWidth * zoom
   const scaledH = fullHeight * zoom
 
   return (
@@ -867,19 +872,19 @@ export function GraphCanvas({
       </div>
 
       {/* Outer spacer sized to scaled content for correct scrollbar */}
-      <div style={{ height: scaledH, position: 'relative' }}>
+      <div style={{ width: scaledW, height: scaledH, position: 'relative' }}>
       {/* Inner content scaled via transform */}
       <div style={{
         position: 'absolute',
         top: 0,
         left: 0,
-        width: `${100 / zoom}%`,
+        width: fullWidth,
         height: fullHeight,
         transform: `scale(${zoom})`,
         transformOrigin: 'top left',
       }}>
         <svg
-          width="100%"
+          width={fullWidth}
           height={fullHeight}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
         >

@@ -80,6 +80,15 @@ export class Projection {
   }
 
   /**
+   * For lane allocation we only keep continuations for parents that are
+   * actually present in the loaded projection. Parents outside the loaded
+   * window still get edge segments, but they should not occupy visible lanes.
+   */
+  private getKnownParentShas(parentShas: string[]): string[] {
+    return parentShas.filter((sha) => this.shaIndex.has(sha))
+  }
+
+  /**
    * Compute checkpoint snapshots of lane allocator state at every `interval` rows.
    * The first checkpoint is always at row 0.
    */
@@ -98,7 +107,7 @@ export class Projection {
         })
       }
 
-      allocator.assignLane(entry.sha, entry.parentShas)
+      allocator.assignLane(entry.sha, this.getKnownParentShas(entry.parentShas))
     }
 
     return checkpoints
@@ -155,7 +164,7 @@ export class Projection {
     // Replay entries up to (but not including) the window to warm up the allocator.
     for (let i = replayFrom; i < clampedStart; i++) {
       const entry = this.entries[i]
-      allocator.assignLane(entry.sha, entry.parentShas)
+      allocator.assignLane(entry.sha, this.getKnownParentShas(entry.parentShas))
     }
 
     // Assign lanes for entries in the window and record them.
@@ -169,7 +178,7 @@ export class Projection {
 
     for (let i = clampedStart; i <= clampedEnd; i++) {
       const entry = this.entries[i]
-      const lane = allocator.assignLane(entry.sha, entry.parentShas)
+      const lane = allocator.assignLane(entry.sha, this.getKnownParentShas(entry.parentShas))
       lanes.set(entry.sha, lane)
       rowDescriptors.push({ sha: entry.sha, parentShas: entry.parentShas, row: entry.row, lane })
     }

@@ -14,7 +14,7 @@ export class LaneAllocator {
   private reserved: Map<string, number> = new Map()
   private maxLanes: number
 
-  constructor(maxLanes: number = 8) {
+  constructor(maxLanes: number = 16) {
     this.maxLanes = maxLanes
     this.activeLanes = new Array(maxLanes).fill(null) as (string | null)[]
   }
@@ -35,7 +35,11 @@ export class LaneAllocator {
       this.reserved.delete(sha)
       this.activeLanes[lane] = sha
     } else {
-      lane = this.findFreeLane()
+      const firstParent = parentShas[0]
+      const preferredParentLane = firstParent ? this.reserved.get(firstParent) : undefined
+      lane = preferredParentLane !== undefined
+        ? this.findFreeLaneNear(preferredParentLane)
+        : this.findFreeLane()
       this.activeLanes[lane] = sha
     }
 
@@ -57,11 +61,12 @@ export class LaneAllocator {
       this.activeLanes[lane] = null
     }
 
-    // Merge parents: reserve a nearby lane.
+    // Merge parents should live on the outside of the active cluster so they
+    // do not block the inner lanes needed by future side-branch tips.
     for (let i = 1; i < parentShas.length; i++) {
       const mp = parentShas[i]
       if (!this.reserved.has(mp)) {
-        const mLane = this.findFreeLaneNear(lane)
+        const mLane = this.findFreeLaneOutsideCluster()
         this.reserved.set(mp, mLane)
         this.activeLanes[mLane] = mp
       }
@@ -96,6 +101,23 @@ export class LaneAllocator {
       if (left >= 0 && this.activeLanes[left] === null) return left
     }
     // No free lane — evict.
+    return this.findFreeLane()
+  }
+
+  private findFreeLaneOutsideCluster(): number {
+    let highestOccupied = -1
+    for (let i = 0; i < this.activeLanes.length; i++) {
+      if (this.activeLanes[i] !== null) highestOccupied = i
+    }
+
+    for (let i = highestOccupied + 1; i < this.activeLanes.length; i++) {
+      if (this.activeLanes[i] === null) return i
+    }
+
+    for (let i = this.activeLanes.length - 1; i >= 0; i--) {
+      if (this.activeLanes[i] === null) return i
+    }
+
     return this.findFreeLane()
   }
 
