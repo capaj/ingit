@@ -48,7 +48,7 @@ export function getCommitPRs(repoId: string, sha: string) {
   return ensureClient().getCommitPRs({ repoId, sha })
 }
 
-export function commitAction(repoId: string, action: 'cherry-pick' | 'revert', sha: string) {
+export function commitAction(repoId: string, action: 'cherry-pick' | 'revert' | 'uncommit', sha: string) {
   return ensureClient().commitAction({ repoId, action, sha })
 }
 

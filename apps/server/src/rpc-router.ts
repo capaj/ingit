@@ -93,7 +93,9 @@ export const router = os.router({
 
     const result = input.action === 'cherry-pick'
       ? await session.cherryPick(input.sha)
-      : await session.revert(input.sha)
+      : input.action === 'uncommit'
+        ? await session.uncommit(input.sha)
+        : await session.revert(input.sha)
 
     return { ok: true, ...result }
   }),

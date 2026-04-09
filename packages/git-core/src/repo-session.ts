@@ -145,9 +145,14 @@ export class RepoSession {
     return stdout.trim()
   }
 
-  private async assertCommitActionSupported(sha: string): Promise<void> {
+  private async getCommitParents(sha: string): Promise<string[]> {
     const commit = await this.getCommitDetail(sha)
-    if (commit.parents.length > 1) {
+    return commit.parents
+  }
+
+  private async assertNonMergeCommitActionSupported(sha: string): Promise<void> {
+    const parents = await this.getCommitParents(sha)
+    if (parents.length > 1) {
       throw new Error('Cherry-pick and revert are not supported for merge commits yet')
     }
   }
@@ -158,7 +163,7 @@ export class RepoSession {
   }
 
   async cherryPick(sha: string): Promise<{ message: string; headSha: string }> {
-    await this.assertCommitActionSupported(sha)
+    await this.assertNonMergeCommitActionSupported(sha)
     const { stdout, stderr } = await runGit(['cherry-pick', sha], this.rootPath)
     return {
       message: (stdout + stderr).trim(),
@@ -167,10 +172,29 @@ export class RepoSession {
   }
 
   async revert(sha: string): Promise<{ message: string; headSha: string }> {
-    await this.assertCommitActionSupported(sha)
+    await this.assertNonMergeCommitActionSupported(sha)
     const { stdout, stderr } = await runGit(['revert', '--no-edit', sha], this.rootPath)
     return {
       message: (stdout + stderr).trim(),
+      headSha: await this.getHeadSha(),
+    }
+  }
+
+  async uncommit(sha: string): Promise<{ message: string; headSha: string }> {
+    const headSha = await this.getHeadSha()
+    if (sha !== headSha) {
+      throw new Error('Uncommit is only supported for the current HEAD commit')
+    }
+
+    const parents = await this.getCommitParents(sha)
+    const parentSha = parents[0]
+    if (!parentSha) {
+      throw new Error('Uncommit is not supported for the initial commit yet')
+    }
+
+    const { stdout, stderr } = await runGit(['reset', '--mixed', parentSha], this.rootPath)
+    return {
+      message: (stdout + stderr).trim() || `Reset HEAD to ${parentSha.slice(0, 8)}`,
       headSha: await this.getHeadSha(),
     }
   }

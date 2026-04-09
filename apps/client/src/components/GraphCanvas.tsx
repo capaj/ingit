@@ -33,8 +33,6 @@ const EDGE_RAIL_STAGGER_STEP = 6
 const EDGE_BUNDLE_GAP = 4
 const GRAPH_LEFT_GUTTER = 120
 const GRAPH_RIGHT_GUTTER = 520
-const COMMIT_ACTIONS_OFFSET_X = 140
-const COMMIT_ACTIONS_OFFSET_Y = 16
 const PAD_TOP = 40
 const PAD_LEFT = 40
 const LANE_ORIGIN_X = PAD_LEFT + GRAPH_LEFT_GUTTER
@@ -53,6 +51,12 @@ interface LayoutNode {
   x: number
   y: number
   idx: number
+}
+
+interface VisibleCommitAction {
+  action: CommitActionKind
+  label: string
+  tone: 'success' | 'warning' | 'uncommit'
 }
 
 type EdgeRoutePlan =
@@ -822,11 +826,66 @@ export function GraphCanvas({
     [layout, selectedSha],
   )
 
+  const selectedOnCurrentBranch = useMemo(() => {
+    if (!layout || !selectedNode || !currentBranch) return false
+
+    const currentTip = layout.nodes.find((node) => node.row.refNames.includes(currentBranch))
+    if (!currentTip) return false
+
+    let sha: string | undefined = currentTip.row.sha
+    const visited = new Set<string>()
+    while (sha && !visited.has(sha)) {
+      if (sha === selectedNode.row.sha) return true
+      visited.add(sha)
+      const node = layout.shaToNode.get(sha)
+      if (!node || node.row.parentShas.length === 0) break
+      sha = node.row.parentShas[0]
+    }
+
+    return false
+  }, [layout, selectedNode, currentBranch])
+
+  const selectedIsCurrentHead = useMemo(() => {
+    if (!selectedNode || !currentBranch) return false
+    return selectedNode.row.refNames.includes(currentBranch)
+  }, [selectedNode, currentBranch])
+
+  const visibleCommitActions = useMemo<VisibleCommitAction[]>(() => {
+    if (!selectedNode || !onCommitAction) return []
+
+    const actions: VisibleCommitAction[] = []
+    const canRevert = selectedNode.row.parentShas.length === 1
+
+    if (selectedIsCurrentHead) {
+      actions.push({ action: 'uncommit', label: 'Uncommit', tone: 'uncommit' })
+      if (canRevert) {
+        actions.push({ action: 'revert', label: 'Revert', tone: 'warning' })
+      }
+      return actions
+    }
+
+    if (selectedOnCurrentBranch) {
+      if (canRevert) {
+        actions.push({ action: 'revert', label: 'Revert', tone: 'warning' })
+      }
+      return actions
+    }
+
+    if (canRevert) {
+      actions.push({ action: 'cherry-pick', label: 'Cherry pick', tone: 'success' })
+      actions.push({ action: 'revert', label: 'Revert', tone: 'warning' })
+    }
+
+    return actions
+  }, [selectedNode, selectedIsCurrentHead, selectedOnCurrentBranch, onCommitAction])
+
   const handleCommitAction = useCallback((action: CommitActionKind) => {
     if (!selectedNode || !onCommitAction) return
 
-    const verb = action === 'cherry-pick' ? 'Cherry-pick' : 'Revert'
-    const confirmed = window.confirm(`${verb} commit ${selectedNode.row.sha.slice(0, 8)} on the current branch?`)
+    const shortSha = selectedNode.row.sha.slice(0, 8)
+    const confirmed = action === 'uncommit'
+      ? window.confirm(`Uncommit ${shortSha}? This will move HEAD to its parent and keep the changes in your working tree.`)
+      : window.confirm(`${action === 'cherry-pick' ? 'Cherry-pick' : 'Revert'} commit ${shortSha} on the current branch?`)
     if (!confirmed) return
 
     setActivePopover(null)
@@ -849,12 +908,6 @@ export function GraphCanvas({
   const fullHeight = estimatedCount * NODE_SPACING_Y + PAD_TOP * 2
   const scaledW = fullWidth * zoom
   const scaledH = fullHeight * zoom
-  const selectedCommitActions = selectedNode && onCommitAction && selectedNode.row.parentShas.length === 1
-    ? {
-      left: (fullWidth - GRAPH_RIGHT_GUTTER + COMMIT_ACTIONS_OFFSET_X) * zoom,
-      top: selectedNode.y * zoom - COMMIT_ACTIONS_OFFSET_Y,
-    }
-    : null
 
   return (
     <div
@@ -997,32 +1050,76 @@ export function GraphCanvas({
           })}
         </svg>
 
-        {visibleNodes.flatMap((node) =>
-          node.row.refNames.map((refName, ri) => {
-            const color = refPillColor(refName)
-            const isCurrent = currentBranch !== null && refName === currentBranch
-            const px = node.x + NODE_RADIUS + 8
-            const py = node.y - 10 + ri * 24
-            return (
-              <div
-                key={`${node.row.sha}-ref-${ri}`}
-                onClick={(e) => handleRefClick(e, refName, node.row.sha, px, py)}
-                style={{
-                  position: 'absolute', left: px, top: py, height: 20,
-                  padding: '0 7px', borderRadius: 4,
-                  background: isCurrent ? color + '35' : color + '20',
-                  border: `1px solid ${isCurrent ? color : color + '60'}`,
-                  color, fontSize: 11, fontWeight: 600, lineHeight: '20px',
-                  whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
-                  transition: 'transform 0.3s ease, opacity 0.3s ease',
-                  boxShadow: isCurrent ? `0 0 6px ${color}40` : 'none',
-                }}
-              >
-                {isRemoteRef(refName) ? '☁ ' : isCurrent ? '● ' : '⎇ '}{refName}
-              </div>
-            )
-          })
-        )}
+        {visibleNodes.map((node) => {
+          const px = node.x + NODE_RADIUS + 8
+          const py = node.y - 10
+          const nodeActions = node.row.sha === selectedSha ? visibleCommitActions : []
+
+          if (node.row.refNames.length === 0 && nodeActions.length === 0) return null
+
+          return (
+            <div
+              key={`${node.row.sha}-refs`}
+              style={{
+                position: 'absolute',
+                left: px,
+                top: py,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'nowrap',
+                zIndex: 6,
+              }}
+            >
+              {node.row.refNames.map((refName, ri) => {
+                const color = refPillColor(refName)
+                const isCurrent = currentBranch !== null && refName === currentBranch
+                return (
+                  <div
+                    key={`${node.row.sha}-ref-${ri}`}
+                    onClick={(e) => handleRefClick(
+                      e,
+                      refName,
+                      node.row.sha,
+                      px + e.currentTarget.offsetLeft,
+                      py + e.currentTarget.offsetTop,
+                    )}
+                    style={{
+                      height: 20,
+                      padding: '0 7px',
+                      borderRadius: 4,
+                      background: isCurrent ? color + '35' : color + '20',
+                      border: `1px solid ${isCurrent ? color : color + '60'}`,
+                      color,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      lineHeight: '20px',
+                      whiteSpace: 'nowrap',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      transition: 'transform 0.3s ease, opacity 0.3s ease',
+                      boxShadow: isCurrent ? `0 0 6px ${color}40` : 'none',
+                    }}
+                  >
+                    {isRemoteRef(refName) ? '☁ ' : isCurrent ? '● ' : '⎇ '}{refName}
+                  </div>
+                )
+              })}
+              {nodeActions.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: node.row.refNames.length > 0 ? 8 : 0, position: 'relative', zIndex: 7 }}>
+                  {nodeActions.map((commitAction) => (
+                    <CommitActionButton
+                      key={commitAction.action}
+                      label={commitAction.label}
+                      tone={commitAction.tone}
+                      onClick={() => handleCommitAction(commitAction.action)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
 
         {activePopover && (
           <div
@@ -1049,31 +1146,6 @@ export function GraphCanvas({
           </div>
         )}
       </div>
-
-      {selectedCommitActions && (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          style={{
-            position: 'absolute',
-            left: selectedCommitActions.left,
-            top: selectedCommitActions.top,
-            display: 'flex',
-            gap: 10,
-            zIndex: 6,
-          }}
-        >
-          <CommitActionButton
-            label="Cherry pick"
-            tone="success"
-            onClick={() => handleCommitAction('cherry-pick')}
-          />
-          <CommitActionButton
-            label="Revert"
-            tone="warning"
-            onClick={() => handleCommitAction('revert')}
-          />
-        </div>
-      )}
 
       {/* Time range labels on the right edge */}
       {timeLabels.map((label, i) => (
@@ -1114,12 +1186,28 @@ function CommitActionButton({
 }: {
   label: string
   onClick: () => void
-  tone: 'success' | 'warning'
+  tone: 'success' | 'warning' | 'uncommit'
 }) {
-  const color = tone === 'success' ? '#a6e3a1' : '#fab387'
-  const border = tone === 'success' ? '#a6e3a155' : '#fab38755'
-  const background = tone === 'success' ? '#a6e3a126' : '#fab38726'
-  const hover = tone === 'success' ? '#a6e3a13a' : '#fab3873a'
+  const color = tone === 'success'
+    ? '#0b1020'
+    : tone === 'warning'
+      ? '#fff7d6'
+      : '#fff7ed'
+  const border = tone === 'success'
+    ? '#6d9658'
+    : tone === 'warning'
+      ? '#d8a43a'
+      : '#9a3412'
+  const background = tone === 'success'
+    ? '#8dcf78'
+    : tone === 'warning'
+      ? '#b88a25'
+      : '#b45309'
+  const hover = tone === 'success'
+    ? '#9cda89'
+    : tone === 'warning'
+      ? '#c99a30'
+      : '#c26115'
 
   return (
     <button
@@ -1140,7 +1228,9 @@ function CommitActionButton({
         cursor: 'pointer',
         fontFamily: 'inherit',
         whiteSpace: 'nowrap',
-        boxShadow: '0 8px 20px rgba(0,0,0,0.18)',
+        position: 'relative',
+        zIndex: 8,
+        boxShadow: '0 10px 24px rgba(0,0,0,0.35)',
       }}
       onMouseEnter={(e) => { e.currentTarget.style.background = hover }}
       onMouseLeave={(e) => { e.currentTarget.style.background = background }}

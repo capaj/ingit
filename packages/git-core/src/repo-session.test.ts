@@ -57,6 +57,11 @@ async function listHeadFiles(cwd: string): Promise<string[]> {
   return stdout.split('\n').filter(Boolean)
 }
 
+async function workingTreeStatus(cwd: string): Promise<string> {
+  const { stdout } = await runGit(['status', '--short'], cwd)
+  return stdout.trim()
+}
+
 interface ActionFixture {
   repoDir: string
   devSha: string
@@ -129,6 +134,25 @@ describe('RepoSession.checkout', () => {
 })
 
 describe('RepoSession commit actions', () => {
+  test('uncommits the current head commit and keeps the change in the working tree', async () => {
+    const fixture = await createActionFixture()
+    const actionSession = await RepoSession.open(fixture.repoDir)
+
+    try {
+      const result = await actionSession.uncommit(fixture.mainChangeSha)
+
+      expect(await currentBranch(fixture.repoDir)).toBe('main')
+      expect(result.headSha).toBe(await currentHeadSha(fixture.repoDir))
+      expect(await headSubject(fixture.repoDir)).toBe('initial')
+      expect(await listHeadFiles(fixture.repoDir)).not.toContain('main.txt')
+      expect(await Bun.file(join(fixture.repoDir, 'main.txt')).text()).toBe('main change\n')
+      expect(await workingTreeStatus(fixture.repoDir)).toContain('?? main.txt')
+    } finally {
+      actionSession.close()
+      await fixture.cleanup()
+    }
+  })
+
   test('cherry-picks a non-merge commit onto the current branch', async () => {
     const fixture = await createActionFixture()
     const actionSession = await RepoSession.open(fixture.repoDir)
@@ -173,6 +197,18 @@ describe('RepoSession commit actions', () => {
     try {
       await expect(actionSession.cherryPick(mergeSha)).rejects.toThrow('merge commits')
       await expect(actionSession.revert(mergeSha)).rejects.toThrow('merge commits')
+    } finally {
+      actionSession.close()
+      await fixture.cleanup()
+    }
+  })
+
+  test('rejects uncommit when the selected commit is not HEAD', async () => {
+    const fixture = await createActionFixture()
+    const actionSession = await RepoSession.open(fixture.repoDir)
+
+    try {
+      await expect(actionSession.uncommit(fixture.devSha)).rejects.toThrow('current HEAD')
     } finally {
       actionSession.close()
       await fixture.cleanup()

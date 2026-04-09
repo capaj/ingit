@@ -289,10 +289,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     ])
 
     const nextSha = result.headSha
+    const totalCommitCountDelta = action === 'uncommit' ? -1 : 1
     set((s) => ({
       refs,
       historyWindow: hist,
-      totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
+      totalCommitCount: Math.max(s.totalCommitCount + totalCommitCountDelta, hist.rows.length),
       selectedSha: nextSha,
       scrollToSha: nextSha,
       scrollToKey: s.scrollToKey + 1,

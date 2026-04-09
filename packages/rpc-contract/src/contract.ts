@@ -55,7 +55,7 @@ export const ChangedPath = z.object({
   status: z.enum(['A', 'M', 'D', 'R', 'C', 'T', 'U']),
 })
 
-export const CommitActionKind = z.enum(['cherry-pick', 'revert'])
+export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 
 // ---------------------------------------------------------------------------
 // Contract

@@ -124,7 +124,7 @@ export interface CommitDiffResponse {
   patchText?: string
 }
 
-export type CommitActionKind = 'cherry-pick' | 'revert'
+export type CommitActionKind = 'cherry-pick' | 'revert' | 'uncommit'
 
 export interface CommitActionRequest {
   repoId: RepoId
