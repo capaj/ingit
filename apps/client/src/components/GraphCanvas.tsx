@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
-import type { HistoryWindowResponse, CommitRow } from '@ingit/rpc-contract'
+import type { HistoryWindowResponse, CommitRow, CommitActionKind } from '@ingit/rpc-contract'
 
 interface GraphCanvasProps {
   window: HistoryWindowResponse | null
@@ -11,6 +11,7 @@ interface GraphCanvasProps {
   onSelectCommit: (sha: string) => void
   onRequestMore: (direction: 'up' | 'down') => void
   onRefAction?: (action: string, refName: string, sha: string) => void
+  onCommitAction?: (action: CommitActionKind, sha: string) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,8 @@ const EDGE_RAIL_STAGGER_STEP = 6
 const EDGE_BUNDLE_GAP = 4
 const GRAPH_LEFT_GUTTER = 120
 const GRAPH_RIGHT_GUTTER = 520
+const COMMIT_ACTIONS_OFFSET_X = 140
+const COMMIT_ACTIONS_OFFSET_Y = 16
 const PAD_TOP = 40
 const PAD_LEFT = 40
 const LANE_ORIGIN_X = PAD_LEFT + GRAPH_LEFT_GUTTER
@@ -520,6 +523,7 @@ export function GraphCanvas({
   onSelectCommit,
   onRequestMore,
   onRefAction,
+  onCommitAction,
 }: GraphCanvasProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
@@ -813,6 +817,22 @@ export function GraphCanvas({
     [layout, zoom],
   )
 
+  const selectedNode = useMemo(
+    () => (layout && selectedSha ? layout.shaToNode.get(selectedSha) ?? null : null),
+    [layout, selectedSha],
+  )
+
+  const handleCommitAction = useCallback((action: CommitActionKind) => {
+    if (!selectedNode || !onCommitAction) return
+
+    const verb = action === 'cherry-pick' ? 'Cherry-pick' : 'Revert'
+    const confirmed = window.confirm(`${verb} commit ${selectedNode.row.sha.slice(0, 8)} on the current branch?`)
+    if (!confirmed) return
+
+    setActivePopover(null)
+    onCommitAction(action, selectedNode.row.sha)
+  }, [selectedNode, onCommitAction])
+
   if (!layout) {
     return (
       <div style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#45475a', fontSize: 13 }}>
@@ -829,6 +849,12 @@ export function GraphCanvas({
   const fullHeight = estimatedCount * NODE_SPACING_Y + PAD_TOP * 2
   const scaledW = fullWidth * zoom
   const scaledH = fullHeight * zoom
+  const selectedCommitActions = selectedNode && onCommitAction && selectedNode.row.parentShas.length === 1
+    ? {
+      left: (fullWidth - GRAPH_RIGHT_GUTTER + COMMIT_ACTIONS_OFFSET_X) * zoom,
+      top: selectedNode.y * zoom - COMMIT_ACTIONS_OFFSET_Y,
+    }
+    : null
 
   return (
     <div
@@ -1024,6 +1050,31 @@ export function GraphCanvas({
         )}
       </div>
 
+      {selectedCommitActions && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            left: selectedCommitActions.left,
+            top: selectedCommitActions.top,
+            display: 'flex',
+            gap: 10,
+            zIndex: 6,
+          }}
+        >
+          <CommitActionButton
+            label="Cherry pick"
+            tone="success"
+            onClick={() => handleCommitAction('cherry-pick')}
+          />
+          <CommitActionButton
+            label="Revert"
+            tone="warning"
+            onClick={() => handleCommitAction('revert')}
+          />
+        </div>
+      )}
+
       {/* Time range labels on the right edge */}
       {timeLabels.map((label, i) => (
         <div
@@ -1053,6 +1104,49 @@ export function GraphCanvas({
       ))}
       </div>
     </div>
+  )
+}
+
+function CommitActionButton({
+  label,
+  onClick,
+  tone,
+}: {
+  label: string
+  onClick: () => void
+  tone: 'success' | 'warning'
+}) {
+  const color = tone === 'success' ? '#a6e3a1' : '#fab387'
+  const border = tone === 'success' ? '#a6e3a155' : '#fab38755'
+  const background = tone === 'success' ? '#a6e3a126' : '#fab38726'
+  const hover = tone === 'success' ? '#a6e3a13a' : '#fab3873a'
+
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 104,
+        height: 30,
+        padding: '0 12px',
+        background,
+        border: `1px solid ${border}`,
+        borderRadius: 7,
+        color,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        whiteSpace: 'nowrap',
+        boxShadow: '0 8px 20px rgba(0,0,0,0.18)',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = hover }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = background }}
+    >
+      {label}
+    </button>
   )
 }
 

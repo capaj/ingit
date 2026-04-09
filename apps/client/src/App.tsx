@@ -10,7 +10,7 @@ export function App() {
     status, repoPath, totalCommitCount, refs, historyWindow, selectedSha, scrollToSha, scrollToKey,
     commitDetail, commitDiff, commitPRs, githubUrl, openError,
     openRepoByPath, openFromUrl, selectCommit, selectRef,
-    navigateTo, requestMore, performRefAction, checkoutSha,
+    navigateTo, requestMore, performRefAction, performCommitAction, checkoutSha,
   } = useAppStore()
 
   useEffect(() => { openFromUrl() }, [openFromUrl])
@@ -85,6 +85,13 @@ export function App() {
           onRefAction={async (action, refName, sha) => {
             try {
               await performRefAction(action as 'checkout' | 'push' | 'fetch' | 'delete', refName, sha)
+            } catch (err) {
+              alert(err instanceof Error ? err.message : 'Action failed')
+            }
+          }}
+          onCommitAction={async (action, sha) => {
+            try {
+              await performCommitAction(action, sha)
             } catch (err) {
               alert(err instanceof Error ? err.message : 'Action failed')
             }

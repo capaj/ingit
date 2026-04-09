@@ -48,6 +48,10 @@ export function getCommitPRs(repoId: string, sha: string) {
   return ensureClient().getCommitPRs({ repoId, sha })
 }
 
+export function commitAction(repoId: string, action: 'cherry-pick' | 'revert', sha: string) {
+  return ensureClient().commitAction({ repoId, action, sha })
+}
+
 export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete', refName: string, sha: string) {
   return ensureClient().refAction({ repoId, action, refName, sha })
 }

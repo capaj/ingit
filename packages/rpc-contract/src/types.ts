@@ -124,6 +124,20 @@ export interface CommitDiffResponse {
   patchText?: string
 }
 
+export type CommitActionKind = 'cherry-pick' | 'revert'
+
+export interface CommitActionRequest {
+  repoId: RepoId
+  sha: CommitSha
+  action: CommitActionKind
+}
+
+export interface CommitActionResponse {
+  ok: boolean
+  message: string
+  headSha: CommitSha
+}
+
 export interface WorktreeStatusResponse {
   branch?: string
   headSha: CommitSha

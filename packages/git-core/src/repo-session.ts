@@ -140,9 +140,39 @@ export class RepoSession {
     return parseCommitDiff(this.rootPath, sha)
   }
 
+  private async getHeadSha(): Promise<string> {
+    const { stdout } = await runGit(['rev-parse', 'HEAD'], this.rootPath)
+    return stdout.trim()
+  }
+
+  private async assertCommitActionSupported(sha: string): Promise<void> {
+    const commit = await this.getCommitDetail(sha)
+    if (commit.parents.length > 1) {
+      throw new Error('Cherry-pick and revert are not supported for merge commits yet')
+    }
+  }
+
   async checkout(ref: string): Promise<void> {
     // Use git CLI — ziggit FFI only does tree checkout without switching HEAD
     await runGit(['checkout', ref], this.rootPath)
+  }
+
+  async cherryPick(sha: string): Promise<{ message: string; headSha: string }> {
+    await this.assertCommitActionSupported(sha)
+    const { stdout, stderr } = await runGit(['cherry-pick', sha], this.rootPath)
+    return {
+      message: (stdout + stderr).trim(),
+      headSha: await this.getHeadSha(),
+    }
+  }
+
+  async revert(sha: string): Promise<{ message: string; headSha: string }> {
+    await this.assertCommitActionSupported(sha)
+    const { stdout, stderr } = await runGit(['revert', '--no-edit', sha], this.rootPath)
+    return {
+      message: (stdout + stderr).trim(),
+      headSha: await this.getHeadSha(),
+    }
   }
 
   async push(ref: string, remote = 'origin'): Promise<string> {

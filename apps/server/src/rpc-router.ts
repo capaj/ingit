@@ -1,6 +1,5 @@
 import { implement } from '@orpc/server'
 import { contract } from '@ingit/rpc-contract'
-import { runGit } from '@ingit/git-core'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
 
@@ -88,18 +87,24 @@ export const router = os.router({
     }
   }),
 
+  commitAction: os.commitAction.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+
+    const result = input.action === 'cherry-pick'
+      ? await session.cherryPick(input.sha)
+      : await session.revert(input.sha)
+
+    return { ok: true, ...result }
+  }),
+
   refAction: os.refAction.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
     let message = ''
     switch (input.action) {
       case 'checkout': {
-        console.log(`checkout: ref="${input.refName}" cwd="${session.rootPath}"`)
-        const { stdout: cOut, stderr: cErr } = await runGit(['checkout', input.refName], session.rootPath)
-        console.log('checkout stdout:', cOut.trim())
-        console.log('checkout stderr:', cErr.trim())
-        const { stdout: headOut } = await runGit(['symbolic-ref', '--short', 'HEAD'], session.rootPath)
-        console.log('checkout: HEAD is now:', headOut.trim())
+        await session.checkout(input.refName)
         break
       }
       case 'push':

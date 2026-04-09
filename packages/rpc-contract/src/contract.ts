@@ -55,6 +55,8 @@ export const ChangedPath = z.object({
   status: z.enum(['A', 'M', 'D', 'R', 'C', 'T', 'U']),
 })
 
+export const CommitActionKind = z.enum(['cherry-pick', 'revert'])
+
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
@@ -151,6 +153,18 @@ export const contract = {
       state: z.string(),
       mergedAt: z.string().nullable(),
     }))),
+
+  commitAction: oc
+    .input(z.object({
+      repoId: RepoId,
+      sha: CommitSha,
+      action: CommitActionKind,
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      message: z.string(),
+      headSha: CommitSha,
+    })),
 
   refAction: oc
     .input(z.object({

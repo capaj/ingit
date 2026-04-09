@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import type { RefSummary, HistoryWindowResponse, CommitDetailResponse, CommitDiffResponse } from '@ingit/rpc-contract'
-import { openRepo, getRefs, queryHistory, getCommitDetail, getCommitDiff, getCommitPRs, refAction } from './api'
+import type { RefSummary, HistoryWindowResponse, CommitDetailResponse, CommitDiffResponse, CommitActionKind, CommitRow } from '@ingit/rpc-contract'
+import { openRepo, getRefs, queryHistory, getCommitDetail, getCommitDiff, getCommitPRs, commitAction, refAction } from './api'
 
 const INITIAL_ROWS = 1000
 const LOAD_MORE_ROWS = 500
@@ -38,6 +38,8 @@ function mergeHistory(
 
 export type AppStatus = 'no-repo' | 'loading' | 'ready'
 
+type CommitPRInfo = Array<{ number: number; title: string; url: string; state: string; mergedAt: string | null }>
+
 interface AppState {
   status: AppStatus
   repoId: string | null
@@ -50,7 +52,7 @@ interface AppState {
   scrollToKey: number  // incremented to force re-scroll even for same SHA
   commitDetail: CommitDetailResponse | null
   commitDiff: CommitDiffResponse | null
-  commitPRs: Array<{ number: number; title: string; url: string; state: string; mergedAt: string | null }>
+  commitPRs: CommitPRInfo
   githubUrl: string | null
   openError: string | null
   loadingMore: boolean
@@ -63,6 +65,7 @@ interface AppState {
   navigateTo: (sha: string) => Promise<void>
   requestMore: (direction: 'up' | 'down') => Promise<void>
   performRefAction: (action: 'checkout' | 'push' | 'fetch' | 'delete', refName: string, sha: string) => Promise<void>
+  performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
 }
 
@@ -131,7 +134,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // Load PR data in parallel (non-blocking) if this is a GitHub repo
     if (githubUrl) {
-      getCommitPRs(repoId, sha).then((prs) => {
+      getCommitPRs(repoId, sha).then((prs: CommitPRInfo) => {
         if (get().selectedSha === sha) set({ commitPRs: prs })
       }).catch(() => {})
     }
@@ -163,7 +166,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             firstParent: false,
             topoOrder: true,
           })
-          found = result.rows.some(r => r.sha === sha || r.sha.startsWith(sha))
+          found = result.rows.some((r: CommitRow) => r.sha === sha || r.sha.startsWith(sha))
           set((s) => ({
             historyWindow: found ? result : mergeHistory(s.historyWindow, result),
             selectedSha: sha,
@@ -251,6 +254,67 @@ export const useAppStore = create<AppState>((set, get) => ({
       }),
     ])
     set({ refs, historyWindow: hist })
+  },
+
+  performCommitAction: async (action, sha) => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+
+    let result: { ok: boolean; message: string; headSha: string }
+    try {
+      result = await commitAction(repoId, action, sha)
+    } catch (err) {
+      if (isSessionError(err)) {
+        const res = await openRepo({ path: repoPath })
+        repoId = res.repoId
+        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+        result = await commitAction(repoId, action, sha)
+      } else {
+        throw err
+      }
+    }
+
+    const [refs, hist] = await Promise.all([
+      getRefs(repoId),
+      queryHistory(repoId, {
+        repoId,
+        scope: { kind: 'all' },
+        anchor: { kind: 'head' },
+        beforeRows: 0,
+        afterRows: INITIAL_ROWS,
+        firstParent: false,
+        topoOrder: true,
+      }),
+    ])
+
+    const nextSha = result.headSha
+    set((s) => ({
+      refs,
+      historyWindow: hist,
+      totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
+      selectedSha: nextSha,
+      scrollToSha: nextSha,
+      scrollToKey: s.scrollToKey + 1,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+    }))
+
+    Promise.all([
+      getCommitDetail(repoId, nextSha),
+      getCommitDiff(repoId, nextSha),
+    ]).then(([detail, diff]) => {
+      if (get().selectedSha === nextSha) {
+        set({ commitDetail: detail, commitDiff: diff })
+      }
+    }).catch((err) => console.error('Failed to load commit detail:', err))
+
+    if (get().githubUrl) {
+      getCommitPRs(repoId, nextSha).then((prs: CommitPRInfo) => {
+        if (get().selectedSha === nextSha) set({ commitPRs: prs })
+      }).catch(() => {})
+    }
   },
 
   checkoutSha: async (sha) => {

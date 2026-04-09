@@ -42,6 +42,60 @@ async function currentBranch(cwd: string): Promise<string> {
   return stdout.trim()
 }
 
+async function currentHeadSha(cwd: string): Promise<string> {
+  const { stdout } = await runGit(['rev-parse', 'HEAD'], cwd)
+  return stdout.trim()
+}
+
+async function headSubject(cwd: string): Promise<string> {
+  const { stdout } = await runGit(['log', '-1', '--pretty=%s'], cwd)
+  return stdout.trim()
+}
+
+async function listHeadFiles(cwd: string): Promise<string[]> {
+  const { stdout } = await runGit(['ls-tree', '-r', '--name-only', 'HEAD'], cwd)
+  return stdout.split('\n').filter(Boolean)
+}
+
+interface ActionFixture {
+  repoDir: string
+  devSha: string
+  mainChangeSha: string
+  cleanup: () => Promise<void>
+}
+
+async function createActionFixture(): Promise<ActionFixture> {
+  const actionRepoDir = await mkdtemp(join(tmpdir(), 'ingit-action-test-'))
+  await runGit(['init', '--initial-branch=main'], actionRepoDir)
+  await runGit(['config', 'user.email', 'test@test.com'], actionRepoDir)
+  await runGit(['config', 'user.name', 'Test'], actionRepoDir)
+
+  await Bun.write(join(actionRepoDir, 'file.txt'), 'hello\n')
+  await runGit(['add', '.'], actionRepoDir)
+  await runGit(['commit', '-m', 'initial'], actionRepoDir)
+
+  await runGit(['checkout', '-b', 'dev'], actionRepoDir)
+  await Bun.write(join(actionRepoDir, 'dev.txt'), 'dev file\n')
+  await runGit(['add', '.'], actionRepoDir)
+  await runGit(['commit', '-m', 'dev commit'], actionRepoDir)
+  const devSha = await currentHeadSha(actionRepoDir)
+
+  await runGit(['checkout', 'main'], actionRepoDir)
+  await Bun.write(join(actionRepoDir, 'main.txt'), 'main change\n')
+  await runGit(['add', '.'], actionRepoDir)
+  await runGit(['commit', '-m', 'main change'], actionRepoDir)
+  const mainChangeSha = await currentHeadSha(actionRepoDir)
+
+  return {
+    repoDir: actionRepoDir,
+    devSha,
+    mainChangeSha,
+    cleanup: async () => {
+      await rm(actionRepoDir, { recursive: true, force: true })
+    },
+  }
+}
+
 describe('RepoSession.checkout', () => {
   test('starts on main', async () => {
     expect(await currentBranch(repoDir)).toBe('main')
@@ -71,5 +125,57 @@ describe('RepoSession.checkout', () => {
     const mainRef2 = refs2.find(r => r.shortName === 'main')
     expect(mainRef2?.isCurrent).toBe(true)
     expect(devRef2?.isCurrent).toBeUndefined()
+  })
+})
+
+describe('RepoSession commit actions', () => {
+  test('cherry-picks a non-merge commit onto the current branch', async () => {
+    const fixture = await createActionFixture()
+    const actionSession = await RepoSession.open(fixture.repoDir)
+
+    try {
+      const result = await actionSession.cherryPick(fixture.devSha)
+
+      expect(await currentBranch(fixture.repoDir)).toBe('main')
+      expect(result.headSha).toBe(await currentHeadSha(fixture.repoDir))
+      expect(result.headSha).not.toBe(fixture.devSha)
+      expect(await headSubject(fixture.repoDir)).toBe('dev commit')
+      expect(await listHeadFiles(fixture.repoDir)).toContain('dev.txt')
+    } finally {
+      actionSession.close()
+      await fixture.cleanup()
+    }
+  })
+
+  test('reverts a non-merge commit on the current branch', async () => {
+    const fixture = await createActionFixture()
+    const actionSession = await RepoSession.open(fixture.repoDir)
+
+    try {
+      const result = await actionSession.revert(fixture.mainChangeSha)
+
+      expect(await currentBranch(fixture.repoDir)).toBe('main')
+      expect(result.headSha).toBe(await currentHeadSha(fixture.repoDir))
+      expect(await headSubject(fixture.repoDir)).toBe('Revert "main change"')
+      expect(await listHeadFiles(fixture.repoDir)).not.toContain('main.txt')
+    } finally {
+      actionSession.close()
+      await fixture.cleanup()
+    }
+  })
+
+  test('rejects merge commits for cherry-pick and revert', async () => {
+    const fixture = await createActionFixture()
+    await runGit(['merge', '--no-ff', 'dev', '-m', 'merge dev'], fixture.repoDir)
+    const mergeSha = await currentHeadSha(fixture.repoDir)
+    const actionSession = await RepoSession.open(fixture.repoDir)
+
+    try {
+      await expect(actionSession.cherryPick(mergeSha)).rejects.toThrow('merge commits')
+      await expect(actionSession.revert(mergeSha)).rejects.toThrow('merge commits')
+    } finally {
+      actionSession.close()
+      await fixture.cleanup()
+    }
   })
 })
