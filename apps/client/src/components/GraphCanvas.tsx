@@ -513,6 +513,12 @@ function computeVisibleRange(scrollTop: number, clientHeight: number, totalNodes
   return { firstIdx, lastIdx }
 }
 
+function edgeIntersectsRange(fromIdx: number, toIdx: number, firstIdx: number, lastIdx: number) {
+  const top = Math.min(fromIdx, toIdx)
+  const bottom = Math.max(fromIdx, toIdx)
+  return bottom >= firstIdx && top <= lastIdx
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -654,26 +660,16 @@ export function GraphCanvas({
     const { firstIdx, lastIdx } = lastRenderedRange.current
 
     const nodes = layout.nodes.slice(firstIdx, lastIdx + 1)
-    const visibleShas = new Set(nodes.map(n => n.row.sha))
-
     const edges: Array<{ from: LayoutNode; to: LayoutNode; isMerge: boolean; key: string }> = []
-    // Edges from visible nodes to their parents (parent may be outside window)
-    for (const node of nodes) {
+
+    // Keep any edge whose row span crosses the virtualized window. This
+    // preserves long same-lane segments even when both endpoint nodes are
+    // currently outside the rendered node slice.
+    for (const node of layout.nodes) {
       for (let pi = 0; pi < node.row.parentShas.length; pi++) {
         const parent = layout.shaToNode.get(node.row.parentShas[pi])
         if (!parent) continue
-        edges.push({
-          from: node, to: parent, isMerge: pi > 0,
-          key: `${node.row.sha}-${parent.row.sha}`,
-        })
-      }
-    }
-    // Edges from non-visible nodes that connect TO visible nodes
-    for (const node of layout.nodes) {
-      if (visibleShas.has(node.row.sha)) continue
-      for (let pi = 0; pi < node.row.parentShas.length; pi++) {
-        const parent = layout.shaToNode.get(node.row.parentShas[pi])
-        if (!parent || !visibleShas.has(parent.row.sha)) continue
+        if (!edgeIntersectsRange(node.idx, parent.idx, firstIdx, lastIdx)) continue
         edges.push({
           from: node, to: parent, isMerge: pi > 0,
           key: `${node.row.sha}-${parent.row.sha}`,

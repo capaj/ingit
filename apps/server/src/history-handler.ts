@@ -57,7 +57,11 @@ function buildRevListArgs(query: HistoryQuery, anchorSha: string | null): string
   const args: string[] = []
 
   if (query.firstParent) args.push('--first-parent')
-  if (query.topoOrder) args.push('--topo-order')
+  // Vertical graph position is derived from rev-list order, so commits must
+  // remain monotonic in time. `--date-order` keeps newer side-branch commits
+  // above older mainline commits while still ensuring children appear before
+  // their parents.
+  args.push('--date-order')
 
   const { scope, anchor } = query
 
@@ -109,7 +113,7 @@ export async function handleHistoryQuery(
     projectionId,
     session.repoId,
     query.scope,
-    query.topoOrder ? 'topo' : 'date',
+    'date',
   )
 
   // Single git rev-list call gets topology + metadata (author, subject) together.
