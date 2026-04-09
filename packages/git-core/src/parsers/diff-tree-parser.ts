@@ -19,16 +19,31 @@ function parseStatusLetter(letter: string): ChangeStatus {
 }
 
 export async function parseDiffTree(cwd: string, sha: string): Promise<ChangedPath[]> {
+  const { changedPaths } = await parseCommitDiff(cwd, sha)
+  return changedPaths
+}
+
+export async function parseCommitDiff(cwd: string, sha: string): Promise<{
+  changedPaths: ChangedPath[]
+  additions: number
+  deletions: number
+}> {
   // -r: recurse into subtrees, --no-commit-id: omit sha prefix, -M: detect renames, -C: detect copies
   // Output format per line: ":oldmode newmode oldsha newsha status\tpath[\toldpath]"
-  const lines = await runGitLines(
-    ['diff-tree', '-r', '--no-commit-id', '-M', '-C', sha],
-    cwd,
-  )
+  const [rawLines, numstatLines] = await Promise.all([
+    runGitLines(
+      ['diff-tree', '-r', '--root', '--no-commit-id', '-M', '-C', sha],
+      cwd,
+    ),
+    runGitLines(
+      ['diff-tree', '-r', '--root', '--no-commit-id', '-M', '-C', '--numstat', sha],
+      cwd,
+    ),
+  ])
 
   const result: ChangedPath[] = []
 
-  for (const line of lines) {
+  for (const line of rawLines) {
     if (!line.startsWith(':')) continue
 
     // Split on tab to separate the metadata prefix from path(s)
@@ -60,5 +75,25 @@ export async function parseDiffTree(cwd: string, sha: string): Promise<ChangedPa
     result.push(entry)
   }
 
-  return result
+  let additions = 0
+  let deletions = 0
+
+  for (const line of numstatLines) {
+    const parts = line.split('\t')
+    if (parts.length < 3) continue
+    additions += parseNumstatValue(parts[0] ?? '')
+    deletions += parseNumstatValue(parts[1] ?? '')
+  }
+
+  return {
+    changedPaths: result,
+    additions,
+    deletions,
+  }
+}
+
+function parseNumstatValue(value: string): number {
+  if (!value || value === '-') return 0
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : 0
 }

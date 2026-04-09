@@ -11,6 +11,7 @@ export interface RevListEntryWithMeta extends RevListEntry {
   authorUnix: number
   committerUnix: number
   subject: string
+  locChanged: number
 }
 
 export function parseRevListLine(line: string): RevListEntry | null {
@@ -39,12 +40,14 @@ export function streamRevList(
 }
 
 /**
- * Stream rev-list with --parents AND --format to get topology + metadata
- * in a single git process. Uses format: authorName\0authorEmail\0authorUnix\0subject
+ * Stream history entries with topology, commit metadata, and total changed lines.
+ * This uses `git log --numstat` because `git rev-list` does not support numstat.
  *
- * Output per commit is two lines:
+ * Output per commit is:
  *   commit <sha> [<parent>...]
  *   <authorName>\0<authorEmail>\0<authorUnix>\0<committerUnix>\0<subject>
+ *   <added>\t<deleted>\t<path>
+ *   ...
  */
 export function streamRevListWithMeta(
   args: string[],
@@ -94,24 +97,43 @@ async function streamRevListWithMetaInternal(
     throw createAbortError()
   }
 
-  const proc = spawnRevListProcess(
-    ['rev-list', '--format=%aN%x00%aE%x00%at%x00%ct%x00%s', ...args],
+  const proc = spawnHistoryLogProcess(
+    ['log', '--numstat', '--format=commit %H %P%n%aN%x00%aE%x00%at%x00%ct%x00%s', ...args],
     cwd,
     signal,
   )
   const stdout = requireReadableStream(proc.stdout, 'git rev-list stdout')
   const stderrPromise = readStreamText(proc.stderr)
   let count = 0
-  let pendingEntry: RevListEntry | null = null
+  let pendingEntry: RevListEntryWithMeta | null = null
+  let awaitingMetaLine = false
+
+  const flushPending = () => {
+    if (!pendingEntry || awaitingMetaLine) {
+      return
+    }
+
+    count++
+    onCommit(pendingEntry)
+    pendingEntry = null
+  }
 
   await readStreamLines(stdout, (line) => {
     if (line.startsWith('commit ')) {
       const rest = line.slice(7)
-      const parts = rest.split(' ')
+      const parts = rest.split(' ').filter((part) => part.length > 0)
+      flushPending()
       pendingEntry = {
         sha: parts[0] ?? '',
         parentShas: parts.slice(1).filter((s) => s.length > 0),
+        authorName: '',
+        authorEmail: '',
+        authorUnix: 0,
+        committerUnix: 0,
+        subject: '',
+        locChanged: 0,
       }
+      awaitingMetaLine = true
       return
     }
 
@@ -119,21 +141,34 @@ async function streamRevListWithMetaInternal(
       return
     }
 
-    const parts = line.split('\0')
-    const entry: RevListEntryWithMeta = {
-      ...pendingEntry,
-      authorName: parts[0] ?? '',
-      authorEmail: parts[1] ?? '',
-      authorUnix: parseInt(parts[2] ?? '0', 10),
-      committerUnix: parseInt(parts[3] ?? '0', 10),
-      subject: parts[4] ?? '',
+    if (awaitingMetaLine) {
+      if (!line) {
+        return
+      }
+
+      const parts = line.split('\0')
+      pendingEntry.authorName = parts[0] ?? ''
+      pendingEntry.authorEmail = parts[1] ?? ''
+      pendingEntry.authorUnix = parseInt(parts[2] ?? '0', 10)
+      pendingEntry.committerUnix = parseInt(parts[3] ?? '0', 10)
+      pendingEntry.subject = parts[4] ?? ''
+      awaitingMetaLine = false
+      return
     }
 
-    pendingEntry = null
-    count++
-    onCommit(entry)
+    if (!line) {
+      return
+    }
+
+    const parts = line.split('\t')
+    if (parts.length < 3) {
+      return
+    }
+
+    pendingEntry.locChanged += parseNumstatValue(parts[0]) + parseNumstatValue(parts[1])
   })
 
+  flushPending()
   await assertRevListExit(proc, stderrPromise, signal)
   return count
 }
@@ -147,6 +182,26 @@ function spawnRevListProcess(args: string[], cwd: string, signal?: AbortSignal):
     signal,
     killSignal: 'SIGTERM',
   })
+}
+
+function spawnHistoryLogProcess(args: string[], cwd: string, signal?: AbortSignal): Bun.Subprocess {
+  return Bun.spawn(['git', ...args], {
+    cwd,
+    stdin: null,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    signal,
+    killSignal: 'SIGTERM',
+  })
+}
+
+function parseNumstatValue(value: string): number {
+  if (value === '-' || value.length === 0) {
+    return 0
+  }
+
+  const parsed = parseInt(value, 10)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 async function assertRevListExit(

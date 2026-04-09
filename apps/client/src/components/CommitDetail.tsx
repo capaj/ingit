@@ -271,6 +271,10 @@ export function CommitDetail({ commit, diff, branchName, prs, githubUrl, onCheck
           <>
             <div
               style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
                 padding: '8px 16px 4px',
                 fontSize: 11,
                 fontWeight: 700,
@@ -282,7 +286,11 @@ export function CommitDetail({ commit, diff, branchName, prs, githubUrl, onCheck
                 background: '#181825',
               }}
             >
-              Changed files ({diff.changedPaths.length})
+              <span>Changed files ({diff.changedPaths.length})</span>
+              <span style={{ display: 'flex', gap: 10, fontSize: 10, letterSpacing: '0.04em' }}>
+                <span style={{ color: '#a6e3a1' }}>+{diff.additions}</span>
+                <span style={{ color: '#f38ba8' }}>-{diff.deletions}</span>
+              </span>
             </div>
             {diff.changedPaths.map((cp, i) => (
               <FileRow key={i} cp={cp} />

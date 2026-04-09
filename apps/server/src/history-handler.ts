@@ -183,6 +183,7 @@ export async function handleHistoryQuery(
     authorUnix: entry.authorUnix,
     committerUnix: entry.committerUnix,
     subject: entry.subject,
+    locChanged: entry.locChanged,
     refNames: shaToRefs.get(entry.sha) ?? [],
     lane: lanes.get(entry.sha) ?? 0,
   }))

@@ -35,6 +35,7 @@ export const CommitRow = z.object({
   authorUnix: z.number(),
   committerUnix: z.number(),
   subject: z.string(),
+  locChanged: z.number(),
   bodyPreview: z.string().optional(),
   refNames: z.array(z.string()),
   lane: z.number(),
@@ -136,6 +137,8 @@ export const contract = {
     .output(z.object({
       sha: CommitSha,
       changedPaths: z.array(ChangedPath),
+      additions: z.number(),
+      deletions: z.number(),
       patchText: z.string().optional(),
     })),
 

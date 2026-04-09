@@ -19,7 +19,12 @@ interface GraphCanvasProps {
 
 const NODE_SPACING_Y = 56
 const LANE_WIDTH = 80
-const NODE_RADIUS = 12
+const NODE_RADIUS = 16
+const NODE_FILL = '#11111b'
+const GAUGE_RADIUS = NODE_RADIUS - 5
+const GAUGE_STROKE_WIDTH = 3.25
+const GAUGE_START_ANGLE = 230
+const GAUGE_END_ANGLE = 490
 const PAD_TOP = 40
 const PAD_LEFT = 40
 
@@ -88,6 +93,34 @@ function edgePath(x1: number, y1: number, x2: number, y2: number): string {
   if (x1 === x2) return `M${x1},${y1}L${x2},${y2}`
   const dy = y2 - y1
   return `M${x1},${y1}C${x1},${y1 + dy * 0.3} ${x2},${y2 - dy * 0.3} ${x2},${y2}`
+}
+
+function polarToCartesian(centerX: number, centerY: number, radius: number, angleInDegrees: number) {
+  const angleInRadians = (angleInDegrees - 90) * (Math.PI / 180)
+  return {
+    x: centerX + radius * Math.cos(angleInRadians),
+    y: centerY + radius * Math.sin(angleInRadians),
+  }
+}
+
+function describeArc(centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number) {
+  const start = polarToCartesian(centerX, centerY, radius, endAngle)
+  const end = polarToCartesian(centerX, centerY, radius, startAngle)
+  const largeArcFlag = endAngle - startAngle <= 180 ? 0 : 1
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`
+}
+
+function computeLocScaleMax(rows: CommitRow[]) {
+  if (rows.length === 0) return 0
+  const sorted = rows.map((row) => row.locChanged).sort((a, b) => a - b)
+  const index = Math.max(0, Math.ceil(sorted.length * 0.96) - 1)
+  return sorted[index] ?? sorted[sorted.length - 1] ?? 0
+}
+
+function gaugeColor(progress: number, defaultColor: string) {
+  if (progress > 2 / 3) return '#f38ba8'
+  if (progress > 1 / 3) return '#fab387'
+  return defaultColor
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +225,11 @@ export function GraphCanvas({
     if (!histWindow || histWindow.rows.length === 0) return null
     return buildLayout(histWindow.rows)
   }, [histWindow])
+
+  const locScaleMax = useMemo(
+    () => (histWindow ? computeLocScaleMax(histWindow.rows) : 0),
+    [histWindow],
+  )
 
   // Scroll to a specific commit when scrollToSha changes
   useEffect(() => {
@@ -495,15 +533,64 @@ export function GraphCanvas({
             const { row, x, y } = node
             const selected = row.sha === selectedSha
             const color = laneColor(row.lane)
+            const isHotCommit = row.locChanged > locScaleMax
+            const gaugeProgress = locScaleMax > 0
+              ? Math.min(row.locChanged / locScaleMax, 1)
+              : 0
+            const gaugeStroke = gaugeColor(gaugeProgress, color)
+            const gaugeTrackPath = describeArc(x, y, GAUGE_RADIUS, GAUGE_START_ANGLE, GAUGE_END_ANGLE)
+            const gaugeValuePath = gaugeProgress > 0
+              ? describeArc(
+                x,
+                y,
+                GAUGE_RADIUS,
+                GAUGE_START_ANGLE,
+                GAUGE_START_ANGLE + (GAUGE_END_ANGLE - GAUGE_START_ANGLE) * gaugeProgress,
+              )
+              : null
             return (
               <g
                 key={row.sha}
                 onClick={(e) => { e.stopPropagation(); onSelectCommit(row.sha) }}
                 style={{ cursor: 'pointer', pointerEvents: 'auto' }}
               >
+                <title>{`${row.subject}\n${row.locChanged} LOC changed`}</title>
                 {selected && <circle cx={x} cy={y} r={NODE_RADIUS * 2.5} fill={color} opacity={0.15} />}
-                <circle cx={x} cy={y} r={NODE_RADIUS} fill={selected ? color : '#1e1e2e'} stroke={color} strokeWidth={selected ? 3 : 2.5} />
-                {row.parentShas.length > 1 && <circle cx={x} cy={y} r={NODE_RADIUS * 0.35} fill={color} />}
+                <circle cx={x} cy={y} r={NODE_RADIUS} fill={NODE_FILL} stroke={color} strokeWidth={selected ? 3.5 : 2.75} />
+                {isHotCommit ? (
+                  <text
+                    x={x}
+                    y={y + 0.5}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={NODE_RADIUS - 3}
+                    style={{
+                      fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif',
+                    }}
+                  >
+                    🔥
+                  </text>
+                ) : (
+                  <>
+                    <path
+                      d={gaugeTrackPath}
+                      stroke={selected ? '#cdd6f433' : '#45475a'}
+                      strokeWidth={GAUGE_STROKE_WIDTH}
+                      fill="none"
+                      strokeLinecap="round"
+                    />
+                    {gaugeValuePath && (
+                      <path
+                        d={gaugeValuePath}
+                        stroke={gaugeStroke}
+                        strokeWidth={GAUGE_STROKE_WIDTH}
+                        fill="none"
+                        strokeLinecap="round"
+                      />
+                    )}
+                    {row.parentShas.length > 1 && <circle cx={x} cy={y} r={2} fill={color} />}
+                  </>
+                )}
               </g>
             )
           })}

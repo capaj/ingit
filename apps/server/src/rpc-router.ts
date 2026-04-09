@@ -42,8 +42,8 @@ export const router = os.router({
   getCommitDiff: os.getCommitDiff.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
-    const changedPaths = await session.getCommitDiff(input.sha)
-    return { sha: input.sha, changedPaths }
+    const diff = await session.getCommitDiff(input.sha)
+    return { sha: input.sha, ...diff }
   }),
 
   getCommitPRs: os.getCommitPRs.handler(async ({ input }) => {

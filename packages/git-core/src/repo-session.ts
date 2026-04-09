@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto'
-import type { RefSummary, WorktreeStatusResponse, CommitDetailResponse, ChangedPath } from '@ingit/rpc-contract'
+import type { RefSummary, WorktreeStatusResponse, CommitDetailResponse } from '@ingit/rpc-contract'
 import { runGit } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
 import { CommitHydrator } from './hydrator.js'
 import { parseRefs } from './parsers/ref-parser.js'
 import { parseStatus } from './parsers/status-parser.js'
-import { parseDiffTree } from './parsers/diff-tree-parser.js'
+import { parseCommitDiff } from './parsers/diff-tree-parser.js'
 import { streamRevList, streamRevListWithMeta } from './parsers/rev-list-parser.js'
 import type { RevListEntry, RevListEntryWithMeta } from './parsers/rev-list-parser.js'
 import { ZiggitRepo } from './ziggit-ffi.js'
@@ -136,8 +136,8 @@ export class RepoSession {
     return this.hydrator.hydrateCommit(sha)
   }
 
-  getCommitDiff(sha: string): Promise<ChangedPath[]> {
-    return parseDiffTree(this.rootPath, sha)
+  getCommitDiff(sha: string): Promise<{ changedPaths: Array<{ path: string; oldPath?: string; status: 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U' }>; additions: number; deletions: number }> {
+    return parseCommitDiff(this.rootPath, sha)
   }
 
   async checkout(ref: string): Promise<void> {

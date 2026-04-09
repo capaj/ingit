@@ -60,6 +60,7 @@ export interface CommitRow {
   authorUnix: number
   committerUnix: number
   subject: string
+  locChanged: number
   bodyPreview?: string
   refNames: string[]
   lane: number
@@ -118,6 +119,8 @@ export interface ChangedPath {
 export interface CommitDiffResponse {
   sha: CommitSha
   changedPaths: ChangedPath[]
+  additions: number
+  deletions: number
   patchText?: string
 }
 
