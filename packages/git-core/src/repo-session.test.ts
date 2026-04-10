@@ -133,6 +133,56 @@ describe('RepoSession.checkout', () => {
   })
 })
 
+describe('RepoSession.streamTopologyWithMeta', () => {
+  test('reports additions and deletions separately', async () => {
+    const metaRepoDir = await mkdtemp(join(tmpdir(), 'ingit-meta-test-'))
+
+    try {
+      await runGit(['init', '--initial-branch=main'], metaRepoDir)
+      await runGit(['config', 'user.email', 'test@test.com'], metaRepoDir)
+      await runGit(['config', 'user.name', 'Test'], metaRepoDir)
+
+      await Bun.write(join(metaRepoDir, 'file.txt'), 'alpha\nbeta\n')
+      await runGit(['add', '.'], metaRepoDir)
+      await runGit(['commit', '-m', 'initial'], metaRepoDir)
+
+      await Bun.write(join(metaRepoDir, 'file.txt'), 'alpha\ngamma\ndelta\n')
+      await runGit(['add', '.'], metaRepoDir)
+      await runGit(['commit', '-m', 'reshape file'], metaRepoDir)
+
+      const metaSession = await RepoSession.open(metaRepoDir)
+
+      try {
+        const entries: Array<{ subject: string; additions: number; deletions: number; locChanged: number }> = []
+
+        await metaSession.streamTopologyWithMeta(
+          ['--max-count=1', '--parents', 'HEAD'],
+          (entry) => {
+            entries.push({
+              subject: entry.subject,
+              additions: entry.additions,
+              deletions: entry.deletions,
+              locChanged: entry.locChanged,
+            })
+          },
+        )
+
+        expect(entries).toHaveLength(1)
+        expect(entries[0]).toEqual({
+          subject: 'reshape file',
+          additions: 2,
+          deletions: 1,
+          locChanged: 3,
+        })
+      } finally {
+        metaSession.close()
+      }
+    } finally {
+      await rm(metaRepoDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('RepoSession commit actions', () => {
   test('uncommits the current head commit and keeps the change in the working tree', async () => {
     const fixture = await createActionFixture()

@@ -11,6 +11,8 @@ export interface RevListEntryWithMeta extends RevListEntry {
   authorUnix: number
   committerUnix: number
   subject: string
+  additions: number
+  deletions: number
   locChanged: number
 }
 
@@ -131,6 +133,8 @@ async function streamRevListWithMetaInternal(
         authorUnix: 0,
         committerUnix: 0,
         subject: '',
+        additions: 0,
+        deletions: 0,
         locChanged: 0,
       }
       awaitingMetaLine = true
@@ -165,7 +169,11 @@ async function streamRevListWithMetaInternal(
       return
     }
 
-    pendingEntry.locChanged += parseNumstatValue(parts[0]) + parseNumstatValue(parts[1])
+    const additions = parseNumstatValue(parts[0])
+    const deletions = parseNumstatValue(parts[1])
+    pendingEntry.additions += additions
+    pendingEntry.deletions += deletions
+    pendingEntry.locChanged += additions + deletions
   })
 
   flushPending()

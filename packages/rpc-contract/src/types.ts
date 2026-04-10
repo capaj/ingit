@@ -60,6 +60,8 @@ export interface CommitRow {
   authorUnix: number
   committerUnix: number
   subject: string
+  additions: number
+  deletions: number
   locChanged: number
   bodyPreview?: string
   refNames: string[]

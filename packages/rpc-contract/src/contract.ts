@@ -35,6 +35,8 @@ export const CommitRow = z.object({
   authorUnix: z.number(),
   committerUnix: z.number(),
   subject: z.string(),
+  additions: z.number(),
+  deletions: z.number(),
   locChanged: z.number(),
   bodyPreview: z.string().optional(),
   refNames: z.array(z.string()),

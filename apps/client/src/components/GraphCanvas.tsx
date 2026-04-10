@@ -23,9 +23,13 @@ const LANE_WIDTH = 80
 const NODE_RADIUS = 16
 const NODE_FILL = '#11111b'
 const GAUGE_RADIUS = NODE_RADIUS - 5
-const GAUGE_STROKE_WIDTH = 3.25
-const GAUGE_START_ANGLE = 230
-const GAUGE_END_ANGLE = 490
+const GAUGE_BACKGROUND_FILL = '#1e1e2e'
+const GAUGE_TRACK_STROKE = '#45475a'
+const GAUGE_TRACK_STROKE_SELECTED = '#cdd6f455'
+const GAUGE_TRACK_FILL_SELECTED = '#cdd6f422'
+const GAUGE_ADDITIONS_FILL = '#a6e3a1'
+const GAUGE_DELETIONS_FILL = '#f38ba8'
+const GAUGE_MIN_FILL_HEIGHT = 2
 const EDGE_CORNER_RADIUS = 12
 const EDGE_SHORT_CURVE_ROWS = 6
 const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
@@ -427,21 +431,6 @@ function routedEdgePath(
   }
 }
 
-function polarToCartesian(centerX: number, centerY: number, radius: number, angleInDegrees: number) {
-  const angleInRadians = (angleInDegrees - 90) * (Math.PI / 180)
-  return {
-    x: centerX + radius * Math.cos(angleInRadians),
-    y: centerY + radius * Math.sin(angleInRadians),
-  }
-}
-
-function describeArc(centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number) {
-  const start = polarToCartesian(centerX, centerY, radius, endAngle)
-  const end = polarToCartesian(centerX, centerY, radius, startAngle)
-  const largeArcFlag = endAngle - startAngle <= 180 ? 0 : 1
-  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`
-}
-
 function computeLocScaleMax(rows: CommitRow[]) {
   if (rows.length === 0) return 0
   const sorted = rows.map((row) => row.locChanged).sort((a, b) => a - b)
@@ -449,10 +438,20 @@ function computeLocScaleMax(rows: CommitRow[]) {
   return sorted[index] ?? sorted[sorted.length - 1] ?? 0
 }
 
-function gaugeColor(progress: number, defaultColor: string) {
-  if (progress > 2 / 3) return '#f38ba8'
-  if (progress > 1 / 3) return '#fab387'
-  return defaultColor
+function describeHalfCirclePath(centerX: number, centerY: number, radius: number, side: 'left' | 'right') {
+  const sweepFlag = side === 'right' ? 1 : 0
+  return `M ${centerX} ${centerY - radius} A ${radius} ${radius} 0 0 ${sweepFlag} ${centerX} ${centerY + radius} L ${centerX} ${centerY - radius} Z`
+}
+
+function describeHalfCircleArc(centerX: number, centerY: number, radius: number, side: 'left' | 'right') {
+  const sweepFlag = side === 'right' ? 1 : 0
+  return `M ${centerX} ${centerY - radius} A ${radius} ${radius} 0 0 ${sweepFlag} ${centerX} ${centerY + radius}`
+}
+
+function computeGaugeFillHeight(value: number, scaleMax: number, diameter: number) {
+  if (value <= 0 || scaleMax <= 0) return 0
+  const scaledHeight = diameter * Math.min(value / scaleMax, 1)
+  return Math.max(GAUGE_MIN_FILL_HEIGHT, scaledHeight)
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,64 +1190,73 @@ export function GraphCanvas({
             const { row, x, y } = node
             const selected = row.sha === selectedSha
             const color = laneColor(row.lane)
-            const isHotCommit = row.locChanged > locScaleMax
-            const gaugeProgress = locScaleMax > 0
-              ? Math.min(row.locChanged / locScaleMax, 1)
-              : 0
-            const gaugeStroke = gaugeColor(gaugeProgress, color)
-            const gaugeTrackPath = describeArc(x, y, GAUGE_RADIUS, GAUGE_START_ANGLE, GAUGE_END_ANGLE)
-            const gaugeValuePath = gaugeProgress > 0
-              ? describeArc(
-                x,
-                y,
-                GAUGE_RADIUS,
-                GAUGE_START_ANGLE,
-                GAUGE_START_ANGLE + (GAUGE_END_ANGLE - GAUGE_START_ANGLE) * gaugeProgress,
-              )
-              : null
+            const gaugeDiameter = GAUGE_RADIUS * 2
+            const gaugeTop = y - GAUGE_RADIUS
+            const gaugeLeftPath = describeHalfCirclePath(x, y, GAUGE_RADIUS, 'left')
+            const gaugeRightPath = describeHalfCirclePath(x, y, GAUGE_RADIUS, 'right')
+            const gaugeLeftArc = describeHalfCircleArc(x, y, GAUGE_RADIUS, 'left')
+            const gaugeRightArc = describeHalfCircleArc(x, y, GAUGE_RADIUS, 'right')
+            const additionsFillHeight = computeGaugeFillHeight(row.additions, locScaleMax, gaugeDiameter)
+            const deletionsFillHeight = computeGaugeFillHeight(row.deletions, locScaleMax, gaugeDiameter)
+            const additionsFillY = gaugeTop + gaugeDiameter - additionsFillHeight
+            const deletionsFillY = gaugeTop + gaugeDiameter - deletionsFillHeight
+            const clipPathBaseId = `gauge-${row.sha}`
+            const leftClipPathId = `${clipPathBaseId}-left`
+            const rightClipPathId = `${clipPathBaseId}-right`
+            const trackStroke = selected ? GAUGE_TRACK_STROKE_SELECTED : GAUGE_TRACK_STROKE
+            const trackFill = selected ? GAUGE_TRACK_FILL_SELECTED : GAUGE_BACKGROUND_FILL
             return (
               <g
                 key={row.sha}
                 onClick={(e) => { e.stopPropagation(); onSelectCommit(row.sha) }}
                 style={{ cursor: 'pointer', pointerEvents: 'auto' }}
               >
-                <title>{`${row.subject}\n${row.locChanged} LOC changed`}</title>
+                <title>{`${row.subject}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
                 {selected && <circle cx={x} cy={y} r={NODE_RADIUS * 2.5} fill={color} opacity={0.15} />}
                 <circle cx={x} cy={y} r={NODE_RADIUS} fill={NODE_FILL} stroke={color} strokeWidth={selected ? 3.5 : 2.75} />
-                {isHotCommit ? (
-                  <text
-                    x={x}
-                    y={y + 0.5}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    fontSize={NODE_RADIUS - 3}
-                    style={{
-                      fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif',
-                    }}
-                  >
-                    🔥
-                  </text>
-                ) : (
-                  <>
-                    <path
-                      d={gaugeTrackPath}
-                      stroke={selected ? '#cdd6f433' : '#45475a'}
-                      strokeWidth={GAUGE_STROKE_WIDTH}
-                      fill="none"
-                      strokeLinecap="round"
+                <>
+                  <defs>
+                    <clipPath id={leftClipPathId} clipPathUnits="userSpaceOnUse">
+                      <path d={gaugeLeftPath} />
+                    </clipPath>
+                    <clipPath id={rightClipPathId} clipPathUnits="userSpaceOnUse">
+                      <path d={gaugeRightPath} />
+                    </clipPath>
+                  </defs>
+                  <path d={gaugeLeftPath} fill={trackFill} />
+                  <path d={gaugeRightPath} fill={trackFill} />
+                  {additionsFillHeight > 0 && (
+                    <rect
+                      x={x - GAUGE_RADIUS}
+                      y={additionsFillY}
+                      width={GAUGE_RADIUS}
+                      height={additionsFillHeight}
+                      fill={GAUGE_ADDITIONS_FILL}
+                      clipPath={`url(#${leftClipPathId})`}
                     />
-                    {gaugeValuePath && (
-                      <path
-                        d={gaugeValuePath}
-                        stroke={gaugeStroke}
-                        strokeWidth={GAUGE_STROKE_WIDTH}
-                        fill="none"
-                        strokeLinecap="round"
-                      />
-                    )}
-                    {row.parentShas.length > 1 && <circle cx={x} cy={y} r={2} fill={color} />}
-                  </>
-                )}
+                  )}
+                  {deletionsFillHeight > 0 && (
+                    <rect
+                      x={x}
+                      y={deletionsFillY}
+                      width={GAUGE_RADIUS}
+                      height={deletionsFillHeight}
+                      fill={GAUGE_DELETIONS_FILL}
+                      clipPath={`url(#${rightClipPathId})`}
+                    />
+                  )}
+                  <path d={gaugeLeftArc} stroke={trackStroke} strokeWidth={1.6} fill="none" />
+                  <path d={gaugeRightArc} stroke={trackStroke} strokeWidth={1.6} fill="none" />
+                  <line
+                    x1={x}
+                    y1={gaugeTop}
+                    x2={x}
+                    y2={gaugeTop + gaugeDiameter}
+                    stroke={trackStroke}
+                    strokeWidth={1.6}
+                  />
+                  {row.parentShas.length > 1 && <circle cx={x} cy={y} r={2} fill={color} />}
+                </>
               </g>
             )
           })}
