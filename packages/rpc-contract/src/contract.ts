@@ -76,6 +76,10 @@ export const contract = {
       head: HeadInfo,
     })),
 
+  getRecentRepos: oc
+    .input(z.object({}))
+    .output(z.array(z.string())),
+
   getRefs: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RefSummary)),

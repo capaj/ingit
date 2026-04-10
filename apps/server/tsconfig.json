@@ -3,6 +3,7 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
+    "types": ["bun", "node"],
     "noEmit": true
   },
   "include": ["src"],

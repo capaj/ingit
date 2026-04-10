@@ -7,7 +7,7 @@ import { CommitDetail } from './components/CommitDetail'
 
 export function App() {
   const {
-    status, repoPath, refs, historyWindow, selectedSha,
+    status, repoPath, recentRepos, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, githubUrl, openError,
     openRepoByPath, openFromUrl, selectRef,
     navigateTo, checkoutSha,
@@ -44,7 +44,7 @@ export function App() {
   }, [selectedSha, historyWindow])
 
   if (status === 'no-repo') {
-    return <RepoOpen onOpen={openRepoByPath} error={openError} />
+    return <RepoOpen onOpen={openRepoByPath} error={openError} recentRepos={recentRepos} />
   }
 
   if (status === 'loading') {

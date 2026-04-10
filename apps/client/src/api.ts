@@ -24,6 +24,10 @@ export function openRepo(req: { path: string }) {
   return ensureClient().openRepo(req)
 }
 
+export function getRecentRepos() {
+  return ensureClient().getRecentRepos({})
+}
+
 export function getRefs(repoId: string) {
   return ensureClient().getRefs({ repoId })
 }

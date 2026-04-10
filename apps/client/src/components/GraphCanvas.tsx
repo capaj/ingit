@@ -18,6 +18,7 @@ const GAUGE_TRACK_FILL_SELECTED = '#cdd6f422'
 const GAUGE_ADDITIONS_FILL = '#a6e3a1'
 const GAUGE_DELETIONS_FILL = '#f38ba8'
 const GAUGE_MIN_FILL_HEIGHT = 2
+const GAUGE_SCALE_PERCENTILE = 0.85
 const EDGE_CORNER_RADIUS = 12
 const EDGE_SHORT_CURVE_ROWS = 6
 const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
@@ -428,7 +429,7 @@ function routedEdgePath(
 function computeLocScaleMax(rows: CommitRow[]) {
   if (rows.length === 0) return 0
   const sorted = rows.map((row) => row.locChanged).sort((a, b) => a - b)
-  const index = Math.max(0, Math.ceil(sorted.length * 0.96) - 1)
+  const index = Math.max(0, Math.ceil(sorted.length * GAUGE_SCALE_PERCENTILE) - 1)
   return sorted[index] ?? sorted[sorted.length - 1] ?? 0
 }
 

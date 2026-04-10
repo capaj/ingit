@@ -19,6 +19,8 @@ export interface OpenRepoResponse {
   }
 }
 
+export type RecentReposResponse = string[]
+
 export interface RefSummary {
   name: string
   shortName: string

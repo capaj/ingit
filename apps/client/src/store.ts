@@ -10,6 +10,7 @@ import type {
 } from '@ingit/rpc-contract'
 import {
   openRepo,
+  getRecentRepos,
   getRefs,
   queryHistory,
   getCommitDetail,
@@ -23,6 +24,7 @@ import {
 
 const INITIAL_ROWS = 1000
 const LOAD_MORE_ROWS = 500
+const MAX_RECENT_REPOS = 12
 
 function getRepoPathFromUrl(): string | null {
   const hash = window.location.hash
@@ -55,6 +57,11 @@ function mergeHistory(
   }
 }
 
+function prependRecentRepo(recentRepos: string[], repoPath: string): string[] {
+  return [repoPath, ...recentRepos.filter((existingPath) => existingPath !== repoPath)]
+    .slice(0, MAX_RECENT_REPOS)
+}
+
 export type AppStatus = 'no-repo' | 'loading' | 'ready'
 
 type CommitPRInfo = Array<{ number: number; title: string; url: string; state: string; mergedAt: string | null }>
@@ -64,6 +71,7 @@ interface AppState {
   repoId: string | null
   repoPath: string | null
   totalCommitCount: number
+  recentRepos: string[]
   refs: RefSummary[]
   historyWindow: HistoryWindowResponse | null
   selectedSha: string | null
@@ -80,6 +88,7 @@ interface AppState {
 
   // Actions
   openRepoByPath: (path: string) => Promise<void>
+  loadRecentRepos: () => Promise<void>
   openFromUrl: () => void
   selectCommit: (sha: string) => void
   selectRef: (ref: RefSummary) => void
@@ -99,6 +108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   repoId: null,
   repoPath: null,
   totalCommitCount: 0,
+  recentRepos: [],
   refs: [],
   historyWindow: null,
   selectedSha: null,
@@ -123,6 +133,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         repoId: res.repoId,
         repoPath: res.rootPath,
         totalCommitCount: res.totalCommitCount,
+        recentRepos: prependRecentRepo(get().recentRepos, res.rootPath),
         githubUrl: res.githubUrl,
         openError: null,
         selectedRefName: null,
@@ -143,16 +154,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       ])
       set({ refs, historyWindow: hist })
     } catch (err) {
+      let recentRepos = get().recentRepos
+      try {
+        recentRepos = await getRecentRepos()
+      } catch (historyErr) {
+        console.error('Failed to load recent repositories:', historyErr)
+      }
+
       set({
         status: 'no-repo',
+        recentRepos,
         openError: err instanceof Error ? err.message : 'Failed to open repository',
       })
     }
   },
 
+  loadRecentRepos: async () => {
+    try {
+      set({ recentRepos: await getRecentRepos() })
+    } catch (err) {
+      console.error('Failed to load recent repositories:', err)
+    }
+  },
+
   openFromUrl: () => {
     const path = getRepoPathFromUrl()
-    if (path) get().openRepoByPath(path)
+    void get().loadRecentRepos()
+    if (path) void get().openRepoByPath(path)
   },
 
   selectCommit: (sha) => {

@@ -3,9 +3,14 @@ import { useState, type FormEvent } from 'react'
 interface RepoOpenProps {
   onOpen: (path: string) => void
   error?: string | null
+  recentRepos: string[]
 }
 
-export function RepoOpen({ onOpen, error }: RepoOpenProps) {
+function getRepoLabel(path: string): string {
+  return path.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() ?? path
+}
+
+export function RepoOpen({ onOpen, error, recentRepos }: RepoOpenProps) {
   const [path, setPath] = useState('')
 
   function handleSubmit(e: FormEvent) {
@@ -102,6 +107,38 @@ export function RepoOpen({ onOpen, error }: RepoOpenProps) {
             Open
           </button>
         </form>
+
+        {recentRepos.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 13, color: '#a6adc8' }}>Recent repositories</div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 220, overflowY: 'auto' }}>
+              {recentRepos.map((repoPath) => (
+                <button
+                  key={repoPath}
+                  type="button"
+                  onClick={() => onOpen(repoPath)}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    gap: 4,
+                    background: '#1e1e2e',
+                    border: '1px solid #45475a',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    color: '#cdd6f4',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{getRepoLabel(repoPath)}</span>
+                  <span style={{ fontSize: 12, color: '#a6adc8', fontFamily: 'monospace' }}>{repoPath}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

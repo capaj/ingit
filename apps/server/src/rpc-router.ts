@@ -15,6 +15,10 @@ export const router = os.router({
     return sessionManager.openRepo(input.path)
   }),
 
+  getRecentRepos: os.getRecentRepos.handler(async () => {
+    return sessionManager.getRecentRepos()
+  }),
+
   getRefs: os.getRefs.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
