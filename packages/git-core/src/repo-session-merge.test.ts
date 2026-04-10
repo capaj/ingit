@@ -187,3 +187,99 @@ describe('RepoSession.moveBranch', () => {
     }
   })
 })
+
+describe('RepoSession.resetBranch', () => {
+  test('resets the current branch back to its upstream remote', async () => {
+    const remoteDir = await makeTempDir('ingit-reset-remote-')
+    await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+
+    const seedDir = await makeTempDir('ingit-reset-seed-')
+    await initRepo(seedDir)
+    await Bun.write(join(seedDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], seedDir)
+    await runGit(['commit', '-m', 'base'], seedDir)
+    await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+    await runGit(['push', '-u', 'origin', 'main'], seedDir)
+    const remoteMainSha = await currentHeadSha(seedDir)
+
+    const localDir = await makeTempDir('ingit-reset-local-')
+    await runGit(['clone', remoteDir, localDir], tmpdir())
+    await runGit(['config', 'user.email', 'test@test.com'], localDir)
+    await runGit(['config', 'user.name', 'Test'], localDir)
+    await Bun.write(join(localDir, 'local.txt'), 'local\n')
+    await runGit(['add', '.'], localDir)
+    await runGit(['commit', '-m', 'local main commit'], localDir)
+
+    const session = await RepoSession.open(localDir)
+
+    try {
+      const result = await session.resetBranch('main')
+
+      expect(result.headSha).toBe(await currentHeadSha(localDir))
+      expect(await currentBranch(localDir)).toBe('main')
+      expect(await currentHeadSha(localDir)).toBe(remoteMainSha)
+      expect(await Bun.file(join(localDir, 'local.txt')).exists()).toBe(false)
+    } finally {
+      session.close()
+    }
+  })
+
+  test('moves a non-current branch back to its upstream remote tip', async () => {
+    const remoteDir = await makeTempDir('ingit-reset-branch-remote-')
+    await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+
+    const seedDir = await makeTempDir('ingit-reset-branch-seed-')
+    await initRepo(seedDir)
+    await Bun.write(join(seedDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], seedDir)
+    await runGit(['commit', '-m', 'base'], seedDir)
+    await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+    await runGit(['push', '-u', 'origin', 'main'], seedDir)
+
+    await runGit(['checkout', '-b', 'dev'], seedDir)
+    await Bun.write(join(seedDir, 'dev.txt'), 'dev\n')
+    await runGit(['add', '.'], seedDir)
+    await runGit(['commit', '-m', 'dev'], seedDir)
+    await runGit(['push', '-u', 'origin', 'dev'], seedDir)
+    const remoteDevSha = await currentHeadSha(seedDir)
+
+    const localDir = await makeTempDir('ingit-reset-branch-local-')
+    await runGit(['clone', remoteDir, localDir], tmpdir())
+    await runGit(['config', 'user.email', 'test@test.com'], localDir)
+    await runGit(['config', 'user.name', 'Test'], localDir)
+    await runGit(['checkout', '-b', 'dev', '--track', 'origin/dev'], localDir)
+    await Bun.write(join(localDir, 'dev-local.txt'), 'ahead\n')
+    await runGit(['add', '.'], localDir)
+    await runGit(['commit', '-m', 'local dev commit'], localDir)
+    await runGit(['checkout', 'main'], localDir)
+
+    const session = await RepoSession.open(localDir)
+
+    try {
+      const result = await session.resetBranch('dev')
+
+      expect(result.message).toContain('dev')
+      expect(await currentBranch(localDir)).toBe('main')
+      expect(await branchSha(localDir, 'dev')).toBe(remoteDevSha)
+    } finally {
+      session.close()
+    }
+  })
+
+  test('rejects resetting a branch without a remote tracking ref', async () => {
+    const repoDir = await makeTempDir('ingit-reset-no-remote-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.resetBranch('main')).rejects.toThrow('No remote tracking ref found')
+    } finally {
+      session.close()
+    }
+  })
+})

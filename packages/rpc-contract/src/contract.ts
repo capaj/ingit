@@ -59,7 +59,7 @@ export const ChangedPath = z.object({
 
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
-export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move'])
+export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset'])
 
 // ---------------------------------------------------------------------------
 // Contract

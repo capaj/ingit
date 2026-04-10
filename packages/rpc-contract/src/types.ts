@@ -168,7 +168,7 @@ export interface MergeRefResponse {
   headSha: CommitSha
 }
 
-export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move'
+export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
 
 export interface WorktreeStatusResponse {
   branch?: string

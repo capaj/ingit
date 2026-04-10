@@ -145,6 +145,11 @@ export const router = os.router({
         message = result.message
         break
       }
+      case 'reset': {
+        const result = await session.resetBranch(input.refName)
+        message = result.message
+        break
+      }
     }
     return { ok: true, message }
   }),

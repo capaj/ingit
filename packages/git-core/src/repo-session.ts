@@ -276,6 +276,52 @@ export class RepoSession {
     }
   }
 
+  private remoteShortNameFromUpstream(upstream?: string): string | null {
+    if (!upstream) return null
+    if (upstream.startsWith('refs/remotes/')) {
+      return upstream.slice('refs/remotes/'.length)
+    }
+    return upstream
+  }
+
+  private findTrackingRemoteRef(localRef: RefSummary, refs: RefSummary[]): RefSummary | null {
+    const upstreamShortName = this.remoteShortNameFromUpstream(localRef.upstream)
+    if (upstreamShortName) {
+      return refs.find((ref) => ref.kind === 'remote' && ref.shortName === upstreamShortName) ?? null
+    }
+
+    const originMatch = refs.find((ref) => ref.kind === 'remote' && ref.shortName === `origin/${localRef.shortName}`)
+    if (originMatch) return originMatch
+
+    const suffixMatches = refs.filter(
+      (ref) => ref.kind === 'remote' && ref.shortName.endsWith(`/${localRef.shortName}`),
+    )
+    return suffixMatches.length === 1 ? suffixMatches[0] : null
+  }
+
+  async resetBranch(ref: string): Promise<{ message: string; headSha: string }> {
+    const refs = await this.getRefs()
+    const localRef = refs.find((item) => item.kind === 'head' && item.shortName === ref)
+    if (!localRef) {
+      throw new Error('Only local branches can be reset')
+    }
+
+    const remoteRef = this.findTrackingRemoteRef(localRef, refs)
+    if (!remoteRef) {
+      throw new Error(`No remote tracking ref found for ${ref}`)
+    }
+
+    const targetRef = remoteRef.shortName
+    const { stdout, stderr } = localRef.isCurrent
+      ? await runGit(['reset', '--hard', targetRef], this.rootPath)
+      : await runGit(['branch', '-f', ref, targetRef], this.rootPath)
+
+    return {
+      message: (stdout + stderr).trim() || `Reset ${ref} to ${targetRef}`,
+      headSha: await this.getHeadSha(),
+    }
+  }
+
   async push(ref: string, remote = 'origin'): Promise<string> {
     // No ziggit C-API for push yet — use git CLI
     const { stdout, stderr } = await runGit(['push', remote, ref], this.rootPath)

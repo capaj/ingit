@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
-import type { CommitRow, CommitActionKind } from '@ingit/rpc-contract'
+import type { CommitRow, CommitActionKind, RefSummary } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
 
 // ---------------------------------------------------------------------------
@@ -61,9 +61,30 @@ interface VisibleCommitAction {
 }
 
 interface VisibleRefAction {
-  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move'
+  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
   label: string
-  tone: 'neutral' | 'danger'
+  tone: 'neutral' | 'warning' | 'danger'
+}
+
+function upstreamShortName(upstream?: string) {
+  if (!upstream) return null
+  if (upstream.startsWith('refs/remotes/')) return upstream.slice('refs/remotes/'.length)
+  return upstream
+}
+
+function findTrackingRemoteRef(localRef: RefSummary, refs: RefSummary[]) {
+  const explicitUpstream = upstreamShortName(localRef.upstream)
+  if (explicitUpstream) {
+    return refs.find((ref) => ref.kind === 'remote' && ref.shortName === explicitUpstream) ?? null
+  }
+
+  const originMatch = refs.find((ref) => ref.kind === 'remote' && ref.shortName === `origin/${localRef.shortName}`)
+  if (originMatch) return originMatch
+
+  const suffixMatches = refs.filter(
+    (ref) => ref.kind === 'remote' && ref.shortName.endsWith(`/${localRef.shortName}`),
+  )
+  return suffixMatches.length === 1 ? suffixMatches[0] : null
 }
 
 type EdgeRoutePlan =
@@ -896,13 +917,36 @@ export function GraphCanvas() {
     [layout, currentBranch],
   )
 
+  const selectedRemoteRef = useMemo(() => {
+    if (!selectedRef || selectedRef.kind !== 'head') return null
+    return findTrackingRemoteRef(selectedRef, refs)
+  }, [selectedRef, refs])
+
+  const canPushSelectedRef = useMemo(() => {
+    if (!selectedRef || selectedRef.kind !== 'head') return false
+    return !selectedRemoteRef || selectedRemoteRef.targetSha !== selectedRef.targetSha
+  }, [selectedRef, selectedRemoteRef])
+
+  const canResetSelectedRef = useMemo(() => {
+    if (!selectedRef || selectedRef.kind !== 'head' || !selectedRemoteRef) return false
+    if (selectedRemoteRef.targetSha === selectedRef.targetSha) return false
+    return (selectedRef.ahead ?? 0) > 0
+  }, [selectedRef, selectedRemoteRef])
+
   const selectedRefActions = useMemo<VisibleRefAction[]>(() => {
     if (!selectedRef) return []
     if (selectedRef.kind === 'head') {
-      if (selectedRef.isCurrent) return []
+      if (selectedRef.isCurrent) {
+        return [
+          ...(canPushSelectedRef ? [{ action: 'push', label: 'Push', tone: 'neutral' as const }] : []),
+          ...(canResetSelectedRef ? [{ action: 'reset', label: 'Reset', tone: 'warning' as const }] : []),
+        ]
+      }
+
       return [
         { action: 'checkout', label: 'Checkout', tone: 'neutral' },
-        { action: 'push', label: 'Push', tone: 'neutral' },
+        ...(canPushSelectedRef ? [{ action: 'push', label: 'Push', tone: 'neutral' as const }] : []),
+        ...(canResetSelectedRef ? [{ action: 'reset', label: 'Reset', tone: 'warning' as const }] : []),
         { action: 'delete', label: 'Delete', tone: 'danger' },
       ]
     }
@@ -915,7 +959,7 @@ export function GraphCanvas() {
     }
 
     return []
-  }, [selectedRef])
+  }, [selectedRef, canPushSelectedRef, canResetSelectedRef])
 
   const movableBranchRefName = useMemo(() => {
     if (!selectedRef || selectedRef.kind !== 'head' || selectedRef.isCurrent) return null
@@ -997,7 +1041,7 @@ export function GraphCanvas() {
     selectGraphRef(refName)
   }, [selectGraphRef])
 
-  const handleRefActionClick = useCallback((action: 'checkout' | 'push' | 'fetch' | 'delete') => {
+  const handleRefActionClick = useCallback((action: 'checkout' | 'push' | 'fetch' | 'delete' | 'reset') => {
     if (!selectedRefName || !selectedRef) return
     setMergePreviewVisible(false)
     performRefAction(action, selectedRefName, selectedRef.targetSha).catch((err) => {
@@ -1726,7 +1770,7 @@ function RefActionButton({
 }: {
   label: string
   onClick: () => void
-  tone: 'neutral' | 'danger'
+  tone: 'neutral' | 'warning' | 'danger'
   size?: 'default' | 'compact'
   variant?: 'solid' | 'ghost'
 }) {
@@ -1746,9 +1790,17 @@ function RefActionButton({
         minWidth: compact ? 72 : 84,
         height: compact ? 20 : 28,
         padding: compact ? '0 8px' : '0 10px',
-        background: ghost ? 'rgba(24,24,37,0.5)' : tone === 'danger' ? '#5c2430' : '#2f3348',
-        border: ghost ? '1px solid transparent' : `1px solid ${tone === 'danger' ? '#8b3a4a' : '#4a4f68'}`,
-        color: tone === 'danger' ? '#f5a6b8' : ghost ? '#bac2de' : '#cdd6f4',
+        background: ghost
+          ? 'rgba(24,24,37,0.5)'
+          : tone === 'danger'
+            ? '#5c2430'
+            : tone === 'warning'
+              ? '#7a4e11'
+              : '#2f3348',
+        border: ghost
+          ? '1px solid transparent'
+          : `1px solid ${tone === 'danger' ? '#8b3a4a' : tone === 'warning' ? '#d19128' : '#4a4f68'}`,
+        color: tone === 'danger' ? '#f5a6b8' : tone === 'warning' ? '#f9d28b' : ghost ? '#bac2de' : '#cdd6f4',
         fontSize: compact ? 11 : 12,
         fontWeight: 600,
         cursor: 'pointer',
@@ -1761,6 +1813,8 @@ function RefActionButton({
           ? 'rgba(49,50,68,0.8)'
           : tone === 'danger'
             ? '#6a2b39'
+            : tone === 'warning'
+              ? '#8a5a16'
             : '#3a4058'
       }}
       onMouseLeave={(e) => {
@@ -1768,6 +1822,8 @@ function RefActionButton({
           ? 'rgba(24,24,37,0.5)'
           : tone === 'danger'
             ? '#5c2430'
+            : tone === 'warning'
+              ? '#7a4e11'
             : '#2f3348'
       }}
     >
