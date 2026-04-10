@@ -7,10 +7,10 @@ import { CommitDetail } from './components/CommitDetail'
 
 export function App() {
   const {
-    status, repoPath, totalCommitCount, refs, historyWindow, selectedSha, scrollToSha, scrollToKey,
+    status, repoPath, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, githubUrl, openError,
-    openRepoByPath, openFromUrl, selectCommit, selectRef,
-    navigateTo, requestMore, performRefAction, performCommitAction, checkoutSha,
+    openRepoByPath, openFromUrl, selectRef,
+    navigateTo, checkoutSha,
   } = useAppStore()
 
   useEffect(() => { openFromUrl() }, [openFromUrl])
@@ -43,11 +43,6 @@ export function App() {
     return null
   }, [selectedSha, historyWindow])
 
-  const currentBranch = useMemo(() => {
-    const current = refs.find(r => r.isCurrent)
-    return current?.shortName ?? null
-  }, [refs])
-
   if (status === 'no-repo') {
     return <RepoOpen onOpen={openRepoByPath} error={openError} />
   }
@@ -73,30 +68,7 @@ export function App() {
           </span>
         </div>
 
-        <GraphCanvas
-          window={historyWindow}
-          totalCommitCount={totalCommitCount}
-          selectedSha={selectedSha}
-          scrollToSha={scrollToSha}
-          scrollToKey={scrollToKey}
-          currentBranch={currentBranch}
-          onSelectCommit={selectCommit}
-          onRequestMore={requestMore}
-          onRefAction={async (action, refName, sha) => {
-            try {
-              await performRefAction(action as 'checkout' | 'push' | 'fetch' | 'delete', refName, sha)
-            } catch (err) {
-              alert(err instanceof Error ? err.message : 'Action failed')
-            }
-          }}
-          onCommitAction={async (action, sha) => {
-            try {
-              await performCommitAction(action, sha)
-            } catch (err) {
-              alert(err instanceof Error ? err.message : 'Action failed')
-            }
-          }}
-        />
+        <GraphCanvas />
       </div>
 
       <CommitDetail

@@ -58,6 +58,7 @@ export const ChangedPath = z.object({
 })
 
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
+export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -161,6 +162,32 @@ export const contract = {
       repoId: RepoId,
       sha: CommitSha,
       action: CommitActionKind,
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      message: z.string(),
+      headSha: CommitSha,
+    })),
+
+  getMergePreview: oc
+    .input(z.object({
+      repoId: RepoId,
+      refName: z.string(),
+    }))
+    .output(z.object({
+      mergeable: z.boolean(),
+      reason: MergePreviewReason.optional(),
+      sourceRefName: z.string(),
+      sourceSha: CommitSha.optional(),
+      targetRefName: z.string().optional(),
+      targetSha: CommitSha.optional(),
+      requiresFetch: z.boolean(),
+    })),
+
+  mergeRef: oc
+    .input(z.object({
+      repoId: RepoId,
+      refName: z.string(),
     }))
     .output(z.object({
       ok: z.boolean(),

@@ -52,6 +52,14 @@ export function commitAction(repoId: string, action: 'cherry-pick' | 'revert' | 
   return ensureClient().commitAction({ repoId, action, sha })
 }
 
+export function getMergePreview(repoId: string, refName: string) {
+  return ensureClient().getMergePreview({ repoId, refName })
+}
+
+export function mergeRef(repoId: string, refName: string) {
+  return ensureClient().mergeRef({ repoId, refName })
+}
+
 export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete', refName: string, sha: string) {
   return ensureClient().refAction({ repoId, action, refName, sha })
 }

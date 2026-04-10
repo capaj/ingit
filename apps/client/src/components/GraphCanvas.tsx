@@ -1,18 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
-import type { HistoryWindowResponse, CommitRow, CommitActionKind } from '@ingit/rpc-contract'
-
-interface GraphCanvasProps {
-  window: HistoryWindowResponse | null
-  totalCommitCount: number
-  selectedSha: string | null
-  scrollToSha: string | null
-  scrollToKey: number
-  currentBranch: string | null
-  onSelectCommit: (sha: string) => void
-  onRequestMore: (direction: 'up' | 'down') => void
-  onRefAction?: (action: string, refName: string, sha: string) => void
-  onCommitAction?: (action: CommitActionKind, sha: string) => void
-}
+import type { CommitRow, CommitActionKind } from '@ingit/rpc-contract'
+import { useAppStore } from '../store'
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -62,6 +50,12 @@ interface VisibleCommitAction {
   action: CommitActionKind
   label: string
   tone: 'success' | 'warning' | 'uncommit'
+}
+
+interface VisibleRefAction {
+  action: 'checkout' | 'push' | 'fetch' | 'delete'
+  label: string
+  tone: 'neutral' | 'danger'
 }
 
 type EdgeRoutePlan =
@@ -600,34 +594,58 @@ function edgeIntersectsRange(fromIdx: number, toIdx: number, firstIdx: number, l
 // Component
 // ---------------------------------------------------------------------------
 
-export function GraphCanvas({
-  window: histWindow,
-  totalCommitCount,
-  selectedSha,
-  scrollToSha,
-  scrollToKey,
-  currentBranch,
-  onSelectCommit,
-  onRequestMore,
-  onRefAction,
-  onCommitAction,
-}: GraphCanvasProps) {
+export function GraphCanvas() {
+  const histWindow = useAppStore((state) => state.historyWindow)
+  const refs = useAppStore((state) => state.refs)
+  const totalCommitCount = useAppStore((state) => state.totalCommitCount)
+  const selectedSha = useAppStore((state) => state.selectedSha)
+  const selectedRefName = useAppStore((state) => state.selectedRefName)
+  const mergePreview = useAppStore((state) => state.mergePreview)
+  const scrollToSha = useAppStore((state) => state.scrollToSha)
+  const scrollToKey = useAppStore((state) => state.scrollToKey)
+  const selectCommit = useAppStore((state) => state.selectCommit)
+  const selectGraphRef = useAppStore((state) => state.selectGraphRef)
+  const clearGraphRefSelection = useAppStore((state) => state.clearGraphRefSelection)
+  const ensureMergePreview = useAppStore((state) => state.ensureMergePreview)
+  const requestMore = useAppStore((state) => state.requestMore)
+  const performRefAction = useAppStore((state) => state.performRefAction)
+  const performCommitAction = useAppStore((state) => state.performCommitAction)
+  const performMergeRef = useAppStore((state) => state.performMergeRef)
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(1)
   const [scrollTop, setScrollTop] = useState(0)
+  const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
   const zoomRef = useRef(1)
+  const suppressAutoScrollUntilRef = useRef(0)
   // Force re-render counter — incremented when scroll position changes enough
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
-  const [activePopover, setActivePopover] = useState<{
-    refName: string; sha: string; x: number; y: number
-  } | null>(null)
 
   const layout = useMemo(() => {
     if (!histWindow || histWindow.rows.length === 0) return null
     return buildLayout(histWindow.rows)
   }, [histWindow])
+
+  useEffect(() => {
+    setMergePreviewVisible(false)
+  }, [selectedRefName])
+
+  const refMap = useMemo(
+    () => new Map(refs.map((ref) => [ref.shortName, ref])),
+    [refs],
+  )
+
+  const selectedRef = useMemo(
+    () => (selectedRefName ? refMap.get(selectedRefName) ?? null : null),
+    [refMap, selectedRefName],
+  )
+
+  const currentBranch = useMemo(() => {
+    const current = refs.find((ref) => ref.isCurrent)
+    return current?.shortName ?? null
+  }, [refs])
 
   const locScaleMax = useMemo(
     () => (histWindow ? computeLocScaleMax(histWindow.rows) : 0),
@@ -665,9 +683,21 @@ export function GraphCanvas({
     return keys
   }, [layout, currentBranch])
 
+  const refreshViewport = useCallback((el: HTMLDivElement, nextZoom: number) => {
+    if (!layout) return
+    setScrollTop(el.scrollTop)
+    if (timeLabelsLayerRef.current) {
+      timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
+    }
+    const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, nextZoom)
+    lastRenderedRange.current = { firstIdx, lastIdx }
+    forceRender()
+  }, [layout])
+
   // Scroll to a specific commit when scrollToSha changes
   useEffect(() => {
     if (!scrollToSha || !layout || !scrollRef.current) return
+    if (Date.now() < suppressAutoScrollUntilRef.current) return
     const node = layout.shaToNode.get(scrollToSha)
     if (!node) return
     const el = scrollRef.current
@@ -701,7 +731,7 @@ export function GraphCanvas({
         const lastLoadedY = layout.nodes.length * NODE_SPACING_Y * zoomRef.current
         const viewBottom = el.scrollTop + el.clientHeight
         if (viewBottom > lastLoadedY - el.clientHeight) {
-          onRequestMore('down')
+          void requestMore('down')
         }
       }
     }
@@ -724,14 +754,13 @@ export function GraphCanvas({
       el.removeEventListener('scroll', check)
       ro.disconnect()
     }
-  }, [layout, histWindow, onRequestMore])
+  }, [layout, histWindow, requestMore])
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !timeLabelsLayerRef.current) return
-    setScrollTop(el.scrollTop)
-    timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
-  }, [layout, zoom])
+    refreshViewport(el, zoom)
+  }, [layout, zoom, refreshViewport])
 
   // Ctrl+wheel zoom — capture phase on document so we intercept before the
   // browser's native page-zoom handler processes it.
@@ -770,9 +799,9 @@ export function GraphCanvas({
     const visibleContentHeight = el.clientHeight / zoom
     const loadedContentHeight = layout.nodes.length * NODE_SPACING_Y
     if (visibleContentHeight > loadedContentHeight * 0.8) {
-      onRequestMore('down')
+      void requestMore('down')
     }
-  }, [zoom, layout, histWindow, onRequestMore])
+  }, [zoom, layout, histWindow, requestMore])
 
   // Compute visible nodes + edges based on last rendered range
   const { visibleNodes, visibleEdges } = useMemo(() => {
@@ -854,17 +883,154 @@ export function GraphCanvas({
     return { plans, bundleOffsets }
   }, [visibleEdges, occupiedLanes])
 
-  const handleRefClick = useCallback((e: React.MouseEvent, refName: string, sha: string, x: number, y: number) => {
+  const currentHeadNode = useMemo(
+    () => (layout && currentBranch ? layout.nodes.find((node) => node.row.refNames.includes(currentBranch)) ?? null : null),
+    [layout, currentBranch],
+  )
+
+  const selectedRefActions = useMemo<VisibleRefAction[]>(() => {
+    if (!selectedRef) return []
+    if (selectedRef.kind === 'head') {
+      if (selectedRef.isCurrent) return []
+      return [
+        { action: 'checkout', label: 'Checkout', tone: 'neutral' },
+        { action: 'push', label: 'Push', tone: 'neutral' },
+        { action: 'delete', label: 'Delete', tone: 'danger' },
+      ]
+    }
+
+    if (selectedRef.kind === 'remote') {
+      return [
+        { action: 'fetch', label: 'Fetch', tone: 'neutral' },
+        { action: 'delete', label: 'Delete', tone: 'danger' },
+      ]
+    }
+
+    return []
+  }, [selectedRef])
+
+  const showMergeButton = useMemo(() => (
+    !!currentHeadNode
+    && !!currentBranch
+    && !!selectedRefName
+    && selectedRefName !== currentBranch
+    && mergePreview?.sourceRefName === selectedRefName
+    && mergePreview.mergeable
+  ), [currentHeadNode, currentBranch, selectedRefName, mergePreview])
+
+  const mergePreviewGeometry = useMemo(() => {
+    if (!layout || !selectedRefName || !mergePreview?.mergeable) return null
+    if (mergePreview.sourceRefName !== selectedRefName) return null
+    if (!mergePreview.sourceSha || !mergePreview.targetSha) return null
+
+    const sourceNode = layout.shaToNode.get(mergePreview.sourceSha)
+    const targetNode = layout.shaToNode.get(mergePreview.targetSha)
+    if (!sourceNode || !targetNode) return null
+
+    const previewNode: LayoutNode = {
+      row: {
+        row: targetNode.row.row - 1,
+        sha: `preview:${mergePreview.sourceSha}:${mergePreview.targetSha}`,
+        parentShas: [targetNode.row.sha, sourceNode.row.sha],
+        authorName: '',
+        authorEmail: '',
+        authorUnix: 0,
+        committerUnix: 0,
+        subject: 'Merge preview',
+        additions: 0,
+        deletions: 0,
+        locChanged: 0,
+        refNames: [],
+        lane: targetNode.row.lane,
+      },
+      x: targetNode.x,
+      y: targetNode.y - NODE_SPACING_Y,
+      idx: targetNode.idx - 1,
+    }
+
+    const targetKey = `${previewNode.row.sha}-${targetNode.row.sha}`
+    const sourceKey = `${previewNode.row.sha}-${sourceNode.row.sha}`
+    const targetPlan = planEdgeRoute(previewNode, targetNode, targetKey, occupiedLanes)
+    const sourcePlan = planEdgeRoute(previewNode, sourceNode, sourceKey, occupiedLanes)
+
+    return {
+      previewNode,
+      sourceNode,
+      targetNode,
+      sourcePath: routedEdgePath(
+        previewNode,
+        sourceNode,
+        sourcePlan,
+        edgeRouting.bundleOffsets.get(sourceKey) ?? 0,
+      ),
+      targetPath: routedEdgePath(
+        previewNode,
+        targetNode,
+        targetPlan,
+        edgeRouting.bundleOffsets.get(targetKey) ?? 0,
+      ),
+      color: laneColor(targetNode.row.lane),
+    }
+  }, [layout, selectedRefName, mergePreview, occupiedLanes, edgeRouting.bundleOffsets])
+
+  const previewOverlay = useMemo(
+    () => (mergePreviewVisible ? mergePreviewGeometry : null),
+    [mergePreviewVisible, mergePreviewGeometry],
+  )
+
+  const handleRefSelect = useCallback((e: React.MouseEvent, refName: string) => {
     e.stopPropagation()
-    setActivePopover({ refName, sha, x, y })
+    setMergePreviewVisible(false)
+    selectGraphRef(refName)
+  }, [selectGraphRef])
+
+  const handleRefActionClick = useCallback((action: 'checkout' | 'push' | 'fetch' | 'delete') => {
+    if (!selectedRefName || !selectedRef) return
+    setMergePreviewVisible(false)
+    performRefAction(action, selectedRefName, selectedRef.targetSha).catch((err) => {
+      alert(err instanceof Error ? err.message : 'Action failed')
+    })
+  }, [selectedRefName, selectedRef, performRefAction])
+
+  const handleMergeHoverStart = useCallback(() => {
+    if (!selectedRefName) return
+    setMergePreviewVisible(true)
+    if (!mergePreview || mergePreview.sourceRefName !== selectedRefName) {
+      void ensureMergePreview(selectedRefName)
+    }
+  }, [selectedRefName, mergePreview, ensureMergePreview])
+
+  const handleMergeHoverEnd = useCallback(() => {
+    setMergePreviewVisible(false)
   }, [])
 
-  const handleAction = useCallback((action: string) => {
-    if (activePopover && onRefAction) {
-      onRefAction(action, activePopover.refName, activePopover.sha)
-    }
-    setActivePopover(null)
-  }, [activePopover, onRefAction])
+  const takeOverMergeViewport = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !mergePreviewGeometry) return
+
+    const previewBottom = Math.max(
+      mergePreviewGeometry.previewNode.y + NODE_RADIUS,
+      mergePreviewGeometry.sourceNode.y + NODE_RADIUS,
+      mergePreviewGeometry.targetNode.y + NODE_RADIUS,
+    )
+    const requiredHeight = Math.max(previewBottom + PAD_TOP, NODE_SPACING_Y * 4)
+    const fitZoom = Math.min(zoomRef.current, Math.max(0.18, Math.min(1, el.clientHeight / requiredHeight)))
+
+    suppressAutoScrollUntilRef.current = Date.now() + 500
+    zoomRef.current = fitZoom
+    setZoom(fitZoom)
+    el.scrollTo({ top: 0, behavior: 'smooth' })
+    requestAnimationFrame(() => refreshViewport(el, fitZoom))
+  }, [mergePreviewGeometry, refreshViewport])
+
+  const handleMergeClick = useCallback(() => {
+    if (!selectedRefName) return
+    setMergePreviewVisible(true)
+    takeOverMergeViewport()
+    performMergeRef(selectedRefName).catch((err) => {
+      alert(err instanceof Error ? err.message : 'Merge failed')
+    })
+  }, [selectedRefName, performMergeRef, takeOverMergeViewport])
 
   // Sticky lane labels: show a branch name when its tip is above the viewport
   // AND the topmost visible commit on that lane belongs to that branch
@@ -980,7 +1146,7 @@ export function GraphCanvas({
   }, [selectedNode, currentBranch])
 
   const visibleCommitActions = useMemo<VisibleCommitAction[]>(() => {
-    if (!selectedNode || !onCommitAction) return []
+    if (!selectedNode) return []
 
     const actions: VisibleCommitAction[] = []
     const canRevert = selectedNode.row.parentShas.length === 1
@@ -1006,10 +1172,10 @@ export function GraphCanvas({
     }
 
     return actions
-  }, [selectedNode, selectedIsCurrentHead, selectedOnCurrentBranch, onCommitAction])
+  }, [selectedNode, selectedIsCurrentHead, selectedOnCurrentBranch])
 
   const handleCommitAction = useCallback((action: CommitActionKind) => {
-    if (!selectedNode || !onCommitAction) return
+    if (!selectedNode) return
 
     const shortSha = selectedNode.row.sha.slice(0, 8)
     const confirmed = action === 'uncommit'
@@ -1017,9 +1183,10 @@ export function GraphCanvas({
       : window.confirm(`${action === 'cherry-pick' ? 'Cherry-pick' : 'Revert'} commit ${shortSha} on the current branch?`)
     if (!confirmed) return
 
-    setActivePopover(null)
-    onCommitAction(action, selectedNode.row.sha)
-  }, [selectedNode, onCommitAction])
+    performCommitAction(action, selectedNode.row.sha).catch((err) => {
+      alert(err instanceof Error ? err.message : 'Action failed')
+    })
+  }, [selectedNode, performCommitAction])
 
   if (!layout) {
     return (
@@ -1042,7 +1209,10 @@ export function GraphCanvas({
     <div
       ref={scrollRef}
       style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e', touchAction: 'pan-x pan-y' }}
-      onClick={() => setActivePopover(null)}
+      onClick={() => {
+        setMergePreviewVisible(false)
+        clearGraphRefSelection()
+      }}
     >
       {/* Sticky branch lane labels at top of viewport */}
       <div style={{
@@ -1057,14 +1227,15 @@ export function GraphCanvas({
         {stickyLaneLabels.map((label) => (
           <div
             key={label.name}
+            onClick={(e) => handleRefSelect(e, label.name)}
             style={{
               position: 'absolute',
               left: label.x * zoom - 4,
               top: 4 + label.row * 22,
               padding: '2px 8px',
               borderRadius: 4,
-              background: label.color + '20',
-              border: `1px solid ${label.color}50`,
+              background: selectedRefName === label.name ? label.color + '35' : label.color + '20',
+              border: `1px solid ${selectedRefName === label.name ? label.color : label.color + '50'}`,
               color: label.color,
               fontSize: 10,
               fontWeight: 600,
@@ -1072,6 +1243,8 @@ export function GraphCanvas({
               pointerEvents: 'auto',
               transform: `scale(${Math.min(zoom, 1)})`,
               transformOrigin: 'top left',
+              cursor: 'pointer',
+              boxShadow: selectedRefName === label.name ? `0 0 8px ${label.color}40` : 'none',
             }}
           >
             {label.name}
@@ -1160,8 +1333,30 @@ export function GraphCanvas({
         <svg
           width={fullWidth}
           height={fullHeight}
-          style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
+          style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
         >
+          {previewOverlay && (
+            <>
+              <path
+                d={previewOverlay.targetPath}
+                stroke={previewOverlay.color}
+                strokeWidth={3}
+                fill="none"
+                strokeLinecap="round"
+                strokeDasharray="8 6"
+                opacity={0.7}
+              />
+              <path
+                d={previewOverlay.sourcePath}
+                stroke={previewOverlay.color}
+                strokeWidth={2.5}
+                fill="none"
+                strokeLinecap="round"
+                strokeDasharray="8 6"
+                opacity={0.55}
+              />
+            </>
+          )}
           {visibleEdges.map((e) => (
             (() => {
               const isCurrentBranchEdge = currentBranchEdgeKeys.has(e.key)
@@ -1183,6 +1378,32 @@ export function GraphCanvas({
               )
             })()
           ))}
+          {previewOverlay && (
+            <g>
+              <circle
+                cx={previewOverlay.previewNode.x}
+                cy={previewOverlay.previewNode.y}
+                r={NODE_RADIUS * 1.9}
+                fill={previewOverlay.color}
+                opacity={0.12}
+              />
+              <circle
+                cx={previewOverlay.previewNode.x}
+                cy={previewOverlay.previewNode.y}
+                r={NODE_RADIUS}
+                fill={NODE_FILL}
+                stroke={previewOverlay.color}
+                strokeWidth={3}
+                strokeDasharray="6 4"
+              />
+              <circle
+                cx={previewOverlay.previewNode.x}
+                cy={previewOverlay.previewNode.y}
+                r={2.5}
+                fill={previewOverlay.color}
+              />
+            </g>
+          )}
           {visibleNodes.map((node) => {
             const { row, x, y } = node
             const selected = row.sha === selectedSha
@@ -1205,7 +1426,7 @@ export function GraphCanvas({
             return (
               <g
                 key={row.sha}
-                onClick={(e) => { e.stopPropagation(); onSelectCommit(row.sha) }}
+                onClick={(e) => { e.stopPropagation(); selectCommit(row.sha) }}
                 style={{ cursor: 'pointer', pointerEvents: 'auto' }}
               >
                 <title>{`${row.subject}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
@@ -1263,8 +1484,11 @@ export function GraphCanvas({
           const px = node.x + NODE_RADIUS + 8
           const py = node.y - 10
           const nodeActions = node.row.sha === selectedSha ? visibleCommitActions : []
+          const showsSelectedRef = !!selectedRefName && node.row.refNames.includes(selectedRefName)
+          const rowRefActions = showsSelectedRef ? selectedRefActions : []
+          const rowShowsMerge = !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
 
-          if (node.row.refNames.length === 0 && nodeActions.length === 0) return null
+          if (node.row.refNames.length === 0 && nodeActions.length === 0 && rowRefActions.length === 0 && !rowShowsMerge) return null
 
           return (
             <div
@@ -1283,22 +1507,17 @@ export function GraphCanvas({
               {node.row.refNames.map((refName, ri) => {
                 const color = laneColor(node.row.lane)
                 const isCurrent = currentBranch !== null && refName === currentBranch
+                const isSelectedRef = refName === selectedRefName
                 return (
                   <div
                     key={`${node.row.sha}-ref-${ri}`}
-                    onClick={(e) => handleRefClick(
-                      e,
-                      refName,
-                      node.row.sha,
-                      px + e.currentTarget.offsetLeft,
-                      py + e.currentTarget.offsetTop,
-                    )}
+                    onClick={(e) => handleRefSelect(e, refName)}
                     style={{
                       height: 20,
                       padding: '0 7px',
                       borderRadius: 4,
-                      background: isCurrent ? color + '35' : color + '20',
-                      border: `1px solid ${isCurrent ? color : color + '60'}`,
+                      background: isSelectedRef ? color + '35' : isCurrent ? color + '2a' : color + '18',
+                      border: `1px solid ${isSelectedRef || isCurrent ? color : color + '55'}`,
                       color,
                       fontSize: 11,
                       fontWeight: 600,
@@ -1307,13 +1526,25 @@ export function GraphCanvas({
                       cursor: 'pointer',
                       userSelect: 'none',
                       transition: 'transform 0.3s ease, opacity 0.3s ease',
-                      boxShadow: isCurrent ? `0 0 6px ${color}40` : 'none',
+                      boxShadow: isSelectedRef || isCurrent ? `0 0 6px ${color}40` : 'none',
                     }}
                   >
                     {isRemoteRef(refName) ? '☁ ' : isCurrent ? '● ' : '⎇ '}{refName}
                   </div>
                 )
               })}
+              {rowRefActions.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: node.row.refNames.length > 0 ? 8 : 0, position: 'relative', zIndex: 7 }}>
+                  {rowRefActions.map((refAction) => (
+                    <RefActionButton
+                      key={refAction.action}
+                      label={refAction.label}
+                      tone={refAction.tone}
+                      onClick={() => handleRefActionClick(refAction.action)}
+                    />
+                  ))}
+                </div>
+              )}
               {nodeActions.length > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: node.row.refNames.length > 0 ? 8 : 0, position: 'relative', zIndex: 7 }}>
                   {nodeActions.map((commitAction) => (
@@ -1326,34 +1557,20 @@ export function GraphCanvas({
                   ))}
                 </div>
               )}
+              {rowShowsMerge && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: node.row.refNames.length > 0 || nodeActions.length > 0 || rowRefActions.length > 0 ? 8 : 0, position: 'relative', zIndex: 7 }}>
+                  <CommitActionButton
+                    label="Merge"
+                    tone="merge"
+                    onClick={handleMergeClick}
+                    onMouseEnter={handleMergeHoverStart}
+                    onMouseLeave={handleMergeHoverEnd}
+                  />
+                </div>
+              )}
             </div>
           )
         })}
-
-        {activePopover && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: 'absolute', left: activePopover.x, top: activePopover.y + 24,
-              background: '#313244', border: '1px solid #45475a', borderRadius: 8,
-              padding: 4, zIndex: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 140,
-            }}
-          >
-            <div style={{ padding: '4px 10px', fontSize: 11, color: '#6c7086', fontWeight: 600 }}>
-              {activePopover.refName}
-            </div>
-            {!isRemoteRef(activePopover.refName) && (
-              <>
-                <PopoverButton label="Checkout" onClick={() => handleAction('checkout')} />
-                <PopoverButton label="Push" onClick={() => handleAction('push')} />
-              </>
-            )}
-            {isRemoteRef(activePopover.refName) && (
-              <PopoverButton label="Fetch" onClick={() => handleAction('fetch')} />
-            )}
-            <PopoverButton label="Delete" onClick={() => handleAction('delete')} danger />
-          </div>
-        )}
       </div>
 
       </div>
@@ -1366,31 +1583,43 @@ function CommitActionButton({
   label,
   onClick,
   tone,
+  onMouseEnter,
+  onMouseLeave,
 }: {
   label: string
   onClick: () => void
-  tone: 'success' | 'warning' | 'uncommit'
+  tone: 'success' | 'warning' | 'uncommit' | 'merge'
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
 }) {
   const color = tone === 'success'
     ? '#0b1020'
     : tone === 'warning'
       ? '#fff7d6'
-      : '#fff7ed'
+      : tone === 'merge'
+        ? '#fff7ff'
+        : '#fff7ed'
   const border = tone === 'success'
     ? '#6d9658'
     : tone === 'warning'
       ? '#d8a43a'
-      : '#9a3412'
+      : tone === 'merge'
+        ? '#b764d9'
+        : '#9a3412'
   const background = tone === 'success'
     ? '#8dcf78'
     : tone === 'warning'
       ? '#b88a25'
-      : '#b45309'
+      : tone === 'merge'
+        ? '#c77de4'
+        : '#b45309'
   const hover = tone === 'success'
     ? '#9cda89'
     : tone === 'warning'
       ? '#c99a30'
-      : '#c26115'
+      : tone === 'merge'
+        ? '#d08bea'
+        : '#c26115'
 
   return (
     <button
@@ -1417,25 +1646,49 @@ function CommitActionButton({
       }}
       onMouseEnter={(e) => { e.currentTarget.style.background = hover }}
       onMouseLeave={(e) => { e.currentTarget.style.background = background }}
+      onPointerEnter={onMouseEnter}
+      onPointerLeave={onMouseLeave}
     >
       {label}
     </button>
   )
 }
 
-function PopoverButton({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+function RefActionButton({
+  label,
+  onClick,
+  tone,
+}: {
+  label: string
+  onClick: () => void
+  tone: 'neutral' | 'danger'
+}) {
   return (
     <button
       onClick={onClick}
       style={{
-        display: 'block', width: '100%', padding: '6px 10px',
-        background: 'none', border: 'none',
-        color: danger ? '#f38ba8' : '#cdd6f4',
-        fontSize: 12, textAlign: 'left', cursor: 'pointer',
-        borderRadius: 4, fontFamily: 'inherit',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 84,
+        height: 28,
+        padding: '0 10px',
+        background: tone === 'danger' ? '#5c2430' : '#2f3348',
+        border: `1px solid ${tone === 'danger' ? '#8b3a4a' : '#4a4f68'}`,
+        color: tone === 'danger' ? '#f5a6b8' : '#cdd6f4',
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: 'pointer',
+        borderRadius: 7,
+        fontFamily: 'inherit',
+        whiteSpace: 'nowrap',
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = '#45475a' }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = tone === 'danger' ? '#6a2b39' : '#3a4058'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = tone === 'danger' ? '#5c2430' : '#2f3348'
+      }}
     >
       {label}
     </button>

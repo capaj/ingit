@@ -140,6 +140,32 @@ export interface CommitActionResponse {
   headSha: CommitSha
 }
 
+export interface MergePreviewRequest {
+  repoId: RepoId
+  refName: string
+}
+
+export interface MergePreviewResponse {
+  mergeable: boolean
+  reason?: 'current-branch' | 'detached-head' | 'up-to-date' | 'missing-ref'
+  sourceRefName: string
+  sourceSha?: CommitSha
+  targetRefName?: string
+  targetSha?: CommitSha
+  requiresFetch: boolean
+}
+
+export interface MergeRefRequest {
+  repoId: RepoId
+  refName: string
+}
+
+export interface MergeRefResponse {
+  ok: boolean
+  message: string
+  headSha: CommitSha
+}
+
 export interface WorktreeStatusResponse {
   branch?: string
   headSha: CommitSha

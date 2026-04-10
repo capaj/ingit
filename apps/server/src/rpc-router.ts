@@ -2,6 +2,7 @@ import { implement } from '@orpc/server'
 import { contract } from '@ingit/rpc-contract'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
+import { getMergePreview } from './merge-handler.js'
 
 const sessionManager = new SessionManager()
 
@@ -97,6 +98,19 @@ export const router = os.router({
         ? await session.uncommit(input.sha)
         : await session.revert(input.sha)
 
+    return { ok: true, ...result }
+  }),
+
+  getMergePreview: os.getMergePreview.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    return getMergePreview(session, input.refName)
+  }),
+
+  mergeRef: os.mergeRef.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    const result = await session.mergeRef(input.refName)
     return { ok: true, ...result }
   }),
 

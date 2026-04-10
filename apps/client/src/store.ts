@@ -1,6 +1,25 @@
 import { create } from 'zustand'
-import type { RefSummary, HistoryWindowResponse, CommitDetailResponse, CommitDiffResponse, CommitActionKind, CommitRow } from '@ingit/rpc-contract'
-import { openRepo, getRefs, queryHistory, getCommitDetail, getCommitDiff, getCommitPRs, commitAction, refAction } from './api'
+import type {
+  RefSummary,
+  HistoryWindowResponse,
+  CommitDetailResponse,
+  CommitDiffResponse,
+  CommitActionKind,
+  CommitRow,
+  MergePreviewResponse,
+} from '@ingit/rpc-contract'
+import {
+  openRepo,
+  getRefs,
+  queryHistory,
+  getCommitDetail,
+  getCommitDiff,
+  getCommitPRs,
+  commitAction,
+  getMergePreview as fetchMergePreview,
+  mergeRef as mergeRefApi,
+  refAction,
+} from './api'
 
 const INITIAL_ROWS = 1000
 const LOAD_MORE_ROWS = 500
@@ -48,11 +67,13 @@ interface AppState {
   refs: RefSummary[]
   historyWindow: HistoryWindowResponse | null
   selectedSha: string | null
+  selectedRefName: string | null
   scrollToSha: string | null
   scrollToKey: number  // incremented to force re-scroll even for same SHA
   commitDetail: CommitDetailResponse | null
   commitDiff: CommitDiffResponse | null
   commitPRs: CommitPRInfo
+  mergePreview: MergePreviewResponse | null
   githubUrl: string | null
   openError: string | null
   loadingMore: boolean
@@ -62,10 +83,14 @@ interface AppState {
   openFromUrl: () => void
   selectCommit: (sha: string) => void
   selectRef: (ref: RefSummary) => void
+  selectGraphRef: (refName: string) => void
+  clearGraphRefSelection: () => void
+  ensureMergePreview: (refName: string) => Promise<MergePreviewResponse | null>
   navigateTo: (sha: string) => Promise<void>
   requestMore: (direction: 'up' | 'down') => Promise<void>
   performRefAction: (action: 'checkout' | 'push' | 'fetch' | 'delete', refName: string, sha: string) => Promise<void>
   performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
+  performMergeRef: (refName: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
 }
 
@@ -77,11 +102,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   refs: [],
   historyWindow: null,
   selectedSha: null,
+  selectedRefName: null,
   scrollToSha: null,
   scrollToKey: 0,
   commitDetail: null,
   commitDiff: null,
   commitPRs: [],
+  mergePreview: null,
   githubUrl: null,
   openError: null,
   loadingMore: false,
@@ -91,7 +118,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const res = await openRepo({ path })
       setRepoPathInUrl(res.rootPath)
-      set({ status: 'ready', repoId: res.repoId, repoPath: res.rootPath, totalCommitCount: res.totalCommitCount, githubUrl: res.githubUrl, openError: null })
+      set({
+        status: 'ready',
+        repoId: res.repoId,
+        repoPath: res.rootPath,
+        totalCommitCount: res.totalCommitCount,
+        githubUrl: res.githubUrl,
+        openError: null,
+        selectedRefName: null,
+        mergePreview: null,
+      })
 
       const [refs, hist] = await Promise.all([
         getRefs(res.repoId),
@@ -142,6 +178,34 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   selectRef: (ref) => {
     get().selectCommit(ref.targetSha)
+  },
+
+  selectGraphRef: (refName) => {
+    const { repoId } = get()
+    set({ selectedRefName: refName, mergePreview: null })
+    if (!repoId) return
+
+    fetchMergePreview(repoId, refName).then((preview: MergePreviewResponse) => {
+      if (get().selectedRefName === refName) {
+        set({ mergePreview: preview })
+      }
+    }).catch(() => {})
+  },
+
+  clearGraphRefSelection: () => {
+    set({ selectedRefName: null, mergePreview: null })
+  },
+
+  ensureMergePreview: async (refName) => {
+    const { repoId, mergePreview } = get()
+    if (!repoId) return null
+    if (mergePreview?.sourceRefName === refName) return mergePreview
+
+    const preview = await fetchMergePreview(repoId, refName)
+    if (get().selectedRefName === refName) {
+      set({ mergePreview: preview })
+    }
+    return preview
   },
 
   navigateTo: async (sha) => {
@@ -251,9 +315,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         afterRows: INITIAL_ROWS,
         firstParent: false,
         topoOrder: true,
-      }),
+        }),
     ])
-    set({ refs, historyWindow: hist })
+    set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
   },
 
   performCommitAction: async (action, sha) => {
@@ -295,11 +359,76 @@ export const useAppStore = create<AppState>((set, get) => ({
       historyWindow: hist,
       totalCommitCount: Math.max(s.totalCommitCount + totalCommitCountDelta, hist.rows.length),
       selectedSha: nextSha,
+      selectedRefName: null,
       scrollToSha: nextSha,
       scrollToKey: s.scrollToKey + 1,
       commitDetail: null,
       commitDiff: null,
       commitPRs: [],
+      mergePreview: null,
+    }))
+
+    Promise.all([
+      getCommitDetail(repoId, nextSha),
+      getCommitDiff(repoId, nextSha),
+    ]).then(([detail, diff]) => {
+      if (get().selectedSha === nextSha) {
+        set({ commitDetail: detail, commitDiff: diff })
+      }
+    }).catch((err) => console.error('Failed to load commit detail:', err))
+
+    if (get().githubUrl) {
+      getCommitPRs(repoId, nextSha).then((prs: CommitPRInfo) => {
+        if (get().selectedSha === nextSha) set({ commitPRs: prs })
+      }).catch(() => {})
+    }
+  },
+
+  performMergeRef: async (refName) => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+
+    let result: { ok: boolean; message: string; headSha: string }
+    try {
+      result = await mergeRefApi(repoId, refName)
+    } catch (err) {
+      if (isSessionError(err)) {
+        const res = await openRepo({ path: repoPath })
+        repoId = res.repoId
+        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+        result = await mergeRefApi(repoId, refName)
+      } else {
+        throw err
+      }
+    }
+
+    const [refs, hist] = await Promise.all([
+      getRefs(repoId),
+      queryHistory(repoId, {
+        repoId,
+        scope: { kind: 'all' },
+        anchor: { kind: 'head' },
+        beforeRows: 0,
+        afterRows: INITIAL_ROWS,
+        firstParent: false,
+        topoOrder: true,
+      }),
+    ])
+
+    const nextSha = result.headSha
+    set((s) => ({
+      refs,
+      historyWindow: hist,
+      totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
+      selectedSha: nextSha,
+      selectedRefName: null,
+      scrollToSha: nextSha,
+      scrollToKey: s.scrollToKey + 1,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      mergePreview: null,
     }))
 
     Promise.all([
@@ -344,8 +473,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         afterRows: INITIAL_ROWS,
         firstParent: false,
         topoOrder: true,
-      }),
+        }),
     ])
-    set({ refs, historyWindow: hist })
+    set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
   },
 }))

@@ -17,6 +17,15 @@ export interface HeadState {
   sha: string
 }
 
+export interface ResolvedRef {
+  refName: string
+  fullName: string
+  sha: string
+  kind: 'head' | 'remote' | 'tag' | 'other'
+  remoteName?: string
+  remoteBranch?: string
+}
+
 export class RepoSession {
   readonly repoId: string
   readonly rootPath: string
@@ -145,6 +154,37 @@ export class RepoSession {
     return stdout.trim()
   }
 
+  async resolveRef(ref: string): Promise<ResolvedRef | null> {
+    try {
+      const [{ stdout: shaOut }, { stdout: fullNameOut }] = await Promise.all([
+        runGit(['rev-parse', '--verify', `${ref}^{commit}`], this.rootPath),
+        runGit(['rev-parse', '--symbolic-full-name', ref], this.rootPath),
+      ])
+
+      const sha = shaOut.trim()
+      const fullName = fullNameOut.trim()
+      let kind: ResolvedRef['kind'] = 'other'
+      let remoteName: string | undefined
+      let remoteBranch: string | undefined
+
+      if (fullName.startsWith('refs/heads/')) {
+        kind = 'head'
+      } else if (fullName.startsWith('refs/remotes/')) {
+        kind = 'remote'
+        const remotePath = fullName.slice('refs/remotes/'.length)
+        const [remote, ...branchParts] = remotePath.split('/')
+        remoteName = remote
+        remoteBranch = branchParts.join('/')
+      } else if (fullName.startsWith('refs/tags/')) {
+        kind = 'tag'
+      }
+
+      return { refName: ref, fullName, sha, kind, remoteName, remoteBranch }
+    } catch {
+      return null
+    }
+  }
+
   private async getCommitParents(sha: string): Promise<string[]> {
     const commit = await this.getCommitDetail(sha)
     return commit.parents
@@ -195,6 +235,26 @@ export class RepoSession {
     const { stdout, stderr } = await runGit(['reset', '--mixed', parentSha], this.rootPath)
     return {
       message: (stdout + stderr).trim() || `Reset HEAD to ${parentSha.slice(0, 8)}`,
+      headSha: await this.getHeadSha(),
+    }
+  }
+
+  async mergeRef(ref: string): Promise<{ message: string; headSha: string }> {
+    const resolved = await this.resolveRef(ref)
+    if (!resolved || resolved.kind === 'tag' || resolved.kind === 'other') {
+      throw new Error(`Cannot merge ref ${ref}`)
+    }
+
+    if (resolved.kind === 'remote') {
+      if (!resolved.remoteName || !resolved.remoteBranch) {
+        throw new Error(`Cannot fetch remote ref ${ref}`)
+      }
+      await runGit(['fetch', resolved.remoteName, resolved.remoteBranch], this.rootPath)
+    }
+
+    const { stdout, stderr } = await runGit(['merge', '--no-ff', '--no-edit', ref], this.rootPath)
+    return {
+      message: (stdout + stderr).trim(),
       headSha: await this.getHeadSha(),
     }
   }
