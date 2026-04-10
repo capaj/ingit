@@ -10,6 +10,9 @@ const NODE_SPACING_Y = 56
 const LANE_WIDTH = 80
 const NODE_RADIUS = 16
 const NODE_FILL = '#11111b'
+const REF_PILL_HEIGHT = 20
+const COMMIT_ACTION_HEIGHT = 30
+const DEFAULT_REF_ACTION_HEIGHT = 28
 const GAUGE_RADIUS = NODE_RADIUS - 5
 const GAUGE_BACKGROUND_FILL = '#1e1e2e'
 const GAUGE_TRACK_STROKE = '#45475a'
@@ -40,6 +43,10 @@ function laneColor(lane: number) {
   return LANE_COLORS[normalized]
 }
 
+function verticalOffsetForHeight(height: number) {
+  return Math.round((REF_PILL_HEIGHT - height) / 2)
+}
+
 interface LayoutNode {
   row: CommitRow
   x: number
@@ -54,7 +61,7 @@ interface VisibleCommitAction {
 }
 
 interface VisibleRefAction {
-  action: 'checkout' | 'push' | 'fetch' | 'delete'
+  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move'
   label: string
   tone: 'neutral' | 'danger'
 }
@@ -910,6 +917,11 @@ export function GraphCanvas() {
     return []
   }, [selectedRef])
 
+  const movableBranchRefName = useMemo(() => {
+    if (!selectedRef || selectedRef.kind !== 'head' || selectedRef.isCurrent) return null
+    return selectedRef.shortName
+  }, [selectedRef])
+
   const showMergeButton = useMemo(() => (
     !!currentHeadNode
     && !!currentBranch
@@ -992,6 +1004,17 @@ export function GraphCanvas() {
       alert(err instanceof Error ? err.message : 'Action failed')
     })
   }, [selectedRefName, selectedRef, performRefAction])
+
+  const handleMoveBranch = useCallback((targetSha: string) => {
+    if (!movableBranchRefName) return
+    const confirmed = window.confirm(`Move branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}?`)
+    if (!confirmed) return
+
+    setMergePreviewVisible(false)
+    performRefAction('move', movableBranchRefName, targetSha).catch((err) => {
+      alert(err instanceof Error ? err.message : 'Move failed')
+    })
+  }, [movableBranchRefName, performRefAction])
 
   const handleMergeHoverStart = useCallback(() => {
     if (!selectedRefName) return
@@ -1262,7 +1285,7 @@ export function GraphCanvas() {
           width: '100%',
           height: 0,
           overflow: 'visible',
-          zIndex: 20,
+          zIndex: 5,
           pointerEvents: 'none',
         }}
       >
@@ -1320,7 +1343,7 @@ export function GraphCanvas() {
       </div>
 
       {/* Outer spacer sized to scaled content for correct scrollbar */}
-      <div style={{ width: scaledW, height: scaledH, position: 'relative' }}>
+      <div style={{ width: scaledW, height: scaledH, position: 'relative', zIndex: 10 }}>
       {/* Inner content scaled via transform */}
       <div style={{
         position: 'absolute',
@@ -1488,8 +1511,9 @@ export function GraphCanvas() {
           const showsSelectedRef = !!selectedRefName && node.row.refNames.includes(selectedRefName)
           const rowRefActions = showsSelectedRef ? selectedRefActions : []
           const rowShowsMerge = !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
+          const rowShowsMove = !!movableBranchRefName && node.row.sha !== selectedRef?.targetSha
 
-          if (node.row.refNames.length === 0 && nodeActions.length === 0 && rowRefActions.length === 0 && !rowShowsMerge) return null
+          if (node.row.refNames.length === 0 && nodeActions.length === 0 && rowRefActions.length === 0 && !rowShowsMerge && !rowShowsMove) return null
 
           return (
             <div
@@ -1535,7 +1559,15 @@ export function GraphCanvas() {
                 )
               })}
               {rowRefActions.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: node.row.refNames.length > 0 ? 8 : 0, position: 'relative', zIndex: 7 }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginLeft: node.row.refNames.length > 0 ? 8 : 0,
+                  position: 'relative',
+                  top: verticalOffsetForHeight(DEFAULT_REF_ACTION_HEIGHT),
+                  zIndex: 7,
+                }}>
                   {rowRefActions.map((refAction) => (
                     <RefActionButton
                       key={refAction.action}
@@ -1547,7 +1579,15 @@ export function GraphCanvas() {
                 </div>
               )}
               {nodeActions.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: node.row.refNames.length > 0 ? 8 : 0, position: 'relative', zIndex: 7 }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  marginLeft: node.row.refNames.length > 0 ? 8 : 0,
+                  position: 'relative',
+                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
+                  zIndex: 7,
+                }}>
                   {nodeActions.map((commitAction) => (
                     <CommitActionButton
                       key={commitAction.action}
@@ -1558,8 +1598,27 @@ export function GraphCanvas() {
                   ))}
                 </div>
               )}
-              {rowShowsMerge && (
+              {rowShowsMove && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: node.row.refNames.length > 0 || nodeActions.length > 0 || rowRefActions.length > 0 ? 8 : 0, position: 'relative', zIndex: 7 }}>
+                  <RefActionButton
+                    label="← Move"
+                    tone="neutral"
+                    size="compact"
+                    variant="ghost"
+                    onClick={() => handleMoveBranch(node.row.sha)}
+                  />
+                </div>
+              )}
+              {rowShowsMerge && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  marginLeft: node.row.refNames.length > 0 || nodeActions.length > 0 || rowRefActions.length > 0 || rowShowsMove ? 8 : 0,
+                  position: 'relative',
+                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
+                  zIndex: 7,
+                }}>
                   <CommitActionButton
                     label="Merge"
                     tone="merge"
@@ -1624,7 +1683,10 @@ function CommitActionButton({
 
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -1659,36 +1721,54 @@ function RefActionButton({
   label,
   onClick,
   tone,
+  size = 'default',
+  variant = 'solid',
 }: {
   label: string
   onClick: () => void
   tone: 'neutral' | 'danger'
+  size?: 'default' | 'compact'
+  variant?: 'solid' | 'ghost'
 }) {
+  const compact = size === 'compact'
+  const ghost = variant === 'ghost'
+
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: 84,
-        height: 28,
-        padding: '0 10px',
-        background: tone === 'danger' ? '#5c2430' : '#2f3348',
-        border: `1px solid ${tone === 'danger' ? '#8b3a4a' : '#4a4f68'}`,
-        color: tone === 'danger' ? '#f5a6b8' : '#cdd6f4',
-        fontSize: 12,
+        minWidth: compact ? 72 : 84,
+        height: compact ? 20 : 28,
+        padding: compact ? '0 8px' : '0 10px',
+        background: ghost ? 'rgba(24,24,37,0.5)' : tone === 'danger' ? '#5c2430' : '#2f3348',
+        border: ghost ? '1px solid transparent' : `1px solid ${tone === 'danger' ? '#8b3a4a' : '#4a4f68'}`,
+        color: tone === 'danger' ? '#f5a6b8' : ghost ? '#bac2de' : '#cdd6f4',
+        fontSize: compact ? 11 : 12,
         fontWeight: 600,
         cursor: 'pointer',
-        borderRadius: 7,
+        borderRadius: compact ? 6 : 7,
         fontFamily: 'inherit',
         whiteSpace: 'nowrap',
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = tone === 'danger' ? '#6a2b39' : '#3a4058'
+        e.currentTarget.style.background = ghost
+          ? 'rgba(49,50,68,0.8)'
+          : tone === 'danger'
+            ? '#6a2b39'
+            : '#3a4058'
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = tone === 'danger' ? '#5c2430' : '#2f3348'
+        e.currentTarget.style.background = ghost
+          ? 'rgba(24,24,37,0.5)'
+          : tone === 'danger'
+            ? '#5c2430'
+            : '#2f3348'
       }}
     >
       {label}

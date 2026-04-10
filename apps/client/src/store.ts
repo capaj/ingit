@@ -7,6 +7,7 @@ import type {
   CommitActionKind,
   CommitRow,
   MergePreviewResponse,
+  RefActionKind,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -97,7 +98,7 @@ interface AppState {
   ensureMergePreview: (refName: string) => Promise<MergePreviewResponse | null>
   navigateTo: (sha: string) => Promise<void>
   requestMore: (direction: 'up' | 'down') => Promise<void>
-  performRefAction: (action: 'checkout' | 'push' | 'fetch' | 'delete', refName: string, sha: string) => Promise<void>
+  performRefAction: (action: RefActionKind, refName: string, sha: string) => Promise<void>
   performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
   performMergeRef: (refName: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
@@ -345,6 +346,36 @@ export const useAppStore = create<AppState>((set, get) => ({
         topoOrder: true,
         }),
     ])
+    if (action === 'move') {
+      set({
+        refs,
+        historyWindow: hist,
+        selectedRefName: refName,
+        selectedSha: sha,
+        scrollToSha: null,
+        commitDetail: null,
+        commitDiff: null,
+        commitPRs: [],
+        mergePreview: null,
+      })
+
+      Promise.all([
+        getCommitDetail(repoId, sha),
+        getCommitDiff(repoId, sha),
+      ]).then(([detail, diff]) => {
+        if (get().selectedSha === sha) {
+          set({ commitDetail: detail, commitDiff: diff })
+        }
+      }).catch((err) => console.error('Failed to load commit detail:', err))
+
+      if (get().githubUrl) {
+        getCommitPRs(repoId, sha).then((prs: CommitPRInfo) => {
+          if (get().selectedSha === sha) set({ commitPRs: prs })
+        }).catch(() => {})
+      }
+      return
+    }
+
     set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
   },
 

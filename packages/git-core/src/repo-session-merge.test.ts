@@ -41,6 +41,11 @@ async function headParents(cwd: string): Promise<string[]> {
   return stdout.trim().split(/\s+/).filter(Boolean)
 }
 
+async function branchSha(cwd: string, ref: string): Promise<string> {
+  const { stdout } = await runGit(['rev-parse', ref], cwd)
+  return stdout.trim()
+}
+
 describe('RepoSession.mergeRef', () => {
   test('merges a local branch into the current branch with a merge commit', async () => {
     const repoDir = await makeTempDir('ingit-merge-local-')
@@ -125,6 +130,58 @@ describe('RepoSession.mergeRef', () => {
       expect(await runGit(['rev-parse', 'origin/dev'], localDir).then((res) => res.stdout.trim())).toBe(latestRemoteSha)
       expect(await headParents(localDir)).toEqual([mainHeadBeforeMerge, latestRemoteSha])
       expect(latestRemoteSha).not.toBe(staleRemoteSha)
+    } finally {
+      session.close()
+    }
+  })
+})
+
+describe('RepoSession.moveBranch', () => {
+  test('moves a non-current local branch to the selected commit', async () => {
+    const repoDir = await makeTempDir('ingit-move-branch-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+    const baseSha = await currentHeadSha(repoDir)
+
+    await Bun.write(join(repoDir, 'main.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main'], repoDir)
+
+    await runGit(['checkout', '-b', 'dev'], repoDir)
+    await Bun.write(join(repoDir, 'dev.txt'), 'dev\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'dev'], repoDir)
+
+    await runGit(['checkout', 'main'], repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      const result = await session.moveBranch('dev', baseSha)
+
+      expect(result.message).toContain('Moved dev')
+      expect(await currentBranch(repoDir)).toBe('main')
+      expect(await branchSha(repoDir, 'dev')).toBe(baseSha)
+    } finally {
+      session.close()
+    }
+  })
+
+  test('rejects moving the checked out branch', async () => {
+    const repoDir = await makeTempDir('ingit-move-current-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.moveBranch('main', 'HEAD')).rejects.toThrow('checked out branch')
     } finally {
       session.close()
     }

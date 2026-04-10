@@ -259,6 +259,23 @@ export class RepoSession {
     }
   }
 
+  async moveBranch(ref: string, sha: string): Promise<{ message: string }> {
+    const resolved = await this.resolveRef(ref)
+    if (!resolved || resolved.kind !== 'head') {
+      throw new Error('Only local branches can be moved')
+    }
+
+    const status = await this.getStatus()
+    if (status.branch && resolved.refName === status.branch) {
+      throw new Error('Cannot move the checked out branch')
+    }
+
+    const { stdout, stderr } = await runGit(['branch', '-f', ref, sha], this.rootPath)
+    return {
+      message: (stdout + stderr).trim() || `Moved ${ref} to ${sha.slice(0, 8)}`,
+    }
+  }
+
   async push(ref: string, remote = 'origin'): Promise<string> {
     // No ziggit C-API for push yet — use git CLI
     const { stdout, stderr } = await runGit(['push', remote, ref], this.rootPath)

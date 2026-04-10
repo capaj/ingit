@@ -140,6 +140,11 @@ export const router = os.router({
           await session.deleteBranch(input.refName)
         }
         break
+      case 'move': {
+        const result = await session.moveBranch(input.refName, input.sha)
+        message = result.message
+        break
+      }
     }
     return { ok: true, message }
   }),
