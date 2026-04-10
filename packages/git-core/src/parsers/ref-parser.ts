@@ -27,6 +27,10 @@ function refKind(refname: string): RefSummary['kind'] {
   return 'tag'
 }
 
+function isRemoteHeadAlias(refname: string): boolean {
+  return /^refs\/remotes\/[^/]+\/HEAD$/.test(refname)
+}
+
 export async function parseRefs(cwd: string): Promise<RefSummary[]> {
   // Resolve current HEAD branch name
   let currentRef: string | null = null
@@ -78,7 +82,12 @@ export async function parseRefs(cwd: string): Promise<RefSummary[]> {
       ...(currentRef && refname === currentRef ? { isCurrent: true } : {}),
     }
 
-    // Skip symrefs like HEAD under refs/remotes
+    // Skip remote HEAD aliases like refs/remotes/origin/HEAD. They collapse to
+    // short names such as "origin", which should not render as branch tip pills.
+    if (isRemoteHeadAlias(refname)) {
+      continue
+    }
+
     if (objecttype === 'commit' || objecttype === 'tag') {
       refs.push(ref)
     }

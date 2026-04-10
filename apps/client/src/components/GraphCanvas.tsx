@@ -563,9 +563,6 @@ function findTopVisibleNode(nodes: LayoutNode[], scrollTop: number, zoom: number
 }
 
 function isRemoteRef(name: string) { return name.includes('/') }
-function refPillColor(name: string) {
-  return isRemoteRef(name) ? '#94e2d5' : '#89b4fa'
-}
 
 /** Pick the best ref name for display: prefer local branches, skip bare remote names */
 function pickBestRef(refNames: string[]): string | null {
@@ -1284,7 +1281,7 @@ export function GraphCanvas({
               }}
             >
               {node.row.refNames.map((refName, ri) => {
-                const color = refPillColor(refName)
+                const color = laneColor(node.row.lane)
                 const isCurrent = currentBranch !== null && refName === currentBranch
                 return (
                   <div
