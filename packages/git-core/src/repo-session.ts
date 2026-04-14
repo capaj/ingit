@@ -198,6 +198,18 @@ export class RepoSession {
   }
 
   async checkout(ref: string): Promise<void> {
+    const resolved = await this.resolveRef(ref)
+    if (resolved?.kind === 'remote') {
+      const localBranchName = resolved.remoteBranch
+      if (!localBranchName) {
+        throw new Error(`Cannot checkout remote ref ${ref}`)
+      }
+
+      await runGit(['checkout', '-B', localBranchName, ref], this.rootPath)
+      await runGit(['branch', `--set-upstream-to=${ref}`, localBranchName], this.rootPath)
+      return
+    }
+
     // Use git CLI — ziggit FFI only does tree checkout without switching HEAD
     await runGit(['checkout', ref], this.rootPath)
   }
@@ -253,6 +265,35 @@ export class RepoSession {
     }
 
     const { stdout, stderr } = await runGit(['merge', '--no-ff', '--no-edit', ref], this.rootPath)
+    return {
+      message: (stdout + stderr).trim(),
+      headSha: await this.getHeadSha(),
+    }
+  }
+
+  async rebaseRef(ref: string): Promise<{ message: string; headSha: string }> {
+    const resolved = await this.resolveRef(ref)
+    if (!resolved || resolved.kind === 'tag' || resolved.kind === 'other') {
+      throw new Error(`Cannot rebase onto ref ${ref}`)
+    }
+
+    const status = await this.getStatus()
+    if (!status.branch) {
+      throw new Error('Cannot rebase with detached HEAD')
+    }
+
+    if (resolved.kind === 'head' && resolved.refName === status.branch) {
+      throw new Error('Cannot rebase onto the current branch')
+    }
+
+    if (resolved.kind === 'remote') {
+      if (!resolved.remoteName || !resolved.remoteBranch) {
+        throw new Error(`Cannot fetch remote ref ${ref}`)
+      }
+      await runGit(['fetch', resolved.remoteName, resolved.remoteBranch], this.rootPath)
+    }
+
+    const { stdout, stderr } = await runGit(['rebase', ref], this.rootPath)
     return {
       message: (stdout + stderr).trim(),
       headSha: await this.getHeadSha(),

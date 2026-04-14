@@ -118,6 +118,13 @@ export const router = os.router({
     return { ok: true, ...result }
   }),
 
+  rebaseRef: os.rebaseRef.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    const result = await session.rebaseRef(input.refName)
+    return { ok: true, ...result }
+  }),
+
   refAction: os.refAction.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')

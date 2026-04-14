@@ -131,6 +131,114 @@ describe('RepoSession.checkout', () => {
     expect(mainRef2?.isCurrent).toBe(true)
     expect(devRef2?.isCurrent).toBeUndefined()
   })
+
+  test('checking out a remote branch creates a local tracking branch', async () => {
+    const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-remote-'))
+    const seedDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-seed-'))
+    const localDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-local-'))
+
+    try {
+      await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+
+      await runGit(['init', '--initial-branch=main'], seedDir)
+      await runGit(['config', 'user.email', 'test@test.com'], seedDir)
+      await runGit(['config', 'user.name', 'Test'], seedDir)
+      await Bun.write(join(seedDir, 'base.txt'), 'base\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'base'], seedDir)
+      await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+      await runGit(['push', '-u', 'origin', 'main'], seedDir)
+
+      await runGit(['checkout', '-b', 'dev'], seedDir)
+      await Bun.write(join(seedDir, 'dev.txt'), 'dev\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'dev'], seedDir)
+      await runGit(['push', '-u', 'origin', 'dev'], seedDir)
+
+      await runGit(['clone', remoteDir, localDir], tmpdir())
+      await runGit(['config', 'user.email', 'test@test.com'], localDir)
+      await runGit(['config', 'user.name', 'Test'], localDir)
+
+      const checkoutSession = await RepoSession.open(localDir)
+
+      try {
+        await checkoutSession.checkout('origin/dev')
+
+        expect(await currentBranch(localDir)).toBe('dev')
+        expect(await currentHeadSha(localDir)).toBe((await runGit(['rev-parse', 'origin/dev'], localDir)).stdout.trim())
+        expect((await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], localDir)).stdout.trim()).toBe('origin/dev')
+      } finally {
+        checkoutSession.close()
+      }
+    } finally {
+      await rm(remoteDir, { recursive: true, force: true })
+      await rm(seedDir, { recursive: true, force: true })
+      await rm(localDir, { recursive: true, force: true })
+    }
+  })
+
+  test('checking out a remote branch moves the local branch to that remote tip', async () => {
+    const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-remote-move-'))
+    const seedDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-seed-move-'))
+    const upstreamDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-upstream-move-'))
+    const localDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-local-move-'))
+
+    try {
+      await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+
+      await runGit(['init', '--initial-branch=main'], seedDir)
+      await runGit(['config', 'user.email', 'test@test.com'], seedDir)
+      await runGit(['config', 'user.name', 'Test'], seedDir)
+      await Bun.write(join(seedDir, 'base.txt'), 'base\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'base'], seedDir)
+      await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+      await runGit(['push', '-u', 'origin', 'main'], seedDir)
+
+      await runGit(['checkout', '-b', 'dev'], seedDir)
+      await Bun.write(join(seedDir, 'dev.txt'), 'dev v1\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'dev v1'], seedDir)
+      await runGit(['push', '-u', 'origin', 'dev'], seedDir)
+
+      await runGit(['clone', remoteDir, localDir], tmpdir())
+      await runGit(['config', 'user.email', 'test@test.com'], localDir)
+      await runGit(['config', 'user.name', 'Test'], localDir)
+      await runGit(['checkout', '-b', 'dev', '--track', 'origin/dev'], localDir)
+      const localDevShaBeforeCheckout = await currentHeadSha(localDir)
+      await runGit(['checkout', 'main'], localDir)
+
+      await runGit(['clone', remoteDir, upstreamDir], tmpdir())
+      await runGit(['config', 'user.email', 'test@test.com'], upstreamDir)
+      await runGit(['config', 'user.name', 'Test'], upstreamDir)
+      await runGit(['checkout', 'dev'], upstreamDir)
+      await Bun.write(join(upstreamDir, 'dev.txt'), 'dev v2\n')
+      await runGit(['add', '.'], upstreamDir)
+      await runGit(['commit', '-m', 'dev v2'], upstreamDir)
+      await runGit(['push', 'origin', 'dev'], upstreamDir)
+      const remoteDevSha = await currentHeadSha(upstreamDir)
+
+      await runGit(['fetch', 'origin', 'dev'], localDir)
+
+      const checkoutSession = await RepoSession.open(localDir)
+
+      try {
+        await checkoutSession.checkout('origin/dev')
+
+        expect(await currentBranch(localDir)).toBe('dev')
+        expect(await currentHeadSha(localDir)).toBe(remoteDevSha)
+        expect(remoteDevSha).not.toBe(localDevShaBeforeCheckout)
+        expect((await runGit(['rev-parse', 'dev'], localDir)).stdout.trim()).toBe(remoteDevSha)
+      } finally {
+        checkoutSession.close()
+      }
+    } finally {
+      await rm(remoteDir, { recursive: true, force: true })
+      await rm(seedDir, { recursive: true, force: true })
+      await rm(upstreamDir, { recursive: true, force: true })
+      await rm(localDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('RepoSession.streamTopologyWithMeta', () => {

@@ -64,6 +64,10 @@ export function mergeRef(repoId: string, refName: string) {
   return ensureClient().mergeRef({ repoId, refName })
 }
 
+export function rebaseRef(repoId: string, refName: string) {
+  return ensureClient().rebaseRef({ repoId, refName })
+}
+
 export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset', refName: string, sha: string) {
   return ensureClient().refAction({ repoId, action, refName, sha })
 }

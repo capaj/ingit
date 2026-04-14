@@ -188,6 +188,109 @@ describe('RepoSession.moveBranch', () => {
   })
 })
 
+describe('RepoSession.rebaseRef', () => {
+  test('rebases the current branch onto another local branch tip', async () => {
+    const repoDir = await makeTempDir('ingit-rebase-local-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await Bun.write(join(repoDir, 'main.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main'], repoDir)
+    const mainSha = await currentHeadSha(repoDir)
+
+    await runGit(['checkout', '-b', 'feature', 'HEAD~1'], repoDir)
+    await Bun.write(join(repoDir, 'feature.txt'), 'feature\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'feature'], repoDir)
+    const featureShaBeforeRebase = await currentHeadSha(repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      const result = await session.rebaseRef('main')
+
+      expect(await currentBranch(repoDir)).toBe('feature')
+      expect(result.headSha).toBe(await currentHeadSha(repoDir))
+      expect(result.headSha).not.toBe(featureShaBeforeRebase)
+      expect(await headParents(repoDir)).toEqual([mainSha])
+      expect(await branchSha(repoDir, 'main')).toBe(mainSha)
+      expect(await Bun.file(join(repoDir, 'feature.txt')).text()).toBe('feature\n')
+    } finally {
+      session.close()
+    }
+  })
+
+  test('fetches a remote-tracking branch before rebasing onto it', async () => {
+    const remoteDir = await makeTempDir('ingit-rebase-remote-')
+    await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+
+    const seedDir = await makeTempDir('ingit-rebase-seed-')
+    await initRepo(seedDir)
+    await Bun.write(join(seedDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], seedDir)
+    await runGit(['commit', '-m', 'base'], seedDir)
+    await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+    await runGit(['push', '-u', 'origin', 'main'], seedDir)
+
+    const localDir = await makeTempDir('ingit-rebase-local-clone-')
+    await runGit(['clone', remoteDir, localDir], tmpdir())
+    await runGit(['config', 'user.email', 'test@test.com'], localDir)
+    await runGit(['config', 'user.name', 'Test'], localDir)
+
+    await runGit(['checkout', '-b', 'feature'], localDir)
+    await Bun.write(join(localDir, 'feature.txt'), 'feature\n')
+    await runGit(['add', '.'], localDir)
+    await runGit(['commit', '-m', 'feature'], localDir)
+
+    const staleRemoteSha = await branchSha(localDir, 'origin/main')
+
+    const upstreamDir = await makeTempDir('ingit-rebase-upstream-')
+    await runGit(['clone', remoteDir, upstreamDir], tmpdir())
+    await runGit(['config', 'user.email', 'test@test.com'], upstreamDir)
+    await runGit(['config', 'user.name', 'Test'], upstreamDir)
+    await Bun.write(join(upstreamDir, 'upstream.txt'), 'upstream\n')
+    await runGit(['add', '.'], upstreamDir)
+    await runGit(['commit', '-m', 'upstream'], upstreamDir)
+    await runGit(['push', 'origin', 'main'], upstreamDir)
+    const latestRemoteSha = await currentHeadSha(upstreamDir)
+
+    const session = await RepoSession.open(localDir)
+
+    try {
+      const result = await session.rebaseRef('origin/main')
+
+      expect(await currentBranch(localDir)).toBe('feature')
+      expect(result.headSha).toBe(await currentHeadSha(localDir))
+      expect(await branchSha(localDir, 'origin/main')).toBe(latestRemoteSha)
+      expect(latestRemoteSha).not.toBe(staleRemoteSha)
+      expect(await headParents(localDir)).toEqual([latestRemoteSha])
+    } finally {
+      session.close()
+    }
+  })
+
+  test('rejects rebasing onto the current branch', async () => {
+    const repoDir = await makeTempDir('ingit-rebase-current-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.rebaseRef('main')).rejects.toThrow('current branch')
+    } finally {
+      session.close()
+    }
+  })
+})
+
 describe('RepoSession.resetBranch', () => {
   test('resets the current branch back to its upstream remote', async () => {
     const remoteDir = await makeTempDir('ingit-reset-remote-')

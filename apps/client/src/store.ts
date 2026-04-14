@@ -20,6 +20,7 @@ import {
   commitAction,
   getMergePreview as fetchMergePreview,
   mergeRef as mergeRefApi,
+  rebaseRef as rebaseRefApi,
   refAction,
 } from './api'
 
@@ -101,6 +102,7 @@ interface AppState {
   performRefAction: (action: RefActionKind, refName: string, sha: string) => Promise<void>
   performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
   performMergeRef: (refName: string) => Promise<void>
+  performRebaseRef: (refName: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
 }
 
@@ -211,7 +213,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   selectGraphRef: (refName) => {
     const { repoId } = get()
-    set({ selectedRefName: refName, mergePreview: null })
+    set({
+      selectedSha: null,
+      selectedRefName: refName,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      mergePreview: null,
+    })
     if (!repoId) return
 
     fetchMergePreview(repoId, refName).then((preview: MergePreviewResponse) => {
@@ -222,7 +231,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   clearGraphRefSelection: () => {
-    set({ selectedRefName: null, mergePreview: null })
+    set({
+      selectedSha: null,
+      selectedRefName: null,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      mergePreview: null,
+    })
   },
 
   ensureMergePreview: async (refName) => {
@@ -480,6 +496,69 @@ export const useAppStore = create<AppState>((set, get) => ({
       refs,
       historyWindow: hist,
       totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
+      selectedSha: nextSha,
+      selectedRefName: null,
+      scrollToSha: nextSha,
+      scrollToKey: s.scrollToKey + 1,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      mergePreview: null,
+    }))
+
+    Promise.all([
+      getCommitDetail(repoId, nextSha),
+      getCommitDiff(repoId, nextSha),
+    ]).then(([detail, diff]) => {
+      if (get().selectedSha === nextSha) {
+        set({ commitDetail: detail, commitDiff: diff })
+      }
+    }).catch((err) => console.error('Failed to load commit detail:', err))
+
+    if (get().githubUrl) {
+      getCommitPRs(repoId, nextSha).then((prs: CommitPRInfo) => {
+        if (get().selectedSha === nextSha) set({ commitPRs: prs })
+      }).catch(() => {})
+    }
+  },
+
+  performRebaseRef: async (refName) => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+
+    let result: { ok: boolean; message: string; headSha: string }
+    try {
+      result = await rebaseRefApi(repoId, refName)
+    } catch (err) {
+      if (isSessionError(err)) {
+        const res = await openRepo({ path: repoPath })
+        repoId = res.repoId
+        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+        result = await rebaseRefApi(repoId, refName)
+      } else {
+        throw err
+      }
+    }
+
+    const [refs, hist] = await Promise.all([
+      getRefs(repoId),
+      queryHistory(repoId, {
+        repoId,
+        scope: { kind: 'all' },
+        anchor: { kind: 'head' },
+        beforeRows: 0,
+        afterRows: INITIAL_ROWS,
+        firstParent: false,
+        topoOrder: true,
+      }),
+    ])
+
+    const nextSha = result.headSha
+    set((s) => ({
+      refs,
+      historyWindow: hist,
+      totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
       selectedSha: nextSha,
       selectedRefName: null,
       scrollToSha: nextSha,

@@ -168,6 +168,17 @@ export interface MergeRefResponse {
   headSha: CommitSha
 }
 
+export interface RebaseRefRequest {
+  repoId: RepoId
+  refName: string
+}
+
+export interface RebaseRefResponse {
+  ok: boolean
+  message: string
+  headSha: CommitSha
+}
+
 export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
 
 export interface WorktreeStatusResponse {

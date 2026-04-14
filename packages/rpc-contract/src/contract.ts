@@ -200,6 +200,17 @@ export const contract = {
       headSha: CommitSha,
     })),
 
+  rebaseRef: oc
+    .input(z.object({
+      repoId: RepoId,
+      refName: z.string(),
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      message: z.string(),
+      headSha: CommitSha,
+    })),
+
   refAction: oc
     .input(z.object({
       repoId: RepoId,
