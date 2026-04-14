@@ -2,6 +2,20 @@ import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'r
 import { animated, to, useTransition } from '@react-spring/web'
 import type { CommitRow, CommitActionKind, RefSummary } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
+import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
+import {
+  buildRefPlacements,
+  CURRENT_LANE_HIGHLIGHT_WIDTH,
+  type CurrentLaneHighlight,
+  GRAPH_ENTER_OFFSET_Y,
+  GRAPH_EXIT_OFFSET_Y,
+  GRAPH_MUTATION_SETTLE_MS,
+  GRAPH_SPRING_CONFIG,
+  refBadgePrefix,
+  type RefPlacement,
+  shouldAnimateHistoryChange,
+  type VisibleEdgeItem,
+} from './graph-canvas/animation'
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -33,14 +47,6 @@ const GRAPH_RIGHT_GUTTER = 520
 const PAD_TOP = 40
 const PAD_LEFT = 40
 const LANE_ORIGIN_X = PAD_LEFT + GRAPH_LEFT_GUTTER
-const GRAPH_MUTATION_SETTLE_MS = 2600
-const GRAPH_SPRING_CONFIG = { mass: 2.1, tension: 180, friction: 28 }
-const REF_PILL_GAP = 6
-const REF_PILL_HORIZONTAL_PADDING = 14
-const REF_PILL_CHARACTER_WIDTH = 7
-const GRAPH_ENTER_OFFSET_Y = NODE_SPACING_Y * 0.55
-const GRAPH_EXIT_OFFSET_Y = NODE_SPACING_Y * 0.3
-const PRIMARY_LANE_HIGHLIGHT_WIDTH = 54
 
 const LANE_COLORS = [
   '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
@@ -73,36 +79,6 @@ interface VisibleRefAction {
   action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
   label: string
   tone: 'neutral' | 'warning' | 'danger'
-}
-
-interface RefPlacement {
-  refName: string
-  nodeSha: string
-  x: number
-  y: number
-  color: string
-  isCurrent: boolean
-  isSelected: boolean
-  isRemote: boolean
-}
-
-interface VisibleEdgeItem {
-  key: string
-  path: string
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-  isMerge: boolean
-  stroke: string
-  strokeWidth: number
-  opacity: number
-}
-
-interface CurrentLaneHighlight {
-  key: string
-  x: number
-  color: string
 }
 
 function upstreamShortName(upstream?: string) {
@@ -637,108 +613,6 @@ function pickBestRef(refNames: string[]): string | null {
   return remote ?? null
 }
 
-function areRefNamesEqual(left: string[], right: string[]) {
-  if (left.length !== right.length) return false
-  for (let i = 0; i < left.length; i++) {
-    if (left[i] !== right[i]) return false
-  }
-  return true
-}
-
-function areRowsEquivalent(left: CommitRow[], right: CommitRow[]) {
-  if (left.length !== right.length) return false
-
-  for (let i = 0; i < left.length; i++) {
-    const prev = left[i]
-    const next = right[i]
-    if (
-      prev.sha !== next.sha
-      || prev.row !== next.row
-      || prev.lane !== next.lane
-      || prev.parentShas.length !== next.parentShas.length
-      || !areRefNamesEqual(prev.refNames, next.refNames)
-    ) {
-      return false
-    }
-
-    for (let j = 0; j < prev.parentShas.length; j++) {
-      if (prev.parentShas[j] !== next.parentShas[j]) return false
-    }
-  }
-
-  return true
-}
-
-function isAppendOnlyHistoryUpdate(prevRows: CommitRow[], nextRows: CommitRow[]) {
-  if (nextRows.length <= prevRows.length) return false
-
-  for (let i = 0; i < prevRows.length; i++) {
-    const prev = prevRows[i]
-    const next = nextRows[i]
-    if (
-      prev.sha !== next.sha
-      || prev.row !== next.row
-      || prev.lane !== next.lane
-      || !areRefNamesEqual(prev.refNames, next.refNames)
-    ) {
-      return false
-    }
-  }
-
-  return true
-}
-
-function shouldAnimateHistoryChange(prevRows: CommitRow[] | null, nextRows: CommitRow[] | null) {
-  if (!prevRows || !nextRows) return false
-  if (prevRows.length === 0 || nextRows.length === 0) return false
-  if (areRowsEquivalent(prevRows, nextRows)) return false
-  if (isAppendOnlyHistoryUpdate(prevRows, nextRows)) return false
-  return true
-}
-
-function refBadgePrefix(isRemote: boolean, isCurrent: boolean) {
-  if (isRemote) return '☁ '
-  return isCurrent ? '● ' : '⎇ '
-}
-
-function estimateRefPillWidth(refName: string, isRemote: boolean, isCurrent: boolean) {
-  return REF_PILL_HORIZONTAL_PADDING + (refBadgePrefix(isRemote, isCurrent).length + refName.length) * REF_PILL_CHARACTER_WIDTH
-}
-
-function buildRefPlacements(nodes: LayoutNode[], currentBranch: string | null, selectedRefName: string | null) {
-  const placements: RefPlacement[] = []
-  const rowWidths = new Map<string, number>()
-
-  for (const node of nodes) {
-    const baseX = node.x + NODE_RADIUS + 8
-    const y = node.y - 10
-    let cursorX = baseX
-
-    for (const refName of node.row.refNames) {
-      const isCurrent = currentBranch !== null && refName === currentBranch
-      const isRemote = isRemoteRef(refName)
-      placements.push({
-        refName,
-        nodeSha: node.row.sha,
-        x: cursorX,
-        y,
-        color: laneColor(node.row.lane),
-        isCurrent,
-        isSelected: refName === selectedRefName,
-        isRemote,
-      })
-      cursorX += estimateRefPillWidth(refName, isRemote, isCurrent) + REF_PILL_GAP
-    }
-
-    rowWidths.set(
-      node.row.sha,
-      node.row.refNames.length > 0 ? cursorX - baseX - REF_PILL_GAP : 0,
-    )
-  }
-
-  return { placements, rowWidths }
-}
-
 function buildAnimatedEdgePath(x1: number, y1: number, x2: number, y2: number) {
   const start = pointOnCircleToward(x1, y1, x2, y2, NODE_RADIUS - 1)
   const end = pointOnCircleToward(x2, y2, x1, y1, NODE_RADIUS - 1)
@@ -765,6 +639,11 @@ function edgeIntersectsRange(fromIdx: number, toIdx: number, firstIdx: number, l
   const bottom = Math.max(fromIdx, toIdx)
   return bottom >= firstIdx && top <= lastIdx
 }
+
+const EMPTY_VISIBLE_EDGE_ITEMS: VisibleEdgeItem[] = []
+const EMPTY_VISIBLE_NODES: LayoutNode[] = []
+const EMPTY_REF_PLACEMENTS: RefPlacement[] = []
+const EMPTY_LANE_HIGHLIGHTS: CurrentLaneHighlight[] = []
 
 // ---------------------------------------------------------------------------
 // Component
@@ -794,11 +673,13 @@ export function GraphCanvas() {
   const [zoom, setZoom] = useState(1)
   const [scrollTop, setScrollTop] = useState(0)
   const [graphAnimationActive, setGraphAnimationActive] = useState(false)
+  const [isScrolling, setIsScrolling] = useState(false)
   const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
   const zoomRef = useRef(1)
   const suppressAutoScrollUntilRef = useRef(0)
   const previousRowsRef = useRef<CommitRow[] | null>(null)
   const graphAnimationTimeoutRef = useRef<number | null>(null)
+  const scrollingTimeoutRef = useRef<number | null>(null)
   // Force re-render counter — incremented when scroll position changes enough
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
@@ -847,6 +728,25 @@ export function GraphCanvas() {
     if (graphAnimationTimeoutRef.current !== null) {
       window.clearTimeout(graphAnimationTimeoutRef.current)
     }
+    if (scrollingTimeoutRef.current !== null) {
+      window.clearTimeout(scrollingTimeoutRef.current)
+    }
+  }, [])
+
+  const markScrolling = useCallback(() => {
+    setIsScrolling(true)
+    if (graphAnimationTimeoutRef.current !== null) {
+      window.clearTimeout(graphAnimationTimeoutRef.current)
+      graphAnimationTimeoutRef.current = null
+    }
+    setGraphAnimationActive(false)
+    if (scrollingTimeoutRef.current !== null) {
+      window.clearTimeout(scrollingTimeoutRef.current)
+    }
+    scrollingTimeoutRef.current = window.setTimeout(() => {
+      setIsScrolling(false)
+      scrollingTimeoutRef.current = null
+    }, 90)
   }, [])
 
   const refMap = useMemo(
@@ -964,14 +864,19 @@ export function GraphCanvas() {
       forceRender()
     }
 
-    el.addEventListener('scroll', check, { passive: true })
+    const handleScroll = () => {
+      markScrolling()
+      check()
+    }
+
+    el.addEventListener('scroll', handleScroll, { passive: true })
     const ro = new ResizeObserver(() => check())
     ro.observe(el)
     return () => {
-      el.removeEventListener('scroll', check)
+      el.removeEventListener('scroll', handleScroll)
       ro.disconnect()
     }
-  }, [layout, histWindow, requestMore])
+  }, [layout, histWindow, markScrolling, requestMore])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -1101,7 +1006,7 @@ export function GraphCanvas() {
   }, [visibleEdges, occupiedLanes])
 
   const { placements: visibleRefPlacements, rowWidths: rowRefWidths } = useMemo(
-    () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName),
+    () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName, NODE_RADIUS, laneColor, isRemoteRef),
     [visibleNodes, currentBranch, selectedRefName],
   )
 
@@ -1136,7 +1041,7 @@ export function GraphCanvas() {
 
     return {
       key: currentBranch,
-      x: tipNode.x - PRIMARY_LANE_HIGHLIGHT_WIDTH / 2,
+      x: tipNode.x - CURRENT_LANE_HIGHLIGHT_WIDTH / 2,
       color: laneColor(tipNode.row.lane),
     }
   }, [layout, currentBranch])
@@ -1503,9 +1408,9 @@ export function GraphCanvas() {
     })
   }, [selectedNode, performCommitAction])
 
-  const graphTransitionImmediate = !animateGraphLayout
+  const shouldUseAnimatedGraphRendering = animateGraphLayout && !isScrolling
 
-  const edgeTransitions = useTransition(visibleEdgeItems, {
+  const edgeTransitions = useTransition(shouldUseAnimatedGraphRendering ? visibleEdgeItems : EMPTY_VISIBLE_EDGE_ITEMS, {
     keys: (item) => item.key,
     from: (item) => ({
       x1: item.x1,
@@ -1535,11 +1440,11 @@ export function GraphCanvas() {
       y2: item.y2 - GRAPH_EXIT_OFFSET_Y,
       opacity: 0,
     }),
-    immediate: graphTransitionImmediate,
+    immediate: false,
     config: GRAPH_SPRING_CONFIG,
   })
 
-  const nodeTransitions = useTransition(visibleNodes, {
+  const nodeTransitions = useTransition(shouldUseAnimatedGraphRendering ? visibleNodes : EMPTY_VISIBLE_NODES, {
     keys: (node) => node.row.sha,
     from: (node) => ({
       x: node.x,
@@ -1565,11 +1470,11 @@ export function GraphCanvas() {
       opacity: 0,
       scale: 0.92,
     }),
-    immediate: graphTransitionImmediate,
+    immediate: false,
     config: GRAPH_SPRING_CONFIG,
   })
 
-  const refTransitions = useTransition(visibleRefPlacements, {
+  const refTransitions = useTransition(shouldUseAnimatedGraphRendering ? visibleRefPlacements : EMPTY_REF_PLACEMENTS, {
     keys: (placement) => placement.refName,
     from: (placement) => ({
       x: placement.x,
@@ -1595,11 +1500,13 @@ export function GraphCanvas() {
       opacity: 0,
       scale: 0.92,
     }),
-    immediate: graphTransitionImmediate,
+    immediate: false,
     config: GRAPH_SPRING_CONFIG,
   })
 
-  const currentLaneTransitions = useTransition(currentLaneHighlight ? [currentLaneHighlight] : [], {
+  const currentLaneTransitions = useTransition(
+    shouldUseAnimatedGraphRendering && currentLaneHighlight ? [currentLaneHighlight] : EMPTY_LANE_HIGHLIGHTS,
+    {
     keys: (item) => item.key,
     from: (item) => ({
       x: item.x,
@@ -1617,9 +1524,10 @@ export function GraphCanvas() {
       x: item.x,
       opacity: 0,
     }),
-    immediate: graphTransitionImmediate,
+    immediate: false,
     config: GRAPH_SPRING_CONFIG,
-  })
+    },
+  )
 
   if (!layout) {
     return (
@@ -1768,30 +1676,51 @@ export function GraphCanvas() {
           height={fullHeight}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
         >
-          {currentLaneTransitions((style, lane) => {
-            const laneStyle = style as { x: number; opacity: number }
+          {shouldUseAnimatedGraphRendering
+            ? currentLaneTransitions((style, lane) => {
+                const laneStyle = style as { x: number; opacity: number }
 
-            return (
-              <animated.g key={lane.key} opacity={to(laneStyle.opacity, (opacity) => opacity * 0.95)}>
-                <animated.rect
-                  x={laneStyle.x}
-                  y={0}
-                  width={PRIMARY_LANE_HIGHLIGHT_WIDTH}
-                  height={fullHeight}
-                  rx={18}
-                  fill={`${lane.color}10`}
-                />
-                <animated.rect
-                  x={to(laneStyle.x, (x) => x + 2)}
-                  y={0}
-                  width={PRIMARY_LANE_HIGHLIGHT_WIDTH - 4}
-                  height={fullHeight}
-                  rx={16}
-                  fill={`${lane.color}06`}
-                />
-              </animated.g>
-            )
-          })}
+                return (
+                  <animated.g key={lane.key} opacity={to(laneStyle.opacity, (opacity) => opacity * 0.95)}>
+                    <animated.rect
+                      x={laneStyle.x}
+                      y={0}
+                      width={CURRENT_LANE_HIGHLIGHT_WIDTH}
+                      height={fullHeight}
+                      rx={18}
+                      fill={`${lane.color}10`}
+                    />
+                    <animated.rect
+                      x={to(laneStyle.x, (x) => x + 2)}
+                      y={0}
+                      width={CURRENT_LANE_HIGHLIGHT_WIDTH - 4}
+                      height={fullHeight}
+                      rx={16}
+                      fill={`${lane.color}06`}
+                    />
+                  </animated.g>
+                )
+              })
+            : currentLaneHighlight && (
+                <g key={currentLaneHighlight.key} opacity={0.95}>
+                  <rect
+                    x={currentLaneHighlight.x}
+                    y={0}
+                    width={CURRENT_LANE_HIGHLIGHT_WIDTH}
+                    height={fullHeight}
+                    rx={18}
+                    fill={`${currentLaneHighlight.color}10`}
+                  />
+                  <rect
+                    x={currentLaneHighlight.x + 2}
+                    y={0}
+                    width={CURRENT_LANE_HIGHLIGHT_WIDTH - 4}
+                    height={fullHeight}
+                    rx={16}
+                    fill={`${currentLaneHighlight.color}06`}
+                  />
+                </g>
+              )}
           {previewOverlay && (
             <>
               <path
@@ -1814,23 +1743,33 @@ export function GraphCanvas() {
               />
             </>
           )}
-          {edgeTransitions((style, edge) => {
-            const edgeStyle = style as { x1: number; y1: number; x2: number; y2: number; opacity: number }
+          {shouldUseAnimatedGraphRendering
+            ? edgeTransitions((style, edge) => {
+                const edgeStyle = style as { x1: number; y1: number; x2: number; y2: number; opacity: number }
 
-            return (
-              <animated.path
-                key={edge.key}
-                d={animateGraphLayout
-                  ? to([edgeStyle.x1, edgeStyle.y1, edgeStyle.x2, edgeStyle.y2], buildAnimatedEdgePath)
-                  : edge.path}
-                stroke={edge.stroke}
-                strokeWidth={edge.strokeWidth}
-                fill="none"
-                strokeLinecap="round"
-                opacity={edgeStyle.opacity}
-              />
-            )
-          })}
+                return (
+                  <animated.path
+                    key={edge.key}
+                    d={to([edgeStyle.x1, edgeStyle.y1, edgeStyle.x2, edgeStyle.y2], buildAnimatedEdgePath)}
+                    stroke={edge.stroke}
+                    strokeWidth={edge.strokeWidth}
+                    fill="none"
+                    strokeLinecap="round"
+                    opacity={edgeStyle.opacity}
+                  />
+                )
+              })
+            : visibleEdgeItems.map((edge) => (
+                <path
+                  key={edge.key}
+                  d={edge.path}
+                  stroke={edge.stroke}
+                  strokeWidth={edge.strokeWidth}
+                  fill="none"
+                  strokeLinecap="round"
+                  opacity={edge.opacity}
+                />
+              ))}
           {previewOverlay && (
             <g>
               <circle
@@ -1857,155 +1796,257 @@ export function GraphCanvas() {
               />
             </g>
           )}
-          {nodeTransitions((style, node) => {
-            const nodeStyle = style as { x: number; y: number; opacity: number }
-            const { row } = node
-            const selected = row.sha === selectedSha
-            const color = laneColor(row.lane)
-            const gaugeDiameter = GAUGE_RADIUS * 2
-            const additionsFillHeight = computeGaugeFillHeight(row.additions, locScaleMax, gaugeDiameter)
-            const deletionsFillHeight = computeGaugeFillHeight(row.deletions, locScaleMax, gaugeDiameter)
-            const clipPathBaseId = `gauge-${row.sha}`
-            const leftClipPathId = `${clipPathBaseId}-left`
-            const rightClipPathId = `${clipPathBaseId}-right`
-            const trackStroke = selected ? GAUGE_TRACK_STROKE_SELECTED : GAUGE_TRACK_STROKE
-            const trackFill = selected ? GAUGE_TRACK_FILL_SELECTED : GAUGE_BACKGROUND_FILL
+          {shouldUseAnimatedGraphRendering
+            ? nodeTransitions((style, node) => {
+                const nodeStyle = style as { x: number; y: number; opacity: number }
+                const { row } = node
+                const selected = row.sha === selectedSha
+                const color = laneColor(row.lane)
+                const gaugeDiameter = GAUGE_RADIUS * 2
+                const additionsFillHeight = computeGaugeFillHeight(row.additions, locScaleMax, gaugeDiameter)
+                const deletionsFillHeight = computeGaugeFillHeight(row.deletions, locScaleMax, gaugeDiameter)
+                const clipPathBaseId = `gauge-${row.sha}`
+                const leftClipPathId = `${clipPathBaseId}-left`
+                const rightClipPathId = `${clipPathBaseId}-right`
+                const trackStroke = selected ? GAUGE_TRACK_STROKE_SELECTED : GAUGE_TRACK_STROKE
+                const trackFill = selected ? GAUGE_TRACK_FILL_SELECTED : GAUGE_BACKGROUND_FILL
 
-            return (
-              <animated.g
-                key={row.sha}
-                onClick={(e) => { e.stopPropagation(); selectCommit(row.sha) }}
-                opacity={nodeStyle.opacity}
-                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-              >
-                <title>{`${row.subject}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
-                {selected && (
-                  <animated.circle
-                    cx={nodeStyle.x}
-                    cy={nodeStyle.y}
-                    r={NODE_RADIUS * 2.5}
-                    fill={color}
-                    opacity={0.15}
-                  />
-                )}
-                <animated.circle
-                  cx={nodeStyle.x}
-                  cy={nodeStyle.y}
-                  r={NODE_RADIUS}
-                  fill={NODE_FILL}
-                  stroke={color}
-                  strokeWidth={selected ? 3.5 : 2.75}
-                />
-                <defs>
-                  <clipPath id={leftClipPathId} clipPathUnits="userSpaceOnUse">
+                return (
+                  <animated.g
+                    key={row.sha}
+                    onClick={(e) => { e.stopPropagation(); selectCommit(row.sha) }}
+                    opacity={nodeStyle.opacity}
+                    style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                  >
+                    <title>{`${row.subject}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
+                    {selected && (
+                      <animated.circle
+                        cx={nodeStyle.x}
+                        cy={nodeStyle.y}
+                        r={NODE_RADIUS * 2.5}
+                        fill={color}
+                        opacity={0.15}
+                      />
+                    )}
+                    <animated.circle
+                      cx={nodeStyle.x}
+                      cy={nodeStyle.y}
+                      r={NODE_RADIUS}
+                      fill={NODE_FILL}
+                      stroke={color}
+                      strokeWidth={selected ? 3.5 : 2.75}
+                    />
+                    <defs>
+                      <clipPath id={leftClipPathId} clipPathUnits="userSpaceOnUse">
+                        <animated.path
+                          d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'left'))}
+                        />
+                      </clipPath>
+                      <clipPath id={rightClipPathId} clipPathUnits="userSpaceOnUse">
+                        <animated.path
+                          d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'right'))}
+                        />
+                      </clipPath>
+                    </defs>
                     <animated.path
                       d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'left'))}
+                      fill={trackFill}
                     />
-                  </clipPath>
-                  <clipPath id={rightClipPathId} clipPathUnits="userSpaceOnUse">
                     <animated.path
                       d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'right'))}
+                      fill={trackFill}
                     />
-                  </clipPath>
-                </defs>
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'left'))}
-                  fill={trackFill}
-                />
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'right'))}
-                  fill={trackFill}
-                />
-                {additionsFillHeight > 0 && (
-                  <animated.rect
-                    x={to(nodeStyle.x, (x) => x - GAUGE_RADIUS)}
-                    y={to(nodeStyle.y, (y) => y + GAUGE_RADIUS - additionsFillHeight)}
-                    width={GAUGE_RADIUS}
-                    height={additionsFillHeight}
-                    fill={GAUGE_ADDITIONS_FILL}
-                    clipPath={`url(#${leftClipPathId})`}
-                  />
-                )}
-                {deletionsFillHeight > 0 && (
-                  <animated.rect
-                    x={nodeStyle.x}
-                    y={to(nodeStyle.y, (y) => y + GAUGE_RADIUS - deletionsFillHeight)}
-                    width={GAUGE_RADIUS}
-                    height={deletionsFillHeight}
-                    fill={GAUGE_DELETIONS_FILL}
-                    clipPath={`url(#${rightClipPathId})`}
-                  />
-                )}
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCircleArc(x, y, GAUGE_RADIUS, 'left'))}
-                  stroke={trackStroke}
-                  strokeWidth={1.6}
-                  fill="none"
-                />
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCircleArc(x, y, GAUGE_RADIUS, 'right'))}
-                  stroke={trackStroke}
-                  strokeWidth={1.6}
-                  fill="none"
-                />
-                <animated.line
-                  x1={nodeStyle.x}
-                  y1={to(nodeStyle.y, (y) => y - GAUGE_RADIUS)}
-                  x2={nodeStyle.x}
-                  y2={to(nodeStyle.y, (y) => y + GAUGE_RADIUS)}
-                  stroke={trackStroke}
-                  strokeWidth={1.6}
-                />
-                {row.parentShas.length > 1 && (
-                  <animated.circle
-                    cx={nodeStyle.x}
-                    cy={nodeStyle.y}
-                    r={2}
-                    fill={color}
-                  />
-                )}
-              </animated.g>
-            )
-          })}
+                    {additionsFillHeight > 0 && (
+                      <animated.rect
+                        x={to(nodeStyle.x, (x) => x - GAUGE_RADIUS)}
+                        y={to(nodeStyle.y, (y) => y + GAUGE_RADIUS - additionsFillHeight)}
+                        width={GAUGE_RADIUS}
+                        height={additionsFillHeight}
+                        fill={GAUGE_ADDITIONS_FILL}
+                        clipPath={`url(#${leftClipPathId})`}
+                      />
+                    )}
+                    {deletionsFillHeight > 0 && (
+                      <animated.rect
+                        x={nodeStyle.x}
+                        y={to(nodeStyle.y, (y) => y + GAUGE_RADIUS - deletionsFillHeight)}
+                        width={GAUGE_RADIUS}
+                        height={deletionsFillHeight}
+                        fill={GAUGE_DELETIONS_FILL}
+                        clipPath={`url(#${rightClipPathId})`}
+                      />
+                    )}
+                    <animated.path
+                      d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCircleArc(x, y, GAUGE_RADIUS, 'left'))}
+                      stroke={trackStroke}
+                      strokeWidth={1.6}
+                      fill="none"
+                    />
+                    <animated.path
+                      d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCircleArc(x, y, GAUGE_RADIUS, 'right'))}
+                      stroke={trackStroke}
+                      strokeWidth={1.6}
+                      fill="none"
+                    />
+                    <animated.line
+                      x1={nodeStyle.x}
+                      y1={to(nodeStyle.y, (y) => y - GAUGE_RADIUS)}
+                      x2={nodeStyle.x}
+                      y2={to(nodeStyle.y, (y) => y + GAUGE_RADIUS)}
+                      stroke={trackStroke}
+                      strokeWidth={1.6}
+                    />
+                    {row.parentShas.length > 1 && (
+                      <animated.circle
+                        cx={nodeStyle.x}
+                        cy={nodeStyle.y}
+                        r={2}
+                        fill={color}
+                      />
+                    )}
+                  </animated.g>
+                )
+              })
+            : visibleNodes.map((node) => {
+                const { row, x, y } = node
+                const selected = row.sha === selectedSha
+                const color = laneColor(row.lane)
+                const gaugeDiameter = GAUGE_RADIUS * 2
+                const gaugeTop = y - GAUGE_RADIUS
+                const gaugeLeftPath = describeHalfCirclePath(x, y, GAUGE_RADIUS, 'left')
+                const gaugeRightPath = describeHalfCirclePath(x, y, GAUGE_RADIUS, 'right')
+                const gaugeLeftArc = describeHalfCircleArc(x, y, GAUGE_RADIUS, 'left')
+                const gaugeRightArc = describeHalfCircleArc(x, y, GAUGE_RADIUS, 'right')
+                const additionsFillHeight = computeGaugeFillHeight(row.additions, locScaleMax, gaugeDiameter)
+                const deletionsFillHeight = computeGaugeFillHeight(row.deletions, locScaleMax, gaugeDiameter)
+                const additionsFillY = gaugeTop + gaugeDiameter - additionsFillHeight
+                const deletionsFillY = gaugeTop + gaugeDiameter - deletionsFillHeight
+                const clipPathBaseId = `gauge-${row.sha}`
+                const leftClipPathId = `${clipPathBaseId}-left`
+                const rightClipPathId = `${clipPathBaseId}-right`
+                const trackStroke = selected ? GAUGE_TRACK_STROKE_SELECTED : GAUGE_TRACK_STROKE
+                const trackFill = selected ? GAUGE_TRACK_FILL_SELECTED : GAUGE_BACKGROUND_FILL
+
+                return (
+                  <g
+                    key={row.sha}
+                    onClick={(e) => { e.stopPropagation(); selectCommit(row.sha) }}
+                    style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                  >
+                    <title>{`${row.subject}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
+                    {selected && <circle cx={x} cy={y} r={NODE_RADIUS * 2.5} fill={color} opacity={0.15} />}
+                    <circle cx={x} cy={y} r={NODE_RADIUS} fill={NODE_FILL} stroke={color} strokeWidth={selected ? 3.5 : 2.75} />
+                    <defs>
+                      <clipPath id={leftClipPathId} clipPathUnits="userSpaceOnUse">
+                        <path d={gaugeLeftPath} />
+                      </clipPath>
+                      <clipPath id={rightClipPathId} clipPathUnits="userSpaceOnUse">
+                        <path d={gaugeRightPath} />
+                      </clipPath>
+                    </defs>
+                    <path d={gaugeLeftPath} fill={trackFill} />
+                    <path d={gaugeRightPath} fill={trackFill} />
+                    {additionsFillHeight > 0 && (
+                      <rect
+                        x={x - GAUGE_RADIUS}
+                        y={additionsFillY}
+                        width={GAUGE_RADIUS}
+                        height={additionsFillHeight}
+                        fill={GAUGE_ADDITIONS_FILL}
+                        clipPath={`url(#${leftClipPathId})`}
+                      />
+                    )}
+                    {deletionsFillHeight > 0 && (
+                      <rect
+                        x={x}
+                        y={deletionsFillY}
+                        width={GAUGE_RADIUS}
+                        height={deletionsFillHeight}
+                        fill={GAUGE_DELETIONS_FILL}
+                        clipPath={`url(#${rightClipPathId})`}
+                      />
+                    )}
+                    <path d={gaugeLeftArc} stroke={trackStroke} strokeWidth={1.6} fill="none" />
+                    <path d={gaugeRightArc} stroke={trackStroke} strokeWidth={1.6} fill="none" />
+                    <line
+                      x1={x}
+                      y1={gaugeTop}
+                      x2={x}
+                      y2={gaugeTop + gaugeDiameter}
+                      stroke={trackStroke}
+                      strokeWidth={1.6}
+                    />
+                    {row.parentShas.length > 1 && <circle cx={x} cy={y} r={2} fill={color} />}
+                  </g>
+                )
+              })}
         </svg>
 
-        {refTransitions((style, placement) => {
-          const refStyle = style as { x: number; y: number; opacity: number; scale: number }
+        {shouldUseAnimatedGraphRendering
+          ? refTransitions((style, placement) => {
+              const refStyle = style as { x: number; y: number; opacity: number; scale: number }
 
-          return (
-            <animated.div
-              key={placement.refName}
-              onClick={(e) => handleRefSelect(e, placement.refName)}
-              style={{
-                position: 'absolute',
-                left: 0,
-                top: 0,
-                zIndex: 20,
-                height: 20,
-                padding: '0 7px',
-                borderRadius: 4,
-                background: placement.isSelected ? placement.color + '35' : placement.isCurrent ? placement.color + '2a' : placement.color + '18',
-                border: `1px solid ${placement.isSelected || placement.isCurrent ? placement.color : placement.color + '55'}`,
-                color: placement.color,
-                fontSize: 11,
-                fontWeight: 600,
-                lineHeight: '20px',
-                whiteSpace: 'nowrap',
-                cursor: 'pointer',
-                userSelect: 'none',
-                boxShadow: placement.isSelected || placement.isCurrent ? `0 0 6px ${placement.color}40` : 'none',
-                transformOrigin: 'top left',
-                opacity: refStyle.opacity,
-                transform: to(
-                  [refStyle.x, refStyle.y, refStyle.scale],
-                  (x, y, scale) => `translate(${x}px, ${y}px) scale(${scale})`,
-                ),
-              }}
-            >
-              {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
-            </animated.div>
-          )
-        })}
+              return (
+                <animated.div
+                  key={placement.refName}
+                  onClick={(e) => handleRefSelect(e, placement.refName)}
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    zIndex: 20,
+                    height: 20,
+                    padding: '0 7px',
+                    borderRadius: 4,
+                    background: placement.isSelected ? placement.color + '35' : placement.isCurrent ? placement.color + '2a' : placement.color + '18',
+                    border: `1px solid ${placement.isSelected || placement.isCurrent ? placement.color : placement.color + '55'}`,
+                    color: placement.color,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    lineHeight: '20px',
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    boxShadow: placement.isSelected || placement.isCurrent ? `0 0 6px ${placement.color}40` : 'none',
+                    transformOrigin: 'top left',
+                    opacity: refStyle.opacity,
+                    transform: to(
+                      [refStyle.x, refStyle.y, refStyle.scale],
+                      (x, y, scale) => `translate(${x}px, ${y}px) scale(${scale})`,
+                    ),
+                  }}
+                >
+                  {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
+                </animated.div>
+              )
+            })
+          : visibleRefPlacements.map((placement) => (
+              <div
+                key={placement.refName}
+                onClick={(e) => handleRefSelect(e, placement.refName)}
+                style={{
+                  position: 'absolute',
+                  left: placement.x,
+                  top: placement.y,
+                  zIndex: 20,
+                  height: 20,
+                  padding: '0 7px',
+                  borderRadius: 4,
+                  background: placement.isSelected ? placement.color + '35' : placement.isCurrent ? placement.color + '2a' : placement.color + '18',
+                  border: `1px solid ${placement.isSelected || placement.isCurrent ? placement.color : placement.color + '55'}`,
+                  color: placement.color,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  lineHeight: '20px',
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  boxShadow: placement.isSelected || placement.isCurrent ? `0 0 6px ${placement.color}40` : 'none',
+                }}
+              >
+                {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
+              </div>
+            ))}
 
         {visibleNodes.map((node) => {
           const refRowWidth = rowRefWidths.get(node.row.sha) ?? 0
@@ -2127,154 +2168,5 @@ export function GraphCanvas() {
       </div>
 
     </div>
-  )
-}
-
-function CommitActionButton({
-  label,
-  onClick,
-  tone,
-  onMouseEnter,
-  onMouseLeave,
-}: {
-  label: string
-  onClick: () => void
-  tone: 'success' | 'warning' | 'uncommit' | 'merge'
-  onMouseEnter?: () => void
-  onMouseLeave?: () => void
-}) {
-  const color = tone === 'success'
-    ? '#0b1020'
-    : tone === 'warning'
-      ? '#fff7d6'
-      : tone === 'merge'
-        ? '#fff7ff'
-        : '#fff7ed'
-  const border = tone === 'success'
-    ? '#6d9658'
-    : tone === 'warning'
-      ? '#d8a43a'
-      : tone === 'merge'
-        ? '#b764d9'
-        : '#9a3412'
-  const background = tone === 'success'
-    ? '#8dcf78'
-    : tone === 'warning'
-      ? '#b88a25'
-      : tone === 'merge'
-        ? '#c77de4'
-        : '#b45309'
-  const hover = tone === 'success'
-    ? '#9cda89'
-    : tone === 'warning'
-      ? '#c99a30'
-      : tone === 'merge'
-        ? '#d08bea'
-        : '#c26115'
-
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: 104,
-        height: 30,
-        padding: '0 12px',
-        background,
-        border: `1px solid ${border}`,
-        borderRadius: 7,
-        color,
-        fontSize: 12,
-        fontWeight: 700,
-        cursor: 'pointer',
-        fontFamily: 'inherit',
-        whiteSpace: 'nowrap',
-        position: 'relative',
-        zIndex: 8,
-        boxShadow: '0 10px 24px rgba(0,0,0,0.35)',
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = hover }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = background }}
-      onPointerEnter={onMouseEnter}
-      onPointerLeave={onMouseLeave}
-    >
-      {label}
-    </button>
-  )
-}
-
-function RefActionButton({
-  label,
-  onClick,
-  tone,
-  size = 'default',
-  variant = 'solid',
-}: {
-  label: string
-  onClick: () => void
-  tone: 'neutral' | 'warning' | 'danger'
-  size?: 'default' | 'compact'
-  variant?: 'solid' | 'ghost'
-}) {
-  const compact = size === 'compact'
-  const ghost = variant === 'ghost'
-
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: compact ? 72 : 84,
-        height: compact ? 20 : 28,
-        padding: compact ? '0 8px' : '0 10px',
-        background: ghost
-          ? 'rgba(24,24,37,0.5)'
-          : tone === 'danger'
-            ? '#5c2430'
-            : tone === 'warning'
-              ? '#7a4e11'
-              : '#2f3348',
-        border: ghost
-          ? '1px solid transparent'
-          : `1px solid ${tone === 'danger' ? '#8b3a4a' : tone === 'warning' ? '#d19128' : '#4a4f68'}`,
-        color: tone === 'danger' ? '#f5a6b8' : tone === 'warning' ? '#f9d28b' : ghost ? '#bac2de' : '#cdd6f4',
-        fontSize: compact ? 11 : 12,
-        fontWeight: 600,
-        cursor: 'pointer',
-        borderRadius: compact ? 6 : 7,
-        fontFamily: 'inherit',
-        whiteSpace: 'nowrap',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = ghost
-          ? 'rgba(49,50,68,0.8)'
-          : tone === 'danger'
-            ? '#6a2b39'
-            : tone === 'warning'
-              ? '#8a5a16'
-            : '#3a4058'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = ghost
-          ? 'rgba(24,24,37,0.5)'
-          : tone === 'danger'
-            ? '#5c2430'
-            : tone === 'warning'
-              ? '#7a4e11'
-            : '#2f3348'
-      }}
-    >
-      {label}
-    </button>
   )
 }
