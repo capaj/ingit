@@ -1019,6 +1019,7 @@ export function GraphCanvas() {
   const performCommitAction = useAppStore((state) => state.performCommitAction)
   const performMergeRef = useAppStore((state) => state.performMergeRef)
   const performRebaseRef = useAppStore((state) => state.performRebaseRef)
+  const showError = useAppStore((state) => state.showError)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
@@ -1625,9 +1626,11 @@ export function GraphCanvas() {
     const targetNode = layout.shaToNode.get(mergePreview.targetSha)
     if (!sourceNode || !targetNode) return null
 
+    const topNode = layout.nodes[0] ?? targetNode
+
     const previewNode: LayoutNode = {
       row: {
-        row: targetNode.row.row - 1,
+        row: topNode.row.row - 1,
         sha: `preview:${mergePreview.sourceSha}:${mergePreview.targetSha}`,
         parentShas: [targetNode.row.sha, sourceNode.row.sha],
         authorName: '',
@@ -1642,8 +1645,8 @@ export function GraphCanvas() {
         lane: targetNode.row.lane,
       },
       x: targetNode.x,
-      y: targetNode.y - NODE_SPACING_Y,
-      idx: targetNode.idx - 1,
+      y: topNode.y - NODE_SPACING_Y,
+      idx: topNode.idx - 1,
     }
 
     const targetKey = `${previewNode.row.sha}-${targetNode.row.sha}`
@@ -1686,9 +1689,9 @@ export function GraphCanvas() {
     if (!selectedRefName || !selectedRef) return
     setMergePreviewVisible(false)
     performRefAction(action, selectedRefName, selectedRef.targetSha).catch((err) => {
-      alert(err instanceof Error ? err.message : 'Action failed')
+      showError(`${action} failed`, err)
     })
-  }, [selectedRefName, selectedRef, performRefAction])
+  }, [selectedRefName, selectedRef, performRefAction, showError])
 
   const handleMoveBranch = useCallback((targetSha: string) => {
     if (!movableBranchRefName) return
@@ -1697,9 +1700,9 @@ export function GraphCanvas() {
 
     setMergePreviewVisible(false)
     performRefAction('move', movableBranchRefName, targetSha).catch((err) => {
-      alert(err instanceof Error ? err.message : 'Move failed')
+      showError('Move failed', err)
     })
-  }, [movableBranchRefName, performRefAction])
+  }, [movableBranchRefName, performRefAction, showError])
 
   const handleMergeHoverStart = useCallback(() => {
     if (!selectedRefName) return
@@ -1737,9 +1740,9 @@ export function GraphCanvas() {
     setMergePreviewVisible(true)
     takeOverMergeViewport()
     performMergeRef(selectedRefName).catch((err) => {
-      alert(err instanceof Error ? err.message : 'Merge failed')
+      showError('Merge failed', err)
     })
-  }, [selectedRefName, performMergeRef, takeOverMergeViewport])
+  }, [selectedRefName, performMergeRef, takeOverMergeViewport, showError])
 
   const handleRebaseClick = useCallback((targetRefName: string) => {
     if (!selectedCurrentBranchRef) return
@@ -1751,9 +1754,9 @@ export function GraphCanvas() {
 
     setMergePreviewVisible(false)
     performRebaseRef(targetRefName).catch((err) => {
-      alert(err instanceof Error ? err.message : 'Rebase failed')
+      showError('Rebase failed', err)
     })
-  }, [selectedCurrentBranchRef, performRebaseRef])
+  }, [selectedCurrentBranchRef, performRebaseRef, showError])
 
   // Sticky lane labels: show a branch name when its tip is above the viewport
   // AND the topmost visible commit on that lane belongs to that branch
@@ -1907,9 +1910,9 @@ export function GraphCanvas() {
     if (!confirmed) return
 
     performCommitAction(action, selectedNode.row.sha).catch((err) => {
-      alert(err instanceof Error ? err.message : 'Action failed')
+      showError(`${action} failed`, err)
     })
-  }, [selectedNode, performCommitAction])
+  }, [selectedNode, performCommitAction, showError])
   const isGraphAnimating = graphAnimation !== null
 
   if (!layout) {

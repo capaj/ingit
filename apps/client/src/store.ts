@@ -86,9 +86,12 @@ interface AppState {
   mergePreview: MergePreviewResponse | null
   githubUrl: string | null
   openError: string | null
+  errorDialog: { title: string; message: string } | null
   loadingMore: boolean
 
   // Actions
+  showError: (title: string, err: unknown) => void
+  dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
   loadRecentRepos: () => Promise<void>
   openFromUrl: () => void
@@ -124,7 +127,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   mergePreview: null,
   githubUrl: null,
   openError: null,
+  errorDialog: null,
   loadingMore: false,
+
+  showError: (title, err) => {
+    const message = err instanceof Error ? err.message
+      : typeof err === 'string' ? err
+      : 'Unknown error'
+    set({ errorDialog: { title, message } })
+  },
+
+  dismissError: () => set({ errorDialog: null }),
 
   openRepoByPath: async (path) => {
     set({ status: 'loading', openError: null })

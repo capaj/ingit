@@ -4,11 +4,13 @@ import { RepoOpen } from './components/RepoOpen'
 import { RefsSidebar } from './components/RefsSidebar'
 import { GraphCanvas } from './components/GraphCanvas'
 import { CommitDetail } from './components/CommitDetail'
+import { ErrorDialog } from './components/ErrorDialog'
 
 export function App() {
   const {
     status, repoPath, recentRepos, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, githubUrl, openError,
+    errorDialog, dismissError, showError,
     openRepoByPath, openFromUrl, selectRef,
     navigateTo, checkoutSha,
   } = useAppStore()
@@ -44,7 +46,12 @@ export function App() {
   }, [selectedSha, historyWindow])
 
   if (status === 'no-repo') {
-    return <RepoOpen onOpen={openRepoByPath} error={openError} recentRepos={recentRepos} />
+    return (
+      <>
+        <RepoOpen onOpen={openRepoByPath} error={openError} recentRepos={recentRepos} />
+        <ErrorDialog error={errorDialog} onDismiss={dismissError} />
+      </>
+    )
   }
 
   if (status === 'loading') {
@@ -80,9 +87,11 @@ export function App() {
         onNavigate={navigateTo}
         onCheckout={async (sha) => {
           try { await checkoutSha(sha) }
-          catch (err) { alert(err instanceof Error ? err.message : 'Checkout failed') }
+          catch (err) { showError('Checkout failed', err) }
         }}
       />
+
+      <ErrorDialog error={errorDialog} onDismiss={dismissError} />
     </div>
   )
 }
