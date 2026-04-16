@@ -205,13 +205,14 @@ export class RepoSession {
         throw new Error(`Cannot checkout remote ref ${ref}`)
       }
 
-      await runGit(['checkout', '-B', localBranchName, ref], this.rootPath)
+      await runGit(['checkout', '-m', '-B', localBranchName, ref], this.rootPath)
       await runGit(['branch', `--set-upstream-to=${ref}`, localBranchName], this.rootPath)
       return
     }
 
     // Use git CLI — ziggit FFI only does tree checkout without switching HEAD
-    await runGit(['checkout', ref], this.rootPath)
+    // `-m` does a 3-way merge so uncommitted changes migrate to the target branch
+    await runGit(['checkout', '-m', ref], this.rootPath)
   }
 
   async cherryPick(sha: string): Promise<{ message: string; headSha: string }> {

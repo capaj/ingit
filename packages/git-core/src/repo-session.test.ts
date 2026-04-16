@@ -177,6 +177,40 @@ describe('RepoSession.checkout', () => {
     }
   })
 
+  test('carries uncommitted changes across a branch switch', async () => {
+    const migrateDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-migrate-'))
+
+    try {
+      await runGit(['init', '--initial-branch=main'], migrateDir)
+      await runGit(['config', 'user.email', 'test@test.com'], migrateDir)
+      await runGit(['config', 'user.name', 'Test'], migrateDir)
+
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\n')
+      await runGit(['add', '.'], migrateDir)
+      await runGit(['commit', '-m', 'initial'], migrateDir)
+
+      await runGit(['checkout', '-b', 'feature'], migrateDir)
+      await runGit(['checkout', 'main'], migrateDir)
+
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\nlocal edit\n')
+
+      const migrateSession = await RepoSession.open(migrateDir)
+
+      try {
+        await migrateSession.checkout('feature')
+
+        expect(await currentBranch(migrateDir)).toBe('feature')
+        const shared = await Bun.file(join(migrateDir, 'shared.txt')).text()
+        expect(shared).toBe('base\nlocal edit\n')
+        expect(await workingTreeStatus(migrateDir)).toContain('shared.txt')
+      } finally {
+        migrateSession.close()
+      }
+    } finally {
+      await rm(migrateDir, { recursive: true, force: true })
+    }
+  })
+
   test('checking out a remote branch moves the local branch to that remote tip', async () => {
     const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-remote-move-'))
     const seedDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-seed-move-'))

@@ -1,7 +1,8 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
-import { animated, to, useTransition } from '@react-spring/web'
+import { animated, to, useSpring } from '@react-spring/web'
 import type { CommitRow, CommitActionKind, RefSummary } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
+import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -33,7 +34,6 @@ const GRAPH_RIGHT_GUTTER = 520
 const PAD_TOP = 40
 const PAD_LEFT = 40
 const LANE_ORIGIN_X = PAD_LEFT + GRAPH_LEFT_GUTTER
-const GRAPH_MUTATION_SETTLE_MS = 2600
 const GRAPH_SPRING_CONFIG = { mass: 2.1, tension: 180, friction: 28 }
 const REF_PILL_GAP = 6
 const REF_PILL_HORIZONTAL_PADDING = 14
@@ -99,10 +99,83 @@ interface VisibleEdgeItem {
   opacity: number
 }
 
+interface VisibleEdge {
+  from: LayoutNode
+  to: LayoutNode
+  isMerge: boolean
+  key: string
+}
+
 interface CurrentLaneHighlight {
   key: string
   x: number
   color: string
+}
+
+type GraphLayout = ReturnType<typeof buildLayout>
+
+interface GraphAnimationSnapshot {
+  fromLayout: GraphLayout
+  toLayout: GraphLayout
+  fromCurrentBranch: string | null
+  toCurrentBranch: string | null
+}
+
+interface RenderedEdgeItem {
+  key: string
+  path: string
+  stroke: string
+  fromStrokeWidth: number
+  toStrokeWidth: number
+  fromOpacity: number
+  toOpacity: number
+  fromX1: number
+  fromY1: number
+  fromX2: number
+  fromY2: number
+  toX1: number
+  toY1: number
+  toX2: number
+  toY2: number
+}
+
+interface RenderedNodeItem {
+  key: string
+  row: CommitRow
+  interactive: boolean
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+  fromOpacity: number
+  toOpacity: number
+}
+
+interface RenderedRefItem {
+  key: string
+  placement: RefPlacement
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+  fromOpacity: number
+  toOpacity: number
+  fromScale: number
+  toScale: number
+}
+
+interface RenderedLaneHighlight {
+  key: string
+  color: string
+  fromX: number
+  toX: number
+  fromOpacity: number
+  toOpacity: number
+}
+
+interface EdgeRoutingData {
+  plans: Map<string, EdgeRoutePlan>
+  bundleOffsets: Map<string, number>
 }
 
 function upstreamShortName(upstream?: string) {
@@ -745,6 +818,10 @@ function buildAnimatedEdgePath(x1: number, y1: number, x2: number, y2: number) {
   return edgePath(start.x, start.y, end.x, end.y)
 }
 
+function lerp(from: number, toValue: number, progress: number) {
+  return from + (toValue - from) * progress
+}
+
 // ---------------------------------------------------------------------------
 // Compute visible window indices from scroll position
 // ---------------------------------------------------------------------------
@@ -764,6 +841,160 @@ function edgeIntersectsRange(fromIdx: number, toIdx: number, firstIdx: number, l
   const top = Math.min(fromIdx, toIdx)
   const bottom = Math.max(fromIdx, toIdx)
   return bottom >= firstIdx && top <= lastIdx
+}
+
+function buildVisibleWindow(layout: GraphLayout, firstIdx: number, lastIdx: number) {
+  const visibleNodes = layout.nodes.slice(firstIdx, lastIdx + 1)
+  const visibleEdges: VisibleEdge[] = []
+
+  for (const node of layout.nodes) {
+    for (let parentIndex = 0; parentIndex < node.row.parentShas.length; parentIndex++) {
+      const parent = layout.shaToNode.get(node.row.parentShas[parentIndex])
+      if (!parent) continue
+      if (!edgeIntersectsRange(node.idx, parent.idx, firstIdx, lastIdx)) continue
+      visibleEdges.push({
+        from: node,
+        to: parent,
+        isMerge: parentIndex > 0,
+        key: `${node.row.sha}-${parent.row.sha}`,
+      })
+    }
+  }
+
+  return { visibleNodes, visibleEdges }
+}
+
+function buildCurrentBranchEdgeKeys(layout: GraphLayout | null, currentBranch: string | null) {
+  const keys = new Set<string>()
+  if (!layout || !currentBranch) return keys
+
+  const currentTip = layout.nodes.find((node) => node.row.refNames.includes(currentBranch))
+  if (!currentTip) return keys
+
+  let sha: string | undefined = currentTip.row.sha
+  const visited = new Set<string>()
+
+  while (sha && !visited.has(sha)) {
+    visited.add(sha)
+    const node = layout.shaToNode.get(sha)
+    const firstParentSha = node?.row.parentShas[0]
+    if (!node || !firstParentSha) break
+
+    const parent = layout.shaToNode.get(firstParentSha)
+    if (!parent) break
+
+    keys.add(`${node.row.sha}-${parent.row.sha}`)
+    sha = parent.row.sha
+  }
+
+  return keys
+}
+
+function buildCurrentLaneHighlight(layout: GraphLayout | null, currentBranch: string | null): CurrentLaneHighlight | null {
+  if (!layout || !currentBranch) return null
+
+  const tipNode = layout.nodes.find((node) => node.row.refNames.includes(currentBranch))
+  if (!tipNode) return null
+
+  return {
+    key: currentBranch,
+    x: tipNode.x - PRIMARY_LANE_HIGHLIGHT_WIDTH / 2,
+    color: laneColor(tipNode.row.lane),
+  }
+}
+
+function buildEdgeRoutingData(visibleEdges: VisibleEdge[], occupiedLanes: number[]): EdgeRoutingData {
+  const plans = new Map<string, EdgeRoutePlan>()
+  const bundleGroups = new Map<string, Array<{ key: string; topIdx: number; bottomIdx: number; innerLane?: number }>>()
+
+  for (const edge of visibleEdges) {
+    const plan = planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes)
+    plans.set(edge.key, plan)
+
+    const bundleKey = edgeBundleKey(plan)
+    if (!bundleKey) continue
+
+    const group = bundleGroups.get(bundleKey)
+    const item = {
+      key: edge.key,
+      topIdx: Math.min(edge.from.idx, edge.to.idx),
+      bottomIdx: Math.max(edge.from.idx, edge.to.idx),
+      innerLane: plan.mode === 'outer-rail' ? plan.innerLane : undefined,
+    }
+    if (group) group.push(item)
+    else bundleGroups.set(bundleKey, [item])
+  }
+
+  const bundleOffsets = new Map<string, number>()
+
+  for (const items of bundleGroups.values()) {
+    const samplePlan = plans.get(items[0]?.key ?? '')
+    if (!samplePlan) continue
+
+    if (samplePlan.mode === 'outer-rail') {
+      items.sort((a, b) => {
+        const aLane = a.innerLane ?? samplePlan.innerLane
+        const bLane = b.innerLane ?? samplePlan.innerLane
+        if (samplePlan.side === 'right' && aLane !== bLane) return aLane - bLane
+        if (samplePlan.side === 'left' && aLane !== bLane) return bLane - aLane
+        return a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key)
+      })
+      for (let i = 0; i < items.length; i++) {
+        const sign = samplePlan.side === 'right' ? 1 : -1
+        bundleOffsets.set(items[i].key, i * EDGE_BUNDLE_GAP * sign)
+      }
+      continue
+    }
+
+    items.sort((a, b) => a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key))
+    const middle = (items.length - 1) / 2
+    for (let i = 0; i < items.length; i++) {
+      bundleOffsets.set(items[i].key, (i - middle) * EDGE_BUNDLE_GAP)
+    }
+  }
+
+  return { plans, bundleOffsets }
+}
+
+function buildVisibleEdgeItems(
+  visibleEdges: VisibleEdge[],
+  edgeRouting: EdgeRoutingData,
+  occupiedLanes: number[],
+  currentBranchEdgeKeys: Set<string>,
+) {
+  return visibleEdges.map<VisibleEdgeItem>((edge) => {
+    const isCurrentBranchEdge = currentBranchEdgeKeys.has(edge.key)
+    return {
+      key: edge.key,
+      path: routedEdgePath(
+        edge.from,
+        edge.to,
+        edgeRouting.plans.get(edge.key) ?? planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes),
+        edgeRouting.bundleOffsets.get(edge.key) ?? 0,
+      ),
+      x1: edge.from.x,
+      y1: edge.from.y,
+      x2: edge.to.x,
+      y2: edge.to.y,
+      isMerge: edge.isMerge,
+      stroke: edge.isMerge ? laneColor(edge.to.row.lane) : laneColor(edge.from.row.lane),
+      strokeWidth: isCurrentBranchEdge ? 4.5 : edge.isMerge ? 2 : 3,
+      opacity: isCurrentBranchEdge ? 0.95 : 0.8,
+    }
+  })
+}
+
+function shouldAnimateGraphMutation(
+  prevRows: CommitRow[] | null,
+  nextRows: CommitRow[] | null,
+  prevCurrentBranch: string | null,
+  nextCurrentBranch: string | null,
+  prevLayout: GraphLayout | null,
+  nextLayout: GraphLayout | null,
+) {
+  if (shouldAnimateHistoryChange(prevRows, nextRows)) return true
+  if (!prevLayout || !nextLayout) return false
+  return prevCurrentBranch !== nextCurrentBranch
 }
 
 // ---------------------------------------------------------------------------
@@ -791,14 +1022,25 @@ export function GraphCanvas() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
+  const viewportMetricsRef = useRef({ scrollTop: 0, clientHeight: 0 })
+  const lastObservedScrollTopRef = useRef(0)
+  const graphAnimationStartFrameRef = useRef<number | null>(null)
+  const scrollTopFrameRef = useRef<number | null>(null)
+  const pendingScrollTopRef = useRef(0)
   const [zoom, setZoom] = useState(1)
   const [scrollTop, setScrollTop] = useState(0)
-  const [graphAnimationActive, setGraphAnimationActive] = useState(false)
+  const [graphAnimation, setGraphAnimation] = useState<GraphAnimationSnapshot | null>(null)
+  const graphAnimationRef = useRef<GraphAnimationSnapshot | null>(null)
   const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
+  const [{ graphProgress }, graphProgressApi] = useSpring(() => ({
+    graphProgress: 1,
+    config: GRAPH_SPRING_CONFIG,
+  }))
   const zoomRef = useRef(1)
   const suppressAutoScrollUntilRef = useRef(0)
   const previousRowsRef = useRef<CommitRow[] | null>(null)
-  const graphAnimationTimeoutRef = useRef<number | null>(null)
+  const previousLayoutRef = useRef<GraphLayout | null>(null)
+  const previousCurrentBranchRef = useRef<string | null>(null)
   // Force re-render counter — incremented when scroll position changes enough
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
@@ -807,47 +1049,6 @@ export function GraphCanvas() {
     if (!histWindow || histWindow.rows.length === 0) return null
     return buildLayout(histWindow.rows)
   }, [histWindow])
-
-  const shouldAnimateGraphChange = useMemo(
-    () => shouldAnimateHistoryChange(previousRowsRef.current, histWindow?.rows ?? null),
-    [histWindow],
-  )
-  const animateGraphLayout = shouldAnimateGraphChange || graphAnimationActive
-
-  useEffect(() => {
-    setMergePreviewVisible(false)
-  }, [selectedRefName])
-
-  useEffect(() => {
-    if (!histWindow) {
-      previousRowsRef.current = null
-      setGraphAnimationActive(false)
-      if (graphAnimationTimeoutRef.current !== null) {
-        window.clearTimeout(graphAnimationTimeoutRef.current)
-        graphAnimationTimeoutRef.current = null
-      }
-      return
-    }
-
-    if (shouldAnimateGraphChange) {
-      setGraphAnimationActive(true)
-      if (graphAnimationTimeoutRef.current !== null) {
-        window.clearTimeout(graphAnimationTimeoutRef.current)
-      }
-      graphAnimationTimeoutRef.current = window.setTimeout(() => {
-        setGraphAnimationActive(false)
-        graphAnimationTimeoutRef.current = null
-      }, GRAPH_MUTATION_SETTLE_MS)
-    }
-
-    previousRowsRef.current = histWindow.rows
-  }, [histWindow, shouldAnimateGraphChange])
-
-  useEffect(() => () => {
-    if (graphAnimationTimeoutRef.current !== null) {
-      window.clearTimeout(graphAnimationTimeoutRef.current)
-    }
-  }, [])
 
   const refMap = useMemo(
     () => new Map(refs.map((ref) => [ref.shortName, ref])),
@@ -864,6 +1065,108 @@ export function GraphCanvas() {
     return current?.shortName ?? null
   }, [refs])
 
+  const syncScrollTopState = useCallback((nextScrollTop: number) => {
+    pendingScrollTopRef.current = nextScrollTop
+    if (scrollTopFrameRef.current !== null) return
+
+    scrollTopFrameRef.current = requestAnimationFrame(() => {
+      scrollTopFrameRef.current = null
+      setScrollTop(pendingScrollTopRef.current)
+    })
+  }, [])
+
+  const stopGraphAnimation = useCallback(() => {
+    if (graphAnimationStartFrameRef.current !== null) {
+      cancelAnimationFrame(graphAnimationStartFrameRef.current)
+      graphAnimationStartFrameRef.current = null
+    }
+    if (!graphAnimationRef.current) return
+    graphProgressApi.stop()
+    graphProgressApi.set({ graphProgress: 1 })
+    graphAnimationRef.current = null
+    setGraphAnimation(null)
+  }, [graphProgressApi])
+
+  const startGraphAnimation = useCallback((snapshot: GraphAnimationSnapshot) => {
+    if (graphAnimationStartFrameRef.current !== null) {
+      cancelAnimationFrame(graphAnimationStartFrameRef.current)
+      graphAnimationStartFrameRef.current = null
+    }
+    graphProgressApi.stop()
+    graphProgressApi.set({ graphProgress: 0 })
+    graphAnimationRef.current = snapshot
+    setGraphAnimation(snapshot)
+    // Let the snapshot paint once before motion starts so the opening frames
+    // do not appear skipped when the graph relayout work is expensive.
+    graphAnimationStartFrameRef.current = requestAnimationFrame(() => {
+      graphAnimationStartFrameRef.current = requestAnimationFrame(() => {
+        graphAnimationStartFrameRef.current = null
+        if (graphAnimationRef.current !== snapshot) return
+        void graphProgressApi.start({
+          graphProgress: 1,
+          immediate: false,
+          config: GRAPH_SPRING_CONFIG,
+          onRest: (result) => {
+            if (!result.finished) return
+            setGraphAnimation((current) => {
+              if (current !== snapshot) return current
+              graphAnimationRef.current = null
+              return null
+            })
+          },
+        })
+      })
+    })
+  }, [graphProgressApi])
+
+  useEffect(() => {
+    setMergePreviewVisible(false)
+  }, [selectedRefName])
+
+  useEffect(() => {
+    if (!layout || !histWindow) {
+      previousRowsRef.current = histWindow?.rows ?? null
+      previousLayoutRef.current = layout
+      previousCurrentBranchRef.current = currentBranch
+      stopGraphAnimation()
+      return
+    }
+
+    const shouldAnimate = shouldAnimateGraphMutation(
+      previousRowsRef.current,
+      histWindow.rows,
+      previousCurrentBranchRef.current,
+      currentBranch,
+      previousLayoutRef.current,
+      layout,
+    )
+
+    if (shouldAnimate && previousLayoutRef.current) {
+      startGraphAnimation({
+        fromLayout: previousLayoutRef.current,
+        toLayout: layout,
+        fromCurrentBranch: previousCurrentBranchRef.current,
+        toCurrentBranch: currentBranch,
+      })
+    } else {
+      stopGraphAnimation()
+    }
+
+    previousRowsRef.current = histWindow.rows
+    previousLayoutRef.current = layout
+    previousCurrentBranchRef.current = currentBranch
+  }, [currentBranch, histWindow, layout, startGraphAnimation, stopGraphAnimation])
+
+  useEffect(() => () => {
+    graphProgressApi.stop()
+    if (graphAnimationStartFrameRef.current !== null) {
+      cancelAnimationFrame(graphAnimationStartFrameRef.current)
+    }
+    if (scrollTopFrameRef.current !== null) {
+      cancelAnimationFrame(scrollTopFrameRef.current)
+    }
+  }, [graphProgressApi])
+
   const locScaleMax = useMemo(
     () => (histWindow ? computeLocScaleMax(histWindow.rows) : 0),
     [histWindow],
@@ -874,42 +1177,23 @@ export function GraphCanvas() {
     [layout],
   )
 
-  const currentBranchEdgeKeys = useMemo(() => {
-    const keys = new Set<string>()
-    if (!layout || !currentBranch) return keys
-
-    const currentTip = layout.nodes.find((node) => node.row.refNames.includes(currentBranch))
-    if (!currentTip) return keys
-
-    let sha: string | undefined = currentTip.row.sha
-    const visited = new Set<string>()
-
-    while (sha && !visited.has(sha)) {
-      visited.add(sha)
-      const node = layout.shaToNode.get(sha)
-      const firstParentSha = node?.row.parentShas[0]
-      if (!node || !firstParentSha) break
-
-      const parent = layout.shaToNode.get(firstParentSha)
-      if (!parent) break
-
-      keys.add(`${node.row.sha}-${parent.row.sha}`)
-      sha = parent.row.sha
-    }
-
-    return keys
-  }, [layout, currentBranch])
+  const currentBranchEdgeKeys = useMemo(
+    () => buildCurrentBranchEdgeKeys(layout, currentBranch),
+    [layout, currentBranch],
+  )
 
   const refreshViewport = useCallback((el: HTMLDivElement, nextZoom: number) => {
     if (!layout) return
-    setScrollTop(el.scrollTop)
+    viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
+    lastObservedScrollTopRef.current = el.scrollTop
+    syncScrollTopState(el.scrollTop)
     if (timeLabelsLayerRef.current) {
       timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
     }
     const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, nextZoom)
     lastRenderedRange.current = { firstIdx, lastIdx }
     forceRender()
-  }, [layout])
+  }, [layout, syncScrollTopState])
 
   // Scroll to a specific commit when scrollToSha changes
   useEffect(() => {
@@ -929,7 +1213,12 @@ export function GraphCanvas() {
 
     const check = () => {
       if (!layout) return
-      setScrollTop(el.scrollTop)
+      const nextScrollTop = el.scrollTop
+      const didScroll = Math.abs(nextScrollTop - lastObservedScrollTopRef.current) > 0.5
+      viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
+      lastObservedScrollTopRef.current = nextScrollTop
+      if (didScroll) stopGraphAnimation()
+      syncScrollTopState(el.scrollTop)
       if (timeLabelsLayerRef.current) {
         timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
       }
@@ -955,7 +1244,9 @@ export function GraphCanvas() {
 
     // Initial
     if (layout) {
-      setScrollTop(el.scrollTop)
+      viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
+      lastObservedScrollTopRef.current = el.scrollTop
+      syncScrollTopState(el.scrollTop)
       if (timeLabelsLayerRef.current) {
         timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
       }
@@ -971,7 +1262,7 @@ export function GraphCanvas() {
       el.removeEventListener('scroll', check)
       ro.disconnect()
     }
-  }, [layout, histWindow, requestMore])
+  }, [layout, histWindow, requestMore, stopGraphAnimation, syncScrollTopState])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -1024,122 +1315,239 @@ export function GraphCanvas() {
   const { visibleNodes, visibleEdges } = useMemo(() => {
     if (!layout) return { visibleNodes: [], visibleEdges: [] }
     const { firstIdx, lastIdx } = lastRenderedRange.current
-
-    const nodes = layout.nodes.slice(firstIdx, lastIdx + 1)
-    const edges: Array<{ from: LayoutNode; to: LayoutNode; isMerge: boolean; key: string }> = []
-
-    // Keep any edge whose row span crosses the virtualized window. This
-    // preserves long same-lane segments even when both endpoint nodes are
-    // currently outside the rendered node slice.
-    for (const node of layout.nodes) {
-      for (let pi = 0; pi < node.row.parentShas.length; pi++) {
-        const parent = layout.shaToNode.get(node.row.parentShas[pi])
-        if (!parent) continue
-        if (!edgeIntersectsRange(node.idx, parent.idx, firstIdx, lastIdx)) continue
-        edges.push({
-          from: node, to: parent, isMerge: pi > 0,
-          key: `${node.row.sha}-${parent.row.sha}`,
-        })
-      }
-    }
-
-    return { visibleNodes: nodes, visibleEdges: edges }
+    return buildVisibleWindow(layout, firstIdx, lastIdx)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, lastRenderedRange.current.firstIdx, lastRenderedRange.current.lastIdx])
 
-  const edgeRouting = useMemo(() => {
-    const plans = new Map<string, EdgeRoutePlan>()
-    const bundleGroups = new Map<string, Array<{ key: string; topIdx: number; bottomIdx: number; innerLane?: number }>>()
-
-    for (const edge of visibleEdges) {
-      const plan = planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes)
-      plans.set(edge.key, plan)
-
-      const bundleKey = edgeBundleKey(plan)
-      if (!bundleKey) continue
-
-      const group = bundleGroups.get(bundleKey)
-      const item = {
-        key: edge.key,
-        topIdx: Math.min(edge.from.idx, edge.to.idx),
-        bottomIdx: Math.max(edge.from.idx, edge.to.idx),
-        innerLane: plan.mode === 'outer-rail' ? plan.innerLane : undefined,
-      }
-      if (group) group.push(item)
-      else bundleGroups.set(bundleKey, [item])
-    }
-
-    const bundleOffsets = new Map<string, number>()
-
-    for (const items of bundleGroups.values()) {
-      const samplePlan = plans.get(items[0]?.key ?? '')
-      if (!samplePlan) continue
-
-      if (samplePlan.mode === 'outer-rail') {
-        items.sort((a, b) => {
-          const aLane = a.innerLane ?? samplePlan.innerLane
-          const bLane = b.innerLane ?? samplePlan.innerLane
-          if (samplePlan.side === 'right' && aLane !== bLane) return aLane - bLane
-          if (samplePlan.side === 'left' && aLane !== bLane) return bLane - aLane
-          return a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key)
-        })
-        for (let i = 0; i < items.length; i++) {
-          const sign = samplePlan.side === 'right' ? 1 : -1
-          bundleOffsets.set(items[i].key, i * EDGE_BUNDLE_GAP * sign)
-        }
-        continue
-      }
-
-      items.sort((a, b) => a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key))
-      const middle = (items.length - 1) / 2
-      for (let i = 0; i < items.length; i++) {
-        bundleOffsets.set(items[i].key, (i - middle) * EDGE_BUNDLE_GAP)
-      }
-    }
-
-    return { plans, bundleOffsets }
-  }, [visibleEdges, occupiedLanes])
+  const edgeRouting = useMemo(
+    () => buildEdgeRoutingData(visibleEdges, occupiedLanes),
+    [visibleEdges, occupiedLanes],
+  )
 
   const { placements: visibleRefPlacements, rowWidths: rowRefWidths } = useMemo(
     () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName),
     [visibleNodes, currentBranch, selectedRefName],
   )
 
-  const visibleEdgeItems = useMemo<VisibleEdgeItem[]>(() => (
-    visibleEdges.map((edge) => {
-      const isCurrentBranchEdge = currentBranchEdgeKeys.has(edge.key)
-      return {
-        key: edge.key,
-        path: routedEdgePath(
-          edge.from,
-          edge.to,
-          edgeRouting.plans.get(edge.key) ?? planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes),
-          edgeRouting.bundleOffsets.get(edge.key) ?? 0,
-        ),
-        x1: edge.from.x,
-        y1: edge.from.y,
-        x2: edge.to.x,
-        y2: edge.to.y,
-        isMerge: edge.isMerge,
-        stroke: edge.isMerge ? laneColor(edge.to.row.lane) : laneColor(edge.from.row.lane),
-        strokeWidth: isCurrentBranchEdge ? 4.5 : edge.isMerge ? 2 : 3,
-        opacity: isCurrentBranchEdge ? 0.95 : 0.8,
-      }
-    })
-  ), [visibleEdges, currentBranchEdgeKeys, edgeRouting, occupiedLanes])
+  const visibleEdgeItems = useMemo(
+    () => buildVisibleEdgeItems(visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys),
+    [visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys],
+  )
 
-  const currentLaneHighlight = useMemo<CurrentLaneHighlight | null>(() => {
-    if (!layout || !currentBranch) return null
+  const currentLaneHighlight = useMemo(
+    () => buildCurrentLaneHighlight(layout, currentBranch),
+    [layout, currentBranch],
+  )
 
-    const tipNode = layout.nodes.find((node) => node.row.refNames.includes(currentBranch))
-    if (!tipNode) return null
+  const graphAnimationRenderData = useMemo(() => {
+    if (!graphAnimation) return null
 
+    const viewportScrollTop = viewportMetricsRef.current.scrollTop
+    const viewportHeight = viewportMetricsRef.current.clientHeight || scrollRef.current?.clientHeight || 0
+    const fromOccupiedLanes = graphAnimation.fromLayout.nodes.map((node) => node.row.lane)
+    const toOccupiedLanes = graphAnimation.toLayout.nodes.map((node) => node.row.lane)
+    const fromRange = computeVisibleRange(viewportScrollTop, viewportHeight, graphAnimation.fromLayout.nodes.length, zoom)
+    const toRange = computeVisibleRange(viewportScrollTop, viewportHeight, graphAnimation.toLayout.nodes.length, zoom)
+    const fromWindow = buildVisibleWindow(graphAnimation.fromLayout, fromRange.firstIdx, fromRange.lastIdx)
+    const toWindow = buildVisibleWindow(graphAnimation.toLayout, toRange.firstIdx, toRange.lastIdx)
+    const fromRouting = buildEdgeRoutingData(fromWindow.visibleEdges, fromOccupiedLanes)
+    const toRouting = buildEdgeRoutingData(toWindow.visibleEdges, toOccupiedLanes)
+    const fromEdgeItems = buildVisibleEdgeItems(
+      fromWindow.visibleEdges,
+      fromRouting,
+      fromOccupiedLanes,
+      buildCurrentBranchEdgeKeys(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch),
+    )
+    const toEdgeItems = buildVisibleEdgeItems(
+      toWindow.visibleEdges,
+      toRouting,
+      toOccupiedLanes,
+      buildCurrentBranchEdgeKeys(graphAnimation.toLayout, graphAnimation.toCurrentBranch),
+    )
+    const fromRefPlacements = buildRefPlacements(
+      fromWindow.visibleNodes,
+      graphAnimation.fromCurrentBranch,
+      selectedRefName,
+    ).placements
+    const toRefPlacements = buildRefPlacements(
+      toWindow.visibleNodes,
+      graphAnimation.toCurrentBranch,
+      selectedRefName,
+    ).placements
+    const fromLaneHighlight = buildCurrentLaneHighlight(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch)
+    const toLaneHighlight = buildCurrentLaneHighlight(graphAnimation.toLayout, graphAnimation.toCurrentBranch)
+
+    const fromNodeMap = new Map(fromWindow.visibleNodes.map((node) => [node.row.sha, node]))
+    const toNodeMap = new Map(toWindow.visibleNodes.map((node) => [node.row.sha, node]))
+    const fromEdgeMap = new Map(fromEdgeItems.map((edge) => [edge.key, edge]))
+    const toEdgeMap = new Map(toEdgeItems.map((edge) => [edge.key, edge]))
+    const fromRefMap = new Map(fromRefPlacements.map((placement) => [placement.refName, placement]))
+    const toRefMap = new Map(toRefPlacements.map((placement) => [placement.refName, placement]))
+
+    const nodes = [...new Set([...fromNodeMap.keys(), ...toNodeMap.keys()])]
+      .map((key) => {
+        const fromNode = fromNodeMap.get(key)
+        const toNode = toNodeMap.get(key)
+        const displayNode = toNode ?? fromNode
+        if (!displayNode) return null
+
+        return {
+          sortIdx: toNode?.idx ?? fromNode?.idx ?? 0,
+          item: {
+            key,
+            row: displayNode.row,
+            interactive: !!toNode,
+            fromX: fromNode?.x ?? displayNode.x,
+            fromY: fromNode ? fromNode.y : displayNode.y + GRAPH_ENTER_OFFSET_Y,
+            toX: toNode?.x ?? displayNode.x,
+            toY: toNode ? toNode.y : displayNode.y - GRAPH_EXIT_OFFSET_Y,
+            fromOpacity: fromNode ? 1 : 0,
+            toOpacity: toNode ? 1 : 0,
+          } satisfies RenderedNodeItem,
+        }
+      })
+      .filter((entry): entry is { sortIdx: number; item: RenderedNodeItem } => entry !== null)
+      .sort((left, right) => left.sortIdx - right.sortIdx)
+      .map((entry) => entry.item)
+
+    const edges = [...new Set([...fromEdgeMap.keys(), ...toEdgeMap.keys()])]
+      .map((key) => {
+        const fromEdge = fromEdgeMap.get(key)
+        const toEdge = toEdgeMap.get(key)
+        const displayEdge = toEdge ?? fromEdge
+        if (!displayEdge) return null
+
+        const sortY = Math.min(toEdge?.y1 ?? fromEdge?.y1 ?? 0, toEdge?.y2 ?? fromEdge?.y2 ?? 0)
+        return {
+          sortY,
+          item: {
+            key,
+            path: toEdge?.path ?? fromEdge?.path ?? '',
+            stroke: toEdge?.stroke ?? fromEdge?.stroke ?? '#cdd6f4',
+            fromStrokeWidth: fromEdge?.strokeWidth ?? displayEdge.strokeWidth,
+            toStrokeWidth: toEdge?.strokeWidth ?? displayEdge.strokeWidth,
+            fromOpacity: fromEdge?.opacity ?? 0,
+            toOpacity: toEdge?.opacity ?? 0,
+            fromX1: fromEdge?.x1 ?? displayEdge.x1,
+            fromY1: fromEdge ? fromEdge.y1 : displayEdge.y1 + GRAPH_ENTER_OFFSET_Y,
+            fromX2: fromEdge?.x2 ?? displayEdge.x2,
+            fromY2: fromEdge ? fromEdge.y2 : displayEdge.y2 + GRAPH_ENTER_OFFSET_Y,
+            toX1: toEdge?.x1 ?? displayEdge.x1,
+            toY1: toEdge ? toEdge.y1 : displayEdge.y1 - GRAPH_EXIT_OFFSET_Y,
+            toX2: toEdge?.x2 ?? displayEdge.x2,
+            toY2: toEdge ? toEdge.y2 : displayEdge.y2 - GRAPH_EXIT_OFFSET_Y,
+          } satisfies RenderedEdgeItem,
+        }
+      })
+      .filter((entry): entry is { sortY: number; item: RenderedEdgeItem } => entry !== null)
+      .sort((left, right) => left.sortY - right.sortY)
+      .map((entry) => entry.item)
+
+    const refs = [...new Set([...fromRefMap.keys(), ...toRefMap.keys()])]
+      .map((key) => {
+        const fromPlacement = fromRefMap.get(key)
+        const toPlacement = toRefMap.get(key)
+        const displayPlacement = toPlacement ?? fromPlacement
+        if (!displayPlacement) return null
+
+        return {
+          sortY: toPlacement?.y ?? fromPlacement?.y ?? 0,
+          item: {
+            key,
+            placement: displayPlacement,
+            fromX: fromPlacement?.x ?? displayPlacement.x,
+            fromY: fromPlacement ? fromPlacement.y : displayPlacement.y + GRAPH_ENTER_OFFSET_Y,
+            toX: toPlacement?.x ?? displayPlacement.x,
+            toY: toPlacement ? toPlacement.y : displayPlacement.y - GRAPH_EXIT_OFFSET_Y,
+            fromOpacity: fromPlacement ? 1 : 0,
+            toOpacity: toPlacement ? 1 : 0,
+            fromScale: fromPlacement ? 1 : 0.9,
+            toScale: toPlacement ? 1 : 0.92,
+          } satisfies RenderedRefItem,
+        }
+      })
+      .filter((entry): entry is { sortY: number; item: RenderedRefItem } => entry !== null)
+      .sort((left, right) => left.sortY - right.sortY)
+      .map((entry) => entry.item)
+
+    const lane = fromLaneHighlight || toLaneHighlight
+      ? {
+          key: toLaneHighlight?.key ?? fromLaneHighlight?.key ?? 'current-lane',
+          color: toLaneHighlight?.color ?? fromLaneHighlight?.color ?? '#89b4fa',
+          fromX: fromLaneHighlight?.x ?? toLaneHighlight?.x ?? 0,
+          toX: toLaneHighlight?.x ?? fromLaneHighlight?.x ?? 0,
+          fromOpacity: fromLaneHighlight ? 1 : 0,
+          toOpacity: toLaneHighlight ? 1 : 0,
+        } satisfies RenderedLaneHighlight
+      : null
+
+    return { nodes, edges, refs, lane }
+  }, [graphAnimation, selectedRefName, zoom])
+
+  const renderedNodeItems = useMemo(
+    () => graphAnimationRenderData?.nodes ?? visibleNodes.map((node) => ({
+      key: node.row.sha,
+      row: node.row,
+      interactive: true,
+      fromX: node.x,
+      fromY: node.y,
+      toX: node.x,
+      toY: node.y,
+      fromOpacity: 1,
+      toOpacity: 1,
+    })),
+    [graphAnimationRenderData, visibleNodes],
+  )
+
+  const renderedEdgeItems = useMemo(
+    () => graphAnimationRenderData?.edges ?? visibleEdgeItems.map((edge) => ({
+      key: edge.key,
+      path: edge.path,
+      stroke: edge.stroke,
+      fromStrokeWidth: edge.strokeWidth,
+      toStrokeWidth: edge.strokeWidth,
+      fromOpacity: edge.opacity,
+      toOpacity: edge.opacity,
+      fromX1: edge.x1,
+      fromY1: edge.y1,
+      fromX2: edge.x2,
+      fromY2: edge.y2,
+      toX1: edge.x1,
+      toY1: edge.y1,
+      toX2: edge.x2,
+      toY2: edge.y2,
+    })),
+    [graphAnimationRenderData, visibleEdgeItems],
+  )
+
+  const renderedRefItems = useMemo(
+    () => graphAnimationRenderData?.refs ?? visibleRefPlacements.map((placement) => ({
+      key: placement.refName,
+      placement,
+      fromX: placement.x,
+      fromY: placement.y,
+      toX: placement.x,
+      toY: placement.y,
+      fromOpacity: 1,
+      toOpacity: 1,
+      fromScale: 1,
+      toScale: 1,
+    })),
+    [graphAnimationRenderData, visibleRefPlacements],
+  )
+
+  const renderedLaneHighlight = useMemo(() => {
+    if (graphAnimationRenderData) return graphAnimationRenderData.lane
+    if (!currentLaneHighlight) return null
     return {
-      key: currentBranch,
-      x: tipNode.x - PRIMARY_LANE_HIGHLIGHT_WIDTH / 2,
-      color: laneColor(tipNode.row.lane),
-    }
-  }, [layout, currentBranch])
+      key: currentLaneHighlight.key,
+      color: currentLaneHighlight.color,
+      fromX: currentLaneHighlight.x,
+      toX: currentLaneHighlight.x,
+      fromOpacity: 1,
+      toOpacity: 1,
+    } satisfies RenderedLaneHighlight
+  }, [graphAnimationRenderData, currentLaneHighlight])
 
   const currentHeadNode = useMemo(
     () => (layout && currentBranch ? layout.nodes.find((node) => node.row.refNames.includes(currentBranch)) ?? null : null),
@@ -1502,124 +1910,7 @@ export function GraphCanvas() {
       alert(err instanceof Error ? err.message : 'Action failed')
     })
   }, [selectedNode, performCommitAction])
-
-  const graphTransitionImmediate = !animateGraphLayout
-
-  const edgeTransitions = useTransition(visibleEdgeItems, {
-    keys: (item) => item.key,
-    from: (item) => ({
-      x1: item.x1,
-      y1: item.y1 + GRAPH_ENTER_OFFSET_Y,
-      x2: item.x2,
-      y2: item.y2 + GRAPH_ENTER_OFFSET_Y,
-      opacity: 0,
-    }),
-    enter: (item) => ({
-      x1: item.x1,
-      y1: item.y1,
-      x2: item.x2,
-      y2: item.y2,
-      opacity: item.opacity,
-    }),
-    update: (item) => ({
-      x1: item.x1,
-      y1: item.y1,
-      x2: item.x2,
-      y2: item.y2,
-      opacity: item.opacity,
-    }),
-    leave: (item) => ({
-      x1: item.x1,
-      y1: item.y1 - GRAPH_EXIT_OFFSET_Y,
-      x2: item.x2,
-      y2: item.y2 - GRAPH_EXIT_OFFSET_Y,
-      opacity: 0,
-    }),
-    immediate: graphTransitionImmediate,
-    config: GRAPH_SPRING_CONFIG,
-  })
-
-  const nodeTransitions = useTransition(visibleNodes, {
-    keys: (node) => node.row.sha,
-    from: (node) => ({
-      x: node.x,
-      y: node.y + GRAPH_ENTER_OFFSET_Y,
-      opacity: 0,
-      scale: 0.88,
-    }),
-    enter: (node) => ({
-      x: node.x,
-      y: node.y,
-      opacity: 1,
-      scale: 1,
-    }),
-    update: (node) => ({
-      x: node.x,
-      y: node.y,
-      opacity: 1,
-      scale: 1,
-    }),
-    leave: (node) => ({
-      x: node.x,
-      y: node.y - GRAPH_EXIT_OFFSET_Y,
-      opacity: 0,
-      scale: 0.92,
-    }),
-    immediate: graphTransitionImmediate,
-    config: GRAPH_SPRING_CONFIG,
-  })
-
-  const refTransitions = useTransition(visibleRefPlacements, {
-    keys: (placement) => placement.refName,
-    from: (placement) => ({
-      x: placement.x,
-      y: placement.y + GRAPH_ENTER_OFFSET_Y,
-      opacity: 0,
-      scale: 0.9,
-    }),
-    enter: (placement) => ({
-      x: placement.x,
-      y: placement.y,
-      opacity: 1,
-      scale: 1,
-    }),
-    update: (placement) => ({
-      x: placement.x,
-      y: placement.y,
-      opacity: 1,
-      scale: 1,
-    }),
-    leave: (placement) => ({
-      x: placement.x,
-      y: placement.y - GRAPH_EXIT_OFFSET_Y,
-      opacity: 0,
-      scale: 0.92,
-    }),
-    immediate: graphTransitionImmediate,
-    config: GRAPH_SPRING_CONFIG,
-  })
-
-  const currentLaneTransitions = useTransition(currentLaneHighlight ? [currentLaneHighlight] : [], {
-    keys: (item) => item.key,
-    from: (item) => ({
-      x: item.x,
-      opacity: 0,
-    }),
-    enter: (item) => ({
-      x: item.x,
-      opacity: 1,
-    }),
-    update: (item) => ({
-      x: item.x,
-      opacity: 1,
-    }),
-    leave: (item) => ({
-      x: item.x,
-      opacity: 0,
-    }),
-    immediate: graphTransitionImmediate,
-    config: GRAPH_SPRING_CONFIG,
-  })
+  const isGraphAnimating = graphAnimation !== null
 
   if (!layout) {
     return (
@@ -1768,30 +2059,38 @@ export function GraphCanvas() {
           height={fullHeight}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
         >
-          {currentLaneTransitions((style, lane) => {
-            const laneStyle = style as { x: number; opacity: number }
-
-            return (
-              <animated.g key={lane.key} opacity={to(laneStyle.opacity, (opacity) => opacity * 0.95)}>
-                <animated.rect
-                  x={laneStyle.x}
-                  y={0}
-                  width={PRIMARY_LANE_HIGHLIGHT_WIDTH}
-                  height={fullHeight}
-                  rx={18}
-                  fill={`${lane.color}10`}
-                />
-                <animated.rect
-                  x={to(laneStyle.x, (x) => x + 2)}
-                  y={0}
-                  width={PRIMARY_LANE_HIGHLIGHT_WIDTH - 4}
-                  height={fullHeight}
-                  rx={16}
-                  fill={`${lane.color}06`}
-                />
-              </animated.g>
-            )
-          })}
+          {renderedLaneHighlight && (
+            <animated.g
+              key={renderedLaneHighlight.key}
+              opacity={isGraphAnimating
+                ? to(
+                    graphProgress,
+                    (progress) => lerp(renderedLaneHighlight.fromOpacity, renderedLaneHighlight.toOpacity, progress) * 0.95,
+                  )
+                : renderedLaneHighlight.toOpacity * 0.95}
+            >
+              <animated.rect
+                x={isGraphAnimating
+                  ? to(graphProgress, (progress) => lerp(renderedLaneHighlight.fromX, renderedLaneHighlight.toX, progress))
+                  : renderedLaneHighlight.toX}
+                y={0}
+                width={PRIMARY_LANE_HIGHLIGHT_WIDTH}
+                height={fullHeight}
+                rx={18}
+                fill={`${renderedLaneHighlight.color}10`}
+              />
+              <animated.rect
+                x={isGraphAnimating
+                  ? to(graphProgress, (progress) => lerp(renderedLaneHighlight.fromX, renderedLaneHighlight.toX, progress) + 2)
+                  : renderedLaneHighlight.toX + 2}
+                y={0}
+                width={PRIMARY_LANE_HIGHLIGHT_WIDTH - 4}
+                height={fullHeight}
+                rx={16}
+                fill={`${renderedLaneHighlight.color}06`}
+              />
+            </animated.g>
+          )}
           {previewOverlay && (
             <>
               <path
@@ -1814,23 +2113,31 @@ export function GraphCanvas() {
               />
             </>
           )}
-          {edgeTransitions((style, edge) => {
-            const edgeStyle = style as { x1: number; y1: number; x2: number; y2: number; opacity: number }
-
-            return (
-              <animated.path
-                key={edge.key}
-                d={animateGraphLayout
-                  ? to([edgeStyle.x1, edgeStyle.y1, edgeStyle.x2, edgeStyle.y2], buildAnimatedEdgePath)
-                  : edge.path}
-                stroke={edge.stroke}
-                strokeWidth={edge.strokeWidth}
-                fill="none"
-                strokeLinecap="round"
-                opacity={edgeStyle.opacity}
-              />
-            )
-          })}
+          {renderedEdgeItems.map((edge) => (
+            <animated.path
+              key={edge.key}
+              d={isGraphAnimating
+                ? to(graphProgress, (progress) => {
+                    if (progress >= 0.999) return edge.path
+                    return buildAnimatedEdgePath(
+                      lerp(edge.fromX1, edge.toX1, progress),
+                      lerp(edge.fromY1, edge.toY1, progress),
+                      lerp(edge.fromX2, edge.toX2, progress),
+                      lerp(edge.fromY2, edge.toY2, progress),
+                    )
+                  })
+                : edge.path}
+              stroke={edge.stroke}
+              strokeWidth={isGraphAnimating
+                ? to(graphProgress, (progress) => lerp(edge.fromStrokeWidth, edge.toStrokeWidth, progress))
+                : edge.toStrokeWidth}
+              fill="none"
+              strokeLinecap="round"
+              opacity={isGraphAnimating
+                ? to(graphProgress, (progress) => lerp(edge.fromOpacity, edge.toOpacity, progress))
+                : edge.toOpacity}
+            />
+          ))}
           {previewOverlay && (
             <g>
               <circle
@@ -1857,8 +2164,7 @@ export function GraphCanvas() {
               />
             </g>
           )}
-          {nodeTransitions((style, node) => {
-            const nodeStyle = style as { x: number; y: number; opacity: number }
+          {renderedNodeItems.map((node) => {
             const { row } = node
             const selected = row.sha === selectedSha
             const color = laneColor(row.lane)
@@ -1870,27 +2176,68 @@ export function GraphCanvas() {
             const rightClipPathId = `${clipPathBaseId}-right`
             const trackStroke = selected ? GAUGE_TRACK_STROKE_SELECTED : GAUGE_TRACK_STROKE
             const trackFill = selected ? GAUGE_TRACK_FILL_SELECTED : GAUGE_BACKGROUND_FILL
+            const nodeX = isGraphAnimating
+              ? to(graphProgress, (progress) => lerp(node.fromX, node.toX, progress))
+              : node.toX
+            const nodeY = isGraphAnimating
+              ? to(graphProgress, (progress) => lerp(node.fromY, node.toY, progress))
+              : node.toY
+            const nodeOpacity = isGraphAnimating
+              ? to(graphProgress, (progress) => lerp(node.fromOpacity, node.toOpacity, progress))
+              : node.toOpacity
+            const leftGaugePath = isGraphAnimating
+              ? to(graphProgress, (progress) => describeHalfCirclePath(
+                  lerp(node.fromX, node.toX, progress),
+                  lerp(node.fromY, node.toY, progress),
+                  GAUGE_RADIUS,
+                  'left',
+                ))
+              : describeHalfCirclePath(node.toX, node.toY, GAUGE_RADIUS, 'left')
+            const rightGaugePath = isGraphAnimating
+              ? to(graphProgress, (progress) => describeHalfCirclePath(
+                  lerp(node.fromX, node.toX, progress),
+                  lerp(node.fromY, node.toY, progress),
+                  GAUGE_RADIUS,
+                  'right',
+                ))
+              : describeHalfCirclePath(node.toX, node.toY, GAUGE_RADIUS, 'right')
+            const leftGaugeArc = isGraphAnimating
+              ? to(graphProgress, (progress) => describeHalfCircleArc(
+                  lerp(node.fromX, node.toX, progress),
+                  lerp(node.fromY, node.toY, progress),
+                  GAUGE_RADIUS,
+                  'left',
+                ))
+              : describeHalfCircleArc(node.toX, node.toY, GAUGE_RADIUS, 'left')
+            const rightGaugeArc = isGraphAnimating
+              ? to(graphProgress, (progress) => describeHalfCircleArc(
+                  lerp(node.fromX, node.toX, progress),
+                  lerp(node.fromY, node.toY, progress),
+                  GAUGE_RADIUS,
+                  'right',
+                ))
+              : describeHalfCircleArc(node.toX, node.toY, GAUGE_RADIUS, 'right')
 
             return (
               <animated.g
                 key={row.sha}
-                onClick={(e) => { e.stopPropagation(); selectCommit(row.sha) }}
-                opacity={nodeStyle.opacity}
-                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                onClick={node.interactive ? (e) => { e.stopPropagation(); selectCommit(row.sha) } : undefined}
+                opacity={nodeOpacity}
+                style={{ cursor: node.interactive ? 'pointer' : 'default', pointerEvents: node.interactive ? 'auto' : 'none' }}
               >
                 <title>{`${row.subject}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
                 {selected && (
                   <animated.circle
-                    cx={nodeStyle.x}
-                    cy={nodeStyle.y}
+                    cx={nodeX}
+                    cy={nodeY}
                     r={NODE_RADIUS * 2.5}
                     fill={color}
                     opacity={0.15}
                   />
                 )}
                 <animated.circle
-                  cx={nodeStyle.x}
-                  cy={nodeStyle.y}
+                  cx={nodeX}
+                  cy={nodeY}
                   r={NODE_RADIUS}
                   fill={NODE_FILL}
                   stroke={color}
@@ -1898,28 +2245,22 @@ export function GraphCanvas() {
                 />
                 <defs>
                   <clipPath id={leftClipPathId} clipPathUnits="userSpaceOnUse">
-                    <animated.path
-                      d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'left'))}
-                    />
+                    <animated.path d={leftGaugePath} />
                   </clipPath>
                   <clipPath id={rightClipPathId} clipPathUnits="userSpaceOnUse">
-                    <animated.path
-                      d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'right'))}
-                    />
+                    <animated.path d={rightGaugePath} />
                   </clipPath>
                 </defs>
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'left'))}
-                  fill={trackFill}
-                />
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCirclePath(x, y, GAUGE_RADIUS, 'right'))}
-                  fill={trackFill}
-                />
+                <animated.path d={leftGaugePath} fill={trackFill} />
+                <animated.path d={rightGaugePath} fill={trackFill} />
                 {additionsFillHeight > 0 && (
                   <animated.rect
-                    x={to(nodeStyle.x, (x) => x - GAUGE_RADIUS)}
-                    y={to(nodeStyle.y, (y) => y + GAUGE_RADIUS - additionsFillHeight)}
+                    x={isGraphAnimating
+                      ? to(graphProgress, (progress) => lerp(node.fromX, node.toX, progress) - GAUGE_RADIUS)
+                      : node.toX - GAUGE_RADIUS}
+                    y={isGraphAnimating
+                      ? to(graphProgress, (progress) => lerp(node.fromY, node.toY, progress) + GAUGE_RADIUS - additionsFillHeight)
+                      : node.toY + GAUGE_RADIUS - additionsFillHeight}
                     width={GAUGE_RADIUS}
                     height={additionsFillHeight}
                     fill={GAUGE_ADDITIONS_FILL}
@@ -1928,38 +2269,34 @@ export function GraphCanvas() {
                 )}
                 {deletionsFillHeight > 0 && (
                   <animated.rect
-                    x={nodeStyle.x}
-                    y={to(nodeStyle.y, (y) => y + GAUGE_RADIUS - deletionsFillHeight)}
+                    x={nodeX}
+                    y={isGraphAnimating
+                      ? to(graphProgress, (progress) => lerp(node.fromY, node.toY, progress) + GAUGE_RADIUS - deletionsFillHeight)
+                      : node.toY + GAUGE_RADIUS - deletionsFillHeight}
                     width={GAUGE_RADIUS}
                     height={deletionsFillHeight}
                     fill={GAUGE_DELETIONS_FILL}
                     clipPath={`url(#${rightClipPathId})`}
                   />
                 )}
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCircleArc(x, y, GAUGE_RADIUS, 'left'))}
-                  stroke={trackStroke}
-                  strokeWidth={1.6}
-                  fill="none"
-                />
-                <animated.path
-                  d={to([nodeStyle.x, nodeStyle.y], (x, y) => describeHalfCircleArc(x, y, GAUGE_RADIUS, 'right'))}
-                  stroke={trackStroke}
-                  strokeWidth={1.6}
-                  fill="none"
-                />
+                <animated.path d={leftGaugeArc} stroke={trackStroke} strokeWidth={1.6} fill="none" />
+                <animated.path d={rightGaugeArc} stroke={trackStroke} strokeWidth={1.6} fill="none" />
                 <animated.line
-                  x1={nodeStyle.x}
-                  y1={to(nodeStyle.y, (y) => y - GAUGE_RADIUS)}
-                  x2={nodeStyle.x}
-                  y2={to(nodeStyle.y, (y) => y + GAUGE_RADIUS)}
+                  x1={nodeX}
+                  y1={isGraphAnimating
+                    ? to(graphProgress, (progress) => lerp(node.fromY, node.toY, progress) - GAUGE_RADIUS)
+                    : node.toY - GAUGE_RADIUS}
+                  x2={nodeX}
+                  y2={isGraphAnimating
+                    ? to(graphProgress, (progress) => lerp(node.fromY, node.toY, progress) + GAUGE_RADIUS)
+                    : node.toY + GAUGE_RADIUS}
                   stroke={trackStroke}
                   strokeWidth={1.6}
                 />
                 {row.parentShas.length > 1 && (
                   <animated.circle
-                    cx={nodeStyle.x}
-                    cy={nodeStyle.y}
+                    cx={nodeX}
+                    cy={nodeY}
                     r={2}
                     fill={color}
                   />
@@ -1969,12 +2306,12 @@ export function GraphCanvas() {
           })}
         </svg>
 
-        {refTransitions((style, placement) => {
-          const refStyle = style as { x: number; y: number; opacity: number; scale: number }
+        {renderedRefItems.map((refItem) => {
+          const { placement } = refItem
 
           return (
             <animated.div
-              key={placement.refName}
+              key={refItem.key}
               onClick={(e) => handleRefSelect(e, placement.refName)}
               style={{
                 position: 'absolute',
@@ -1995,11 +2332,15 @@ export function GraphCanvas() {
                 userSelect: 'none',
                 boxShadow: placement.isSelected || placement.isCurrent ? `0 0 6px ${placement.color}40` : 'none',
                 transformOrigin: 'top left',
-                opacity: refStyle.opacity,
-                transform: to(
-                  [refStyle.x, refStyle.y, refStyle.scale],
-                  (x, y, scale) => `translate(${x}px, ${y}px) scale(${scale})`,
-                ),
+                opacity: isGraphAnimating
+                  ? to(graphProgress, (progress) => lerp(refItem.fromOpacity, refItem.toOpacity, progress))
+                  : refItem.toOpacity,
+                transform: isGraphAnimating
+                  ? to(
+                      graphProgress,
+                      (progress) => `translate(${lerp(refItem.fromX, refItem.toX, progress)}px, ${lerp(refItem.fromY, refItem.toY, progress)}px) scale(${lerp(refItem.fromScale, refItem.toScale, progress)})`,
+                    )
+                  : `translate(${refItem.toX}px, ${refItem.toY}px) scale(${refItem.toScale})`,
               }}
             >
               {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
@@ -2127,154 +2468,5 @@ export function GraphCanvas() {
       </div>
 
     </div>
-  )
-}
-
-function CommitActionButton({
-  label,
-  onClick,
-  tone,
-  onMouseEnter,
-  onMouseLeave,
-}: {
-  label: string
-  onClick: () => void
-  tone: 'success' | 'warning' | 'uncommit' | 'merge'
-  onMouseEnter?: () => void
-  onMouseLeave?: () => void
-}) {
-  const color = tone === 'success'
-    ? '#0b1020'
-    : tone === 'warning'
-      ? '#fff7d6'
-      : tone === 'merge'
-        ? '#fff7ff'
-        : '#fff7ed'
-  const border = tone === 'success'
-    ? '#6d9658'
-    : tone === 'warning'
-      ? '#d8a43a'
-      : tone === 'merge'
-        ? '#b764d9'
-        : '#9a3412'
-  const background = tone === 'success'
-    ? '#8dcf78'
-    : tone === 'warning'
-      ? '#b88a25'
-      : tone === 'merge'
-        ? '#c77de4'
-        : '#b45309'
-  const hover = tone === 'success'
-    ? '#9cda89'
-    : tone === 'warning'
-      ? '#c99a30'
-      : tone === 'merge'
-        ? '#d08bea'
-        : '#c26115'
-
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: 104,
-        height: 30,
-        padding: '0 12px',
-        background,
-        border: `1px solid ${border}`,
-        borderRadius: 7,
-        color,
-        fontSize: 12,
-        fontWeight: 700,
-        cursor: 'pointer',
-        fontFamily: 'inherit',
-        whiteSpace: 'nowrap',
-        position: 'relative',
-        zIndex: 8,
-        boxShadow: '0 10px 24px rgba(0,0,0,0.35)',
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = hover }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = background }}
-      onPointerEnter={onMouseEnter}
-      onPointerLeave={onMouseLeave}
-    >
-      {label}
-    </button>
-  )
-}
-
-function RefActionButton({
-  label,
-  onClick,
-  tone,
-  size = 'default',
-  variant = 'solid',
-}: {
-  label: string
-  onClick: () => void
-  tone: 'neutral' | 'warning' | 'danger'
-  size?: 'default' | 'compact'
-  variant?: 'solid' | 'ghost'
-}) {
-  const compact = size === 'compact'
-  const ghost = variant === 'ghost'
-
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: compact ? 72 : 84,
-        height: compact ? 20 : 28,
-        padding: compact ? '0 8px' : '0 10px',
-        background: ghost
-          ? 'rgba(24,24,37,0.5)'
-          : tone === 'danger'
-            ? '#5c2430'
-            : tone === 'warning'
-              ? '#7a4e11'
-              : '#2f3348',
-        border: ghost
-          ? '1px solid transparent'
-          : `1px solid ${tone === 'danger' ? '#8b3a4a' : tone === 'warning' ? '#d19128' : '#4a4f68'}`,
-        color: tone === 'danger' ? '#f5a6b8' : tone === 'warning' ? '#f9d28b' : ghost ? '#bac2de' : '#cdd6f4',
-        fontSize: compact ? 11 : 12,
-        fontWeight: 600,
-        cursor: 'pointer',
-        borderRadius: compact ? 6 : 7,
-        fontFamily: 'inherit',
-        whiteSpace: 'nowrap',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = ghost
-          ? 'rgba(49,50,68,0.8)'
-          : tone === 'danger'
-            ? '#6a2b39'
-            : tone === 'warning'
-              ? '#8a5a16'
-            : '#3a4058'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = ghost
-          ? 'rgba(24,24,37,0.5)'
-          : tone === 'danger'
-            ? '#5c2430'
-            : tone === 'warning'
-              ? '#7a4e11'
-            : '#2f3348'
-      }}
-    >
-      {label}
-    </button>
   )
 }
