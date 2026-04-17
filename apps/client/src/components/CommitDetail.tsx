@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import type { CommitDetailResponse, CommitDiffResponse, ChangedPath } from '@ingit/rpc-contract'
 
 interface PRInfo {
@@ -8,14 +9,40 @@ interface PRInfo {
   mergedAt: string | null
 }
 
+type CIRunState = 'success' | 'pending' | 'failure' | 'error' | 'neutral'
+
+interface CIRun {
+  name: string
+  description?: string
+  state: CIRunState
+  url?: string
+}
+
 interface CommitDetailProps {
   commit: CommitDetailResponse | null
   diff: CommitDiffResponse | null
   branchName?: string | null
   prs?: PRInfo[]
+  ciRuns?: CIRun[]
   githubUrl?: string | null
   onCheckout?: (sha: string) => void
   onNavigate?: (sha: string) => void
+}
+
+const CI_STATE_COLOR: Record<CIRunState, string> = {
+  success: '#a6e3a1',
+  failure: '#f38ba8',
+  error: '#f38ba8',
+  pending: '#f9e2af',
+  neutral: '#6c7086',
+}
+
+const CI_STATE_ICON: Record<CIRunState, string> = {
+  success: '✓',
+  failure: '✗',
+  error: '✗',
+  pending: '◔',
+  neutral: '–',
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -48,26 +75,9 @@ function formatDate(unix: number): string {
   })
 }
 
-export function CommitDetail({ commit, diff, branchName, prs, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
+export function CommitDetail({ commit, diff, branchName, prs, ciRuns, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
   if (!commit) {
-    return (
-      <div
-        style={{
-          width: 400,
-          flexShrink: 0,
-          height: '100%',
-          background: '#181825',
-          borderLeft: '1px solid #313244',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#45475a',
-          fontSize: 13,
-        }}
-      >
-        Select a commit
-      </div>
-    )
+    return null
   }
 
   const shortSha = commit.sha.slice(0, 12)
@@ -205,7 +215,7 @@ export function CommitDetail({ commit, diff, branchName, prs, githubUrl, onCheck
 
         {/* GitHub commit link */}
         {githubUrl && (
-          <div style={{ marginTop: 4, marginBottom: 4 }}>
+          <div style={{ marginTop: 4, marginBottom: 4, display: 'flex', gap: 12 }}>
             <a
               href={`${githubUrl}/commit/${commit.sha}`}
               target="_blank"
@@ -214,6 +224,23 @@ export function CommitDetail({ commit, diff, branchName, prs, githubUrl, onCheck
             >
               View on GitHub
             </a>
+            <a
+              href={`${githubUrl}/commit/${commit.sha}/checks`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: 11, color: '#6c7086', textDecoration: 'underline' }}
+            >
+              CI runs
+            </a>
+          </div>
+        )}
+
+        {/* Per-check CI status */}
+        {ciRuns && ciRuns.length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {ciRuns.map((run, i) => (
+              <CIRunRow key={`${run.name}-${i}`} run={run} />
+            ))}
           </div>
         )}
 
@@ -389,6 +416,58 @@ function FileRow({ cp }: { cp: ChangedPath }) {
       </span>
     </div>
   )
+}
+
+function CIRunRow({ run }: { run: CIRun }) {
+  const color = CI_STATE_COLOR[run.state]
+  const icon = CI_STATE_ICON[run.state]
+  const content = (
+    <>
+      <span style={{ color, fontSize: 12, fontWeight: 700, width: 12, textAlign: 'center', flexShrink: 0 }}>
+        {icon}
+      </span>
+      <span style={{
+        color: '#cdd6f4',
+        fontWeight: 500,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        maxWidth: '55%',
+      }}>
+        {run.name}
+      </span>
+      {run.description && (
+        <span style={{
+          color: '#6c7086',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          flex: 1,
+        }}>
+          {run.description}
+        </span>
+      )}
+    </>
+  )
+
+  const sharedStyle: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 12,
+    padding: '2px 0',
+    textDecoration: 'none',
+  }
+
+  if (run.url) {
+    return (
+      <a href={run.url} target="_blank" rel="noopener noreferrer" style={sharedStyle} title={run.description ?? run.name}>
+        {content}
+      </a>
+    )
+  }
+  return <div style={sharedStyle} title={run.description ?? run.name}>{content}</div>
 }
 
 function SmallButton({ label, onClick }: { label: string; onClick: () => void }) {

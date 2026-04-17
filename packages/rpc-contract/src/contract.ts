@@ -162,6 +162,30 @@ export const contract = {
       mergedAt: z.string().nullable(),
     }))),
 
+  getCommitCIStatus: oc
+    .input(z.object({ repoId: RepoId, sha: CommitSha }))
+    .output(z.object({
+      state: z.enum(['success', 'pending', 'failure', 'error', 'neutral', 'none']),
+      runs: z.array(z.object({
+        name: z.string(),
+        description: z.string().optional(),
+        state: z.enum(['success', 'pending', 'failure', 'error', 'neutral']),
+        url: z.string().optional(),
+      })),
+    })),
+
+  getCommitCIStatuses: oc
+    .input(z.object({ repoId: RepoId, shas: z.array(CommitSha) }))
+    .output(z.record(z.string(), z.object({
+      state: z.enum(['success', 'pending', 'failure', 'error', 'neutral', 'none']),
+      runs: z.array(z.object({
+        name: z.string(),
+        description: z.string().optional(),
+        state: z.enum(['success', 'pending', 'failure', 'error', 'neutral']),
+        url: z.string().optional(),
+      })),
+    }))),
+
   commitAction: oc
     .input(z.object({
       repoId: RepoId,

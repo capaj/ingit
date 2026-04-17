@@ -17,6 +17,7 @@ import {
   getCommitDetail,
   getCommitDiff,
   getCommitPRs,
+  getCommitCIStatuses,
   commitAction,
   getMergePreview as fetchMergePreview,
   mergeRef as mergeRefApi,
@@ -66,6 +67,19 @@ function prependRecentRepo(recentRepos: string[], repoPath: string): string[] {
 
 export type AppStatus = 'no-repo' | 'loading' | 'ready'
 
+export type CIState = 'success' | 'pending' | 'failure' | 'error' | 'neutral' | 'none'
+export type CIRunState = 'success' | 'pending' | 'failure' | 'error' | 'neutral'
+export interface CIRun {
+  name: string
+  description?: string
+  state: CIRunState
+  url?: string
+}
+export interface CIStatusEntry {
+  state: CIState | 'loading'
+  runs: CIRun[]
+}
+
 type CommitPRInfo = Array<{ number: number; title: string; url: string; state: string; mergedAt: string | null }>
 
 interface AppState {
@@ -88,8 +102,11 @@ interface AppState {
   openError: string | null
   errorDialog: { title: string; message: string } | null
   loadingMore: boolean
+  commitCIStatus: Record<string, CIStatusEntry>
+  showCommitMessages: boolean
 
   // Actions
+  setShowCommitMessages: (value: boolean) => void
   showError: (title: string, err: unknown) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
@@ -107,6 +124,7 @@ interface AppState {
   performMergeRef: (refName: string) => Promise<void>
   performRebaseRef: (refName: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
+  fetchCommitCIStatusesIfNeeded: (shas: string[]) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -129,6 +147,55 @@ export const useAppStore = create<AppState>((set, get) => ({
   openError: null,
   errorDialog: null,
   loadingMore: false,
+  commitCIStatus: {},
+  showCommitMessages: (() => {
+    try {
+      const stored = localStorage.getItem('showCommitMessages')
+      return stored === null ? true : stored === 'true'
+    } catch {
+      return true
+    }
+  })(),
+
+  setShowCommitMessages: (value) => {
+    try { localStorage.setItem('showCommitMessages', String(value)) } catch {}
+    set({ showCommitMessages: value })
+  },
+
+  fetchCommitCIStatusesIfNeeded: (shas) => {
+    const { repoId, commitCIStatus } = get()
+    if (!repoId) return
+    const missing = shas.filter((sha) => commitCIStatus[sha] === undefined)
+    if (missing.length === 0) return
+
+    set((s) => {
+      const next = { ...s.commitCIStatus }
+      for (const sha of missing) next[sha] = { state: 'loading', runs: [] }
+      return { commitCIStatus: next }
+    })
+
+    getCommitCIStatuses(repoId, missing)
+      .then((res: Record<string, { state: CIState; runs: CIRun[] }>) => {
+        set((s) => {
+          const next = { ...s.commitCIStatus }
+          for (const sha of missing) {
+            const entry = res[sha]
+            next[sha] = entry
+              ? { state: entry.state, runs: entry.runs ?? [] }
+              : { state: 'none', runs: [] }
+          }
+          return { commitCIStatus: next }
+        })
+      })
+      .catch((err: unknown) => {
+        console.warn('[CI] batch fetch failed', err)
+        set((s) => {
+          const next = { ...s.commitCIStatus }
+          for (const sha of missing) next[sha] = { state: 'none', runs: [] }
+          return { commitCIStatus: next }
+        })
+      })
+  },
 
   showError: (title, err) => {
     const message = err instanceof Error ? err.message

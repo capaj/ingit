@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
 import { animated, to, useSpring } from '@react-spring/web'
+import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
@@ -32,12 +33,14 @@ const EDGE_BUNDLE_GAP = 4
 const GRAPH_LEFT_GUTTER = 120
 const GRAPH_RIGHT_GUTTER = 520
 const PAD_TOP = 40
+const GRAPH_TOP_HEADROOM = NODE_SPACING_Y * 2
 const PAD_LEFT = 40
-const LANE_ORIGIN_X = PAD_LEFT + GRAPH_LEFT_GUTTER
+const COMMIT_MESSAGE_GUTTER = 260
+const LANE_ORIGIN_X_BASE = PAD_LEFT + GRAPH_LEFT_GUTTER
 const GRAPH_SPRING_CONFIG = { mass: 2.1, tension: 180, friction: 28 }
 const REF_PILL_GAP = 6
 const REF_PILL_HORIZONTAL_PADDING = 14
-const REF_PILL_CHARACTER_WIDTH = 7
+const REF_PILL_FONT = '600 11px system-ui, -apple-system, sans-serif'
 const GRAPH_ENTER_OFFSET_Y = NODE_SPACING_Y * 0.55
 const GRAPH_EXIT_OFFSET_Y = NODE_SPACING_Y * 0.3
 const PRIMARY_LANE_HIGHLIGHT_WIDTH = 54
@@ -206,7 +209,7 @@ type EdgeRoutePlan =
   | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
   | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
 
-function buildLayout(rows: CommitRow[]) {
+function buildLayout(rows: CommitRow[], extraLeftGutter = 0) {
   let minLane = Infinity
   let maxLane = -Infinity
   const nodes: LayoutNode[] = []
@@ -223,13 +226,14 @@ function buildLayout(rows: CommitRow[]) {
   const leftmostLane = Number.isFinite(minLane) ? minLane : 0
   const rightmostLane = Number.isFinite(maxLane) ? maxLane : 0
   const laneRadius = Math.max(Math.abs(leftmostLane), Math.abs(rightmostLane))
+  const laneOriginX = LANE_ORIGIN_X_BASE + extraLeftGutter
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const node: LayoutNode = {
       row,
-      x: LANE_ORIGIN_X + (row.lane + laneRadius) * LANE_WIDTH,
-      y: PAD_TOP + i * NODE_SPACING_Y,
+      x: laneOriginX + (row.lane + laneRadius) * LANE_WIDTH,
+      y: PAD_TOP + GRAPH_TOP_HEADROOM + i * NODE_SPACING_Y,
       idx: i,
     }
     nodes.push(node)
@@ -256,8 +260,8 @@ function buildLayout(rows: CommitRow[]) {
     shaToNode,
     shaToBranch,
     maxLane,
-    totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + (laneRadius * 2 + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
-    totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2,
+    totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + extraLeftGutter + (laneRadius * 2 + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
+    totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2 + GRAPH_TOP_HEADROOM,
   }
 }
 
@@ -686,7 +690,7 @@ function findTopVisibleNode(nodes: LayoutNode[], scrollTop: number, zoom: number
   const unscaledTop = scrollTop / zoom
   const approxIdx = Math.max(0, Math.min(
     nodes.length - 1,
-    Math.floor((unscaledTop - PAD_TOP) / NODE_SPACING_Y),
+    Math.floor((unscaledTop - PAD_TOP - GRAPH_TOP_HEADROOM) / NODE_SPACING_Y),
   ))
 
   let idx = approxIdx
@@ -774,8 +778,19 @@ function refBadgePrefix(isRemote: boolean, isCurrent: boolean) {
   return isCurrent ? '● ' : '⎇ '
 }
 
+const refPillTextWidthCache = new Map<string, number>()
+
+function measureRefPillText(text: string): number {
+  const cached = refPillTextWidthCache.get(text)
+  if (cached !== undefined) return cached
+  const width = measureNaturalWidth(prepareWithSegments(text, REF_PILL_FONT))
+  refPillTextWidthCache.set(text, width)
+  return width
+}
+
 function estimateRefPillWidth(refName: string, isRemote: boolean, isCurrent: boolean) {
-  return REF_PILL_HORIZONTAL_PADDING + (refBadgePrefix(isRemote, isCurrent).length + refName.length) * REF_PILL_CHARACTER_WIDTH
+  const text = refBadgePrefix(isRemote, isCurrent) + refName
+  return REF_PILL_HORIZONTAL_PADDING + Math.ceil(measureRefPillText(text))
 }
 
 function buildRefPlacements(nodes: LayoutNode[], currentBranch: string | null, selectedRefName: string | null) {
@@ -832,8 +847,9 @@ function computeVisibleRange(scrollTop: number, clientHeight: number, totalNodes
   const top = scrollTop - overscan
   const bot = scrollTop + clientHeight + overscan
   const scaledSpacing = NODE_SPACING_Y * zoom
-  const firstIdx = Math.max(0, Math.floor((top - PAD_TOP * zoom) / scaledSpacing))
-  const lastIdx = Math.min(totalNodes - 1, Math.ceil((bot - PAD_TOP * zoom) / scaledSpacing))
+  const scaledTopOffset = (PAD_TOP + GRAPH_TOP_HEADROOM) * zoom
+  const firstIdx = Math.max(0, Math.floor((top - scaledTopOffset) / scaledSpacing))
+  const lastIdx = Math.min(totalNodes - 1, Math.ceil((bot - scaledTopOffset) / scaledSpacing))
   return { firstIdx, lastIdx }
 }
 
@@ -888,6 +904,26 @@ function buildCurrentBranchEdgeKeys(layout: GraphLayout | null, currentBranch: s
   }
 
   return keys
+}
+
+function buildCurrentBranchShaSet(layout: GraphLayout | null, currentBranch: string | null) {
+  const shas = new Set<string>()
+  if (!layout || !currentBranch) return shas
+
+  const currentTip = layout.nodes.find((node) => node.row.refNames.includes(currentBranch))
+  if (!currentTip) return shas
+
+  let sha: string | undefined = currentTip.row.sha
+  while (sha && !shas.has(sha)) {
+    shas.add(sha)
+    const node = layout.shaToNode.get(sha)
+    const firstParentSha = node?.row.parentShas[0]
+    if (!node || !firstParentSha) break
+    if (!layout.shaToNode.get(firstParentSha)) break
+    sha = firstParentSha
+  }
+
+  return shas
 }
 
 function buildCurrentLaneHighlight(layout: GraphLayout | null, currentBranch: string | null): CurrentLaneHighlight | null {
@@ -1019,10 +1055,14 @@ export function GraphCanvas() {
   const performCommitAction = useAppStore((state) => state.performCommitAction)
   const performMergeRef = useAppStore((state) => state.performMergeRef)
   const performRebaseRef = useAppStore((state) => state.performRebaseRef)
+  const showCommitMessages = useAppStore((state) => state.showCommitMessages)
   const showError = useAppStore((state) => state.showError)
+  const commitCIStatus = useAppStore((state) => state.commitCIStatus)
+  const fetchCommitCIStatusesIfNeeded = useAppStore((state) => state.fetchCommitCIStatusesIfNeeded)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
+  const commitLabelsLayerRef = useRef<HTMLDivElement>(null)
   const viewportMetricsRef = useRef({ scrollTop: 0, clientHeight: 0 })
   const lastObservedScrollTopRef = useRef(0)
   const graphAnimationStartFrameRef = useRef<number | null>(null)
@@ -1030,6 +1070,7 @@ export function GraphCanvas() {
   const pendingScrollTopRef = useRef(0)
   const [zoom, setZoom] = useState(1)
   const [scrollTop, setScrollTop] = useState(0)
+  const [clientHeight, setClientHeight] = useState(0)
   const [graphAnimation, setGraphAnimation] = useState<GraphAnimationSnapshot | null>(null)
   const graphAnimationRef = useRef<GraphAnimationSnapshot | null>(null)
   const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
@@ -1048,8 +1089,8 @@ export function GraphCanvas() {
 
   const layout = useMemo(() => {
     if (!histWindow || histWindow.rows.length === 0) return null
-    return buildLayout(histWindow.rows)
-  }, [histWindow])
+    return buildLayout(histWindow.rows, showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0)
+  }, [histWindow, showCommitMessages])
 
   const refMap = useMemo(
     () => new Map(refs.map((ref) => [ref.shortName, ref])),
@@ -1217,11 +1258,15 @@ export function GraphCanvas() {
       const nextScrollTop = el.scrollTop
       const didScroll = Math.abs(nextScrollTop - lastObservedScrollTopRef.current) > 0.5
       viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
+      setClientHeight(el.clientHeight)
       lastObservedScrollTopRef.current = nextScrollTop
       if (didScroll) stopGraphAnimation()
       syncScrollTopState(el.scrollTop)
       if (timeLabelsLayerRef.current) {
         timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
+      }
+      if (commitLabelsLayerRef.current) {
+        commitLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
       }
       const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, zoomRef.current)
       const prev = lastRenderedRange.current
@@ -1246,10 +1291,14 @@ export function GraphCanvas() {
     // Initial
     if (layout) {
       viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
+      setClientHeight(el.clientHeight)
       lastObservedScrollTopRef.current = el.scrollTop
       syncScrollTopState(el.scrollTop)
       if (timeLabelsLayerRef.current) {
         timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
+      }
+      if (commitLabelsLayerRef.current) {
+        commitLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
       }
       const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, zoomRef.current)
       lastRenderedRange.current = { firstIdx, lastIdx }
@@ -1842,6 +1891,60 @@ export function GraphCanvas() {
     [timeLabels, scrollTop],
   )
 
+  const currentBranchShas = useMemo(
+    () => buildCurrentBranchShaSet(layout, currentBranch),
+    [layout, currentBranch],
+  )
+
+  const commitMessageLabels = useMemo(() => {
+    if (!layout || currentBranchShas.size === 0 || !showCommitMessages) return []
+    return layout.nodes
+      .filter((node) => currentBranchShas.has(node.row.sha))
+      .map((node) => ({
+        key: node.row.sha,
+        sha: node.row.sha,
+        y: node.y * zoom,
+        text: node.row.subject,
+      }))
+  }, [layout, currentBranchShas, zoom, showCommitMessages])
+
+  const floatingCommitLabels = useMemo(
+    () => commitMessageLabels.filter((label) => label.y - scrollTop > 28),
+    [commitMessageLabels, scrollTop],
+  )
+
+  const viewportVisibleCommitLabels = useMemo(() => {
+    if (clientHeight === 0) return []
+    return commitMessageLabels.filter((label) => {
+      const viewY = label.y - scrollTop
+      return viewY > 0 && viewY < clientHeight
+    })
+  }, [commitMessageLabels, scrollTop, clientHeight])
+
+  useEffect(() => {
+    if (viewportVisibleCommitLabels.length === 0) return
+    const handle = window.setTimeout(() => {
+      // Prefetch a window extending well beyond the viewport so scrolling
+      // hits warm cache. Cheap because the server short-circuits cached SHAs.
+      const visibleShas = new Set(viewportVisibleCommitLabels.map((l) => l.sha))
+      let firstVisibleIdx = -1
+      let lastVisibleIdx = -1
+      for (let i = 0; i < commitMessageLabels.length; i++) {
+        if (visibleShas.has(commitMessageLabels[i].sha)) {
+          if (firstVisibleIdx === -1) firstVisibleIdx = i
+          lastVisibleIdx = i
+        }
+      }
+      if (firstVisibleIdx === -1) return
+      const PREFETCH_AHEAD = 40
+      const start = Math.max(0, firstVisibleIdx - PREFETCH_AHEAD)
+      const end = Math.min(commitMessageLabels.length, lastVisibleIdx + 1 + PREFETCH_AHEAD)
+      const window_ = commitMessageLabels.slice(start, end).map((l) => l.sha)
+      fetchCommitCIStatusesIfNeeded(window_)
+    }, 200)
+    return () => window.clearTimeout(handle)
+  }, [viewportVisibleCommitLabels, commitMessageLabels, fetchCommitCIStatusesIfNeeded])
+
   const selectedNode = useMemo(
     () => (layout && selectedSha ? layout.shaToNode.get(selectedSha) ?? null : null),
     [layout, selectedSha],
@@ -1928,7 +2031,7 @@ export function GraphCanvas() {
     ? layout.nodes.length
     : Math.max(totalCommitCount, layout.nodes.length)
   const fullWidth = layout.totalWidth
-  const fullHeight = estimatedCount * NODE_SPACING_Y + PAD_TOP * 2
+  const fullHeight = estimatedCount * NODE_SPACING_Y + PAD_TOP * 2 + GRAPH_TOP_HEADROOM
   const scaledW = fullWidth * zoom
   const scaledH = fullHeight * zoom
 
@@ -2012,6 +2115,56 @@ export function GraphCanvas() {
             {topTimeLabel}
           </div>
         )}
+        <div ref={commitLabelsLayerRef} style={{ position: 'relative' }}>
+          {floatingCommitLabels.map((label) => {
+            const status = commitCIStatus[label.sha]
+            const dotColor: Record<string, string> = {
+              success: '#a6e3a1',
+              pending: '#f9e2af',
+              failure: '#f38ba8',
+              error: '#f38ba8',
+              neutral: '#6c7086',
+              loading: '#585b70',
+              none: '#45475a',
+            }
+            const dot = dotColor[status?.state ?? 'loading']
+            return (
+              <div
+                key={label.key}
+                style={{
+                  position: 'absolute',
+                  left: 20,
+                  top: label.y - 7,
+                  maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * zoom,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  color: '#a6adc8',
+                  fontSize: 12,
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                {dot && (
+                  <span style={{
+                    display: 'inline-block',
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: dot,
+                    flexShrink: 0,
+                  }} />
+                )}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {label.text}
+                </span>
+              </div>
+            )
+          })}
+        </div>
         <div ref={timeLabelsLayerRef} style={{ position: 'relative' }}>
           {floatingTimeLabels.map((label) => (
             <div

@@ -9,11 +9,14 @@ import { ErrorDialog } from './components/ErrorDialog'
 export function App() {
   const {
     status, repoPath, recentRepos, refs, historyWindow, selectedSha,
-    commitDetail, commitDiff, commitPRs, githubUrl, openError,
+    commitDetail, commitDiff, commitPRs, commitCIStatus, githubUrl, openError,
     errorDialog, dismissError, showError,
     openRepoByPath, openFromUrl, selectRef,
     navigateTo, checkoutSha,
+    showCommitMessages, setShowCommitMessages,
   } = useAppStore()
+
+  const selectedCIRuns = selectedSha ? commitCIStatus[selectedSha]?.runs ?? [] : []
 
   useEffect(() => { openFromUrl() }, [openFromUrl])
 
@@ -69,8 +72,24 @@ export function App() {
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 14px', borderBottom: '1px solid #313244', background: '#181825', fontSize: 12, color: '#6c7086', gap: 8, overflow: 'hidden' }}>
-          <span style={{ color: '#45475a' }}>repo</span>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#a6adc8', fontFamily: 'monospace' }}>
+          <button
+            onClick={() => setShowCommitMessages(!showCommitMessages)}
+            style={{
+              flexShrink: 0,
+              padding: '4px 10px',
+              borderRadius: 4,
+              border: `1px solid ${showCommitMessages ? '#89b4fa55' : '#313244'}`,
+              background: showCommitMessages ? '#89b4fa20' : 'transparent',
+              color: showCommitMessages ? '#89b4fa' : '#6c7086',
+              fontSize: 11,
+              cursor: 'pointer',
+            }}
+            title={showCommitMessages ? 'Hide commit messages' : 'Show commit messages'}
+          >
+            {showCommitMessages ? 'Hide messages' : 'Show messages'}
+          </button>
+          <span style={{ color: '#45475a', marginLeft: 8 }}>repo</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#a6adc8', fontFamily: 'monospace', flex: 1 }}>
             {repoPath}
           </span>
         </div>
@@ -83,6 +102,7 @@ export function App() {
         diff={commitDiff}
         branchName={selectedBranchName}
         prs={commitPRs}
+        ciRuns={selectedCIRuns}
         githubUrl={githubUrl}
         onNavigate={navigateTo}
         onCheckout={async (sha) => {

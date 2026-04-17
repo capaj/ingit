@@ -3,6 +3,7 @@ import { contract } from '@ingit/rpc-contract'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
 import { getMergePreview } from './merge-handler.js'
+import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl } from './ci-status-handler.js'
 
 const sessionManager = new SessionManager()
 
@@ -90,6 +91,35 @@ export const router = os.router({
     } catch {
       return []
     }
+  }),
+
+  getCommitCIStatus: os.getCommitCIStatus.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    if (!session.githubUrl) return { state: 'none' as const, runs: [] }
+
+    const ownerRepo = extractOwnerRepoFromGithubUrl(session.githubUrl)
+    if (!ownerRepo) return { state: 'none' as const, runs: [] }
+
+    return fetchCommitCIStatus(ownerRepo, input.sha)
+  }),
+
+  getCommitCIStatuses: os.getCommitCIStatuses.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+
+    const emptyResult = Object.fromEntries(
+      input.shas.map((sha) => [sha, { state: 'none' as const, runs: [] }]),
+    )
+    if (!session.githubUrl) return emptyResult
+
+    const ownerRepo = extractOwnerRepoFromGithubUrl(session.githubUrl)
+    if (!ownerRepo) return emptyResult
+
+    const entries = await Promise.all(
+      input.shas.map(async (sha) => [sha, await fetchCommitCIStatus(ownerRepo, sha)] as const),
+    )
+    return Object.fromEntries(entries)
   }),
 
   commitAction: os.commitAction.handler(async ({ input }) => {

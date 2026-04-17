@@ -52,6 +52,14 @@ export function getCommitPRs(repoId: string, sha: string) {
   return ensureClient().getCommitPRs({ repoId, sha })
 }
 
+export function getCommitCIStatus(repoId: string, sha: string) {
+  return ensureClient().getCommitCIStatus({ repoId, sha })
+}
+
+export function getCommitCIStatuses(repoId: string, shas: string[]) {
+  return ensureClient().getCommitCIStatuses({ repoId, shas })
+}
+
 export function commitAction(repoId: string, action: 'cherry-pick' | 'revert' | 'uncommit', sha: string) {
   return ensureClient().commitAction({ repoId, action, sha })
 }

@@ -114,17 +114,31 @@ export class RepoSession {
       // fallback — not critical
     }
 
-    // Resolve GitHub URL from origin remote via ziggit FFI
+    // Resolve GitHub URL from origin remote.
+    // Try ziggit FFI first; fall back to `git remote get-url` if the FFI errors
+    // (the FFI has been observed to return code -1 on some repos).
     let githubUrl: string | null = null
+    let raw: string | null = null
+    let source = 'ffi'
     try {
-      const raw = ziggit.remoteGetUrl('origin')
+      raw = ziggit.remoteGetUrl('origin').trim()
+    } catch {
+      source = 'git-subprocess'
+      try {
+        const { stdout } = await runGit(['remote', 'get-url', 'origin'], rootPath)
+        raw = stdout.trim()
+      } catch {
+        raw = null
+        source = 'failed'
+      }
+    }
+    if (raw) {
       const sshMatch = raw.match(/git@github\.com:(.+?)(?:\.git)?$/)
       const httpsMatch = raw.match(/https?:\/\/github\.com\/(.+?)(?:\.git)?$/)
       if (sshMatch) githubUrl = `https://github.com/${sshMatch[1]}`
       else if (httpsMatch) githubUrl = `https://github.com/${httpsMatch[1]}`
-    } catch {
-      // no remote or not github — fine
     }
+    console.log('[RepoSession.open]', rootPath, 'source:', source, 'raw:', JSON.stringify(raw), '→ githubUrl:', githubUrl)
 
     const repoId = randomBytes(4).toString('hex')
     const scheduler = new GitCommandScheduler(rootPath)

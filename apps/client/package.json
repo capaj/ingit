@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@chenglou/pretext": "^0.0.5",
     "@ingit/rpc-contract": "*",
     "@orpc/client": "^1.13.14",
     "@react-spring/web": "^10.0.3",
