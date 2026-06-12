@@ -13,13 +13,14 @@
     }
   },
   "scripts": {
+    "build:native": "zig build -Doptimize=ReleaseFast && cp zig-out/lib/libziggit.* .",
     "build": "tsc"
   },
   "dependencies": {
     "@ingit/rpc-contract": "*"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.12",
-    "@types/node": "^25.6.0"
+    "@types/bun": "^1.3.14",
+    "@types/node": "^25.9.3"
   }
 }

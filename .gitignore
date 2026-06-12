@@ -2,3 +2,5 @@ node_modules
 dist
 *.tsbuildinfo
 .DS_Store
+.zig-cache
+zig-out
