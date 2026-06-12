@@ -109,6 +109,7 @@ export class CommitHydrator {
       body,
       treeSha: tree,
       refs: [],
+      isPushed: false,
     }
   }
 }

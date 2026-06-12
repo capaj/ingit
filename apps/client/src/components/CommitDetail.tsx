@@ -216,7 +216,7 @@ export function CommitDetail({ commit, diff, branchName, prs, ciState, ciRuns, g
         )}
 
         {/* GitHub commit link */}
-        {githubUrl && (
+        {githubUrl && commit.isPushed && (
           <div style={{ marginTop: 4, marginBottom: 4, display: 'flex', gap: 12 }}>
             <a
               href={`${githubUrl}/commit/${commit.sha}`}

@@ -156,7 +156,23 @@ export class RepoSession {
   }
 
   async getCommitDetail(sha: string): Promise<CommitDetailResponse> {
-    return this.hydrator.hydrateCommit(sha)
+    const [commit, isPushed] = await Promise.all([
+      this.hydrator.hydrateCommit(sha),
+      this.isCommitPushed(sha),
+    ])
+    return { ...commit, isPushed }
+  }
+
+  private async isCommitPushed(sha: string): Promise<boolean> {
+    try {
+      const { stdout } = await runGit(['branch', '-r', '--contains', sha], this.rootPath)
+      return stdout
+        .split('\n')
+        .map((line) => line.replace(/^\*?\s*/, '').trim())
+        .some((ref) => ref.length > 0 && !/\/HEAD(?:\s|$)/.test(ref))
+    } catch {
+      return false
+    }
   }
 
   getCommitDiff(sha: string): Promise<{ changedPaths: Array<{ path: string; oldPath?: string; status: 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U' }>; additions: number; deletions: number }> {

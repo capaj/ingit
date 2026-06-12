@@ -107,6 +107,7 @@ export interface CommitDetailResponse {
   body: string
   treeSha: string
   refs: string[]
+  isPushed: boolean
 }
 
 export interface CommitDiffRequest {
