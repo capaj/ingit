@@ -14,10 +14,26 @@ function getWsUrl(): string {
 function ensureClient() {
   if (client && ws && ws.readyState <= WebSocket.OPEN) return client
 
-  ws = new WebSocket(getWsUrl())
-  const link = new RPCLink({ websocket: ws })
+  const socket = new WebSocket(getWsUrl())
+  socket.addEventListener('close', () => {
+    // Drop the cached client so the next call reconnects instead of
+    // sending into a dead socket.
+    if (ws === socket) {
+      ws = null
+      client = null
+    }
+  })
+  ws = socket
+  const link = new RPCLink({ websocket: socket })
   client = createORPCClient(link)
   return client
+}
+
+// oRPC rejects in-flight calls with an AsyncIdQueue error when the
+// underlying WebSocket closes (e.g. the dev server restarted mid-call).
+export function isConnectionLostError(err: unknown): boolean {
+  return err instanceof Error
+    && /AsyncIdQueue|closed or aborted|WebSocket/i.test(err.message)
 }
 
 export function openRepo(req: { path: string }) {

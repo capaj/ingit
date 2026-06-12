@@ -23,6 +23,7 @@ import {
   mergeRef as mergeRefApi,
   rebaseRef as rebaseRefApi,
   refAction,
+  isConnectionLostError,
 } from './api'
 
 const INITIAL_ROWS = 1000
@@ -423,10 +424,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await refAction(repoId, action, refName, sha)
     } catch (err) {
-      if (isSessionError(err)) {
+      // Ref actions are idempotent, so they are also safe to retry after
+      // the connection dropped mid-call (e.g. dev server restart).
+      if (isSessionError(err) || isConnectionLostError(err)) {
         const res = await openRepo({ path: repoPath })
         repoId = res.repoId
-        set({ repoId })
+        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
         await refAction(repoId, action, refName, sha)
       } else {
         throw err
