@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ORPCError } from '@orpc/server'
@@ -17,7 +17,9 @@ afterEach(async () => {
 })
 
 async function makeTempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
+  // Resolve symlinks (macOS tmpdir lives under /var → /private/var) so the
+  // paths compare equal to the canonical root paths git reports.
+  const dir = await realpath(await mkdtemp(join(tmpdir(), prefix)))
   tempPaths.add(dir)
   return dir
 }
