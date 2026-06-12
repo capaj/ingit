@@ -10,6 +10,7 @@ interface PRInfo {
 }
 
 type CIRunState = 'success' | 'pending' | 'failure' | 'error' | 'neutral'
+type CIStatusState = CIRunState | 'none' | 'loading'
 
 interface CIRun {
   name: string
@@ -23,6 +24,7 @@ interface CommitDetailProps {
   diff: CommitDiffResponse | null
   branchName?: string | null
   prs?: PRInfo[]
+  ciState?: CIStatusState
   ciRuns?: CIRun[]
   githubUrl?: string | null
   onCheckout?: (sha: string) => void
@@ -75,7 +77,7 @@ function formatDate(unix: number): string {
   })
 }
 
-export function CommitDetail({ commit, diff, branchName, prs, ciRuns, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
+export function CommitDetail({ commit, diff, branchName, prs, ciState, ciRuns, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
   if (!commit) {
     return null
   }
@@ -236,6 +238,11 @@ export function CommitDetail({ commit, diff, branchName, prs, ciRuns, githubUrl,
         )}
 
         {/* Per-check CI status */}
+        {ciState === 'loading' && (
+          <div style={{ marginTop: 8 }}>
+            <CILoadingRow />
+          </div>
+        )}
         {ciRuns && ciRuns.length > 0 && (
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
             {ciRuns.map((run, i) => (
@@ -468,6 +475,37 @@ function CIRunRow({ run }: { run: CIRun }) {
     )
   }
   return <div style={sharedStyle} title={run.description ?? run.name}>{content}</div>
+}
+
+function CILoadingRow() {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 12,
+        padding: '2px 0',
+        color: '#6c7086',
+      }}
+      title="Loading CI status"
+    >
+      <span
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: '50%',
+          border: '2px solid #45475a',
+          borderTopColor: '#89b4fa',
+          flexShrink: 0,
+          animation: 'ci-spin 0.8s linear infinite',
+        }}
+      />
+      <span style={{ color: '#cdd6f4', fontWeight: 500 }}>CI status</span>
+      <span>Loading...</span>
+      <style>{`@keyframes ci-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
 }
 
 function SmallButton({ label, onClick }: { label: string; onClick: () => void }) {

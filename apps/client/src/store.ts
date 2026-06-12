@@ -218,6 +218,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         totalCommitCount: res.totalCommitCount,
         recentRepos: prependRecentRepo(get().recentRepos, res.rootPath),
         githubUrl: res.githubUrl,
+        commitCIStatus: {},
         openError: null,
         selectedRefName: null,
         mergePreview: null,
@@ -270,6 +271,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ selectedSha: sha, scrollToSha: null, scrollToKey: get().scrollToKey, commitDetail: null, commitDiff: null, commitPRs: [] })
     const { repoId, githubUrl } = get()
     if (!repoId) return
+    get().fetchCommitCIStatusesIfNeeded([sha])
     Promise.all([
       getCommitDetail(repoId, sha),
       getCommitDiff(repoId, sha),
@@ -377,6 +379,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Also load detail
     const { repoId: rid } = get()
     if (rid) {
+      get().fetchCommitCIStatusesIfNeeded([sha])
       Promise.all([
         getCommitDetail(rid, sha),
         getCommitDiff(rid, sha),
@@ -469,6 +472,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           if (get().selectedSha === sha) set({ commitPRs: prs })
         }).catch(() => {})
       }
+      get().fetchCommitCIStatusesIfNeeded([sha])
       return
     }
 
@@ -537,6 +541,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (get().selectedSha === nextSha) set({ commitPRs: prs })
       }).catch(() => {})
     }
+    get().fetchCommitCIStatusesIfNeeded([nextSha])
   },
 
   performMergeRef: async (refName) => {
@@ -600,6 +605,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (get().selectedSha === nextSha) set({ commitPRs: prs })
       }).catch(() => {})
     }
+    get().fetchCommitCIStatusesIfNeeded([nextSha])
   },
 
   performRebaseRef: async (refName) => {
@@ -663,6 +669,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (get().selectedSha === nextSha) set({ commitPRs: prs })
       }).catch(() => {})
     }
+    get().fetchCommitCIStatusesIfNeeded([nextSha])
   },
 
   checkoutSha: async (sha) => {

@@ -16,7 +16,8 @@ export function App() {
     showCommitMessages, setShowCommitMessages,
   } = useAppStore()
 
-  const selectedCIRuns = selectedSha ? commitCIStatus[selectedSha]?.runs ?? [] : []
+  const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
+  const selectedCIRuns = selectedCIStatus?.runs ?? []
 
   useEffect(() => { openFromUrl() }, [openFromUrl])
 
@@ -102,6 +103,7 @@ export function App() {
         diff={commitDiff}
         branchName={selectedBranchName}
         prs={commitPRs}
+        ciState={selectedCIStatus?.state}
         ciRuns={selectedCIRuns}
         githubUrl={githubUrl}
         onNavigate={navigateTo}
