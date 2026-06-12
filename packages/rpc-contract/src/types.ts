@@ -180,7 +180,40 @@ export interface RebaseRefResponse {
   headSha: CommitSha
 }
 
-export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
+export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create'
+
+export type ReflogEntryKind =
+  | 'commit' | 'amend' | 'checkout' | 'reset' | 'rebase' | 'merge'
+  | 'cherry-pick' | 'revert' | 'pull' | 'branch' | 'clone' | 'other'
+
+export interface ReflogEntry {
+  index: number
+  /** Display selector like "HEAD@{3}" */
+  selector: string
+  /** Where the ref pointed AFTER this operation */
+  sha: CommitSha
+  /** Where the ref pointed BEFORE this operation (null for the oldest entry) */
+  oldSha: CommitSha | null
+  kind: ReflogEntryKind
+  /** Raw reflog subject, e.g. "reset: moving to HEAD~2" */
+  message: string
+  /** Commit subject of `sha` */
+  subject: string
+  authorName: string
+  authorEmail: string
+  committerUnix: number
+  /** When the reflog entry was recorded */
+  entryUnix: number
+  /** Reachable from any branch/tag/remote or current HEAD */
+  isReachable: boolean
+  /** Refs currently pointing at `sha` */
+  refNames: string[]
+}
+
+export interface ReflogResponse {
+  refName: string
+  entries: ReflogEntry[]
+}
 
 export interface WorktreeStatusResponse {
   branch?: string

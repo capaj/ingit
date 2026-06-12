@@ -3,6 +3,7 @@ import { useAppStore } from './store'
 import { RepoOpen } from './components/RepoOpen'
 import { RefsSidebar } from './components/RefsSidebar'
 import { GraphCanvas } from './components/GraphCanvas'
+import { ReflogGraph } from './components/ReflogGraph'
 import { CommitDetail } from './components/CommitDetail'
 import { ErrorDialog } from './components/ErrorDialog'
 
@@ -15,6 +16,7 @@ export function App() {
     openRepoByPath, openFromUrl, selectRef,
     navigateTo, checkoutSha,
     showCommitMessages, setShowCommitMessages,
+    viewMode, setViewMode,
   } = useAppStore()
 
   const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
@@ -103,29 +105,62 @@ export function App() {
               ☰
             </button>
           )}
-          <button
-            onClick={() => setShowCommitMessages(!showCommitMessages)}
-            style={{
-              flexShrink: 0,
-              padding: '4px 10px',
-              borderRadius: 4,
-              border: `1px solid ${showCommitMessages ? '#89b4fa55' : '#313244'}`,
-              background: showCommitMessages ? '#89b4fa20' : 'transparent',
-              color: showCommitMessages ? '#89b4fa' : '#6c7086',
-              fontSize: 11,
-              cursor: 'pointer',
-            }}
-            title={showCommitMessages ? 'Hide commit messages' : 'Show commit messages'}
-          >
-            {showCommitMessages ? 'Hide messages' : 'Show messages'}
-          </button>
+          {viewMode === 'history' && (
+            <button
+              onClick={() => setShowCommitMessages(!showCommitMessages)}
+              style={{
+                flexShrink: 0,
+                padding: '4px 10px',
+                borderRadius: 4,
+                border: `1px solid ${showCommitMessages ? '#89b4fa55' : '#313244'}`,
+                background: showCommitMessages ? '#89b4fa20' : 'transparent',
+                color: showCommitMessages ? '#89b4fa' : '#6c7086',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+              title={showCommitMessages ? 'Hide commit messages' : 'Show commit messages'}
+            >
+              {showCommitMessages ? 'Hide messages' : 'Show messages'}
+            </button>
+          )}
+          <div style={{ flexShrink: 0, display: 'flex', borderRadius: 4, border: '1px solid #313244', overflow: 'hidden' }}>
+            <button
+              onClick={() => setViewMode('history')}
+              style={{
+                padding: '4px 10px',
+                border: 'none',
+                background: viewMode === 'history' ? '#89b4fa20' : 'transparent',
+                color: viewMode === 'history' ? '#89b4fa' : '#6c7086',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+              title="Branch history graph"
+            >
+              History
+            </button>
+            <button
+              onClick={() => setViewMode('reflog')}
+              style={{
+                padding: '4px 10px',
+                border: 'none',
+                borderLeft: '1px solid #313244',
+                background: viewMode === 'reflog' ? '#f9e2af20' : 'transparent',
+                color: viewMode === 'reflog' ? '#f9e2af' : '#6c7086',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+              title="Reflog time machine — recover lost commits and see where HEAD has been"
+            >
+              Time Machine
+            </button>
+          </div>
           <span style={{ color: '#45475a', marginLeft: 8 }}>repo</span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#a6adc8', fontFamily: 'monospace', flex: 1 }}>
             {repoPath}
           </span>
         </div>
 
-        <GraphCanvas />
+        {viewMode === 'reflog' ? <ReflogGraph /> : <GraphCanvas />}
       </div>
 
       <CommitDetail

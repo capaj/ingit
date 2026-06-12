@@ -8,6 +8,7 @@ import type {
   CommitRow,
   MergePreviewResponse,
   RefActionKind,
+  ReflogResponse,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -23,6 +24,7 @@ import {
   mergeRef as mergeRefApi,
   rebaseRef as rebaseRefApi,
   refAction,
+  getReflog,
   isConnectionLostError,
 } from './api'
 
@@ -67,6 +69,9 @@ function prependRecentRepo(recentRepos: string[], repoPath: string): string[] {
 }
 
 export type AppStatus = 'no-repo' | 'loading' | 'ready'
+export type ViewMode = 'history' | 'reflog'
+
+const REFLOG_PAGE_SIZE = 300
 
 export type CIState = 'success' | 'pending' | 'failure' | 'error' | 'neutral' | 'none'
 export type CIRunState = 'success' | 'pending' | 'failure' | 'error' | 'neutral'
@@ -91,6 +96,10 @@ interface AppState {
   recentRepos: string[]
   refs: RefSummary[]
   historyWindow: HistoryWindowResponse | null
+  viewMode: ViewMode
+  reflog: ReflogResponse | null
+  reflogLoading: boolean
+  reflogMaxCount: number
   selectedSha: string | null
   selectedRefName: string | null
   scrollToSha: string | null
@@ -126,6 +135,10 @@ interface AppState {
   performRebaseRef: (refName: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
   fetchCommitCIStatusesIfNeeded: (shas: string[]) => void
+  setViewMode: (mode: ViewMode) => void
+  loadReflog: () => Promise<void>
+  loadMoreReflog: () => Promise<void>
+  recoverBranch: (branchName: string, sha: string) => Promise<void>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -136,6 +149,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   recentRepos: [],
   refs: [],
   historyWindow: null,
+  viewMode: 'history',
+  reflog: null,
+  reflogLoading: false,
+  reflogMaxCount: REFLOG_PAGE_SIZE,
   selectedSha: null,
   selectedRefName: null,
   scrollToSha: null,
@@ -161,6 +178,54 @@ export const useAppStore = create<AppState>((set, get) => ({
   setShowCommitMessages: (value) => {
     try { localStorage.setItem('showCommitMessages', String(value)) } catch {}
     set({ showCommitMessages: value })
+  },
+
+  setViewMode: (mode) => {
+    set({ viewMode: mode })
+    if (mode === 'reflog' && !get().reflog) {
+      void get().loadReflog()
+    }
+  },
+
+  loadReflog: async () => {
+    const { repoPath, reflogMaxCount } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+    set({ reflogLoading: true })
+    try {
+      let result: ReflogResponse
+      try {
+        result = await getReflog(repoId, 'HEAD', reflogMaxCount)
+      } catch (err) {
+        // Reflog reads are idempotent — safe to retry after reconnect
+        if (isSessionError(err) || isConnectionLostError(err)) {
+          const res = await openRepo({ path: repoPath })
+          repoId = res.repoId
+          set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+          result = await getReflog(repoId, 'HEAD', reflogMaxCount)
+        } else {
+          throw err
+        }
+      }
+      set({ reflog: result })
+    } catch (err) {
+      console.error('Failed to load reflog:', err)
+      get().showError('Failed to load reflog', err)
+    } finally {
+      set({ reflogLoading: false })
+    }
+  },
+
+  loadMoreReflog: async () => {
+    if (get().reflogLoading) return
+    set({ reflogMaxCount: get().reflogMaxCount + REFLOG_PAGE_SIZE })
+    await get().loadReflog()
+  },
+
+  recoverBranch: async (branchName, sha) => {
+    await get().performRefAction('create', branchName, sha)
+    set({ selectedSha: sha })
+    void get().loadReflog()
   },
 
   fetchCommitCIStatusesIfNeeded: (shas) => {
@@ -223,7 +288,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         openError: null,
         selectedRefName: null,
         mergePreview: null,
+        reflog: null,
+        reflogMaxCount: REFLOG_PAGE_SIZE,
       })
+      if (get().viewMode === 'reflog') void get().loadReflog()
 
       const [refs, hist] = await Promise.all([
         getRefs(res.repoId),
@@ -545,6 +613,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }).catch(() => {})
     }
     get().fetchCommitCIStatusesIfNeeded([nextSha])
+    if (get().viewMode === 'reflog') void get().loadReflog()
   },
 
   performMergeRef: async (refName) => {
@@ -704,5 +773,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         }),
     ])
     set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
+    if (get().viewMode === 'reflog') void get().loadReflog()
   },
 }))

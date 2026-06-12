@@ -59,7 +59,28 @@ export const ChangedPath = z.object({
 
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
-export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset'])
+export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create'])
+
+export const ReflogEntryKind = z.enum([
+  'commit', 'amend', 'checkout', 'reset', 'rebase', 'merge',
+  'cherry-pick', 'revert', 'pull', 'branch', 'clone', 'other',
+])
+
+export const ReflogEntry = z.object({
+  index: z.number(),
+  selector: z.string(),
+  sha: CommitSha,
+  oldSha: CommitSha.nullable(),
+  kind: ReflogEntryKind,
+  message: z.string(),
+  subject: z.string(),
+  authorName: z.string(),
+  authorEmail: z.string(),
+  committerUnix: z.number(),
+  entryUnix: z.number(),
+  isReachable: z.boolean(),
+  refNames: z.array(z.string()),
+})
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -245,5 +266,16 @@ export const contract = {
     .output(z.object({
       ok: z.boolean(),
       message: z.string(),
+    })),
+
+  getReflog: oc
+    .input(z.object({
+      repoId: RepoId,
+      ref: z.string().optional(),
+      maxCount: z.number().optional(),
+    }))
+    .output(z.object({
+      refName: z.string(),
+      entries: z.array(ReflogEntry),
     })),
 }

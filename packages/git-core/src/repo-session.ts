@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import type { RefSummary, WorktreeStatusResponse, CommitDetailResponse } from '@ingit/rpc-contract'
+import type { RefSummary, WorktreeStatusResponse, CommitDetailResponse, ReflogResponse } from '@ingit/rpc-contract'
 import { runGit } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
 import { CommitHydrator } from './hydrator.js'
 import { parseRefs } from './parsers/ref-parser.js'
+import { parseReflog } from './parsers/reflog-parser.js'
 import { parseStatus } from './parsers/status-parser.js'
 import { parseCommitDiff } from './parsers/diff-tree-parser.js'
 import { streamRevList, streamRevListWithMeta } from './parsers/rev-list-parser.js'
@@ -402,6 +403,39 @@ export class RepoSession {
 
   fetch(): void {
     this.ziggit.fetch()
+  }
+
+  async createBranch(name: string, sha: string): Promise<{ message: string }> {
+    const { stdout, stderr } = await runGit(['branch', name, sha], this.rootPath)
+    return {
+      message: (stdout + stderr).trim() || `Created branch ${name} at ${sha.slice(0, 8)}`,
+    }
+  }
+
+  async getReflog(ref = 'HEAD', maxCount = 300): Promise<ReflogResponse> {
+    const [entries, refs] = await Promise.all([
+      parseReflog(this.rootPath, ref, maxCount),
+      this.getRefs(),
+    ])
+
+    const shaToRefs = new Map<string, string[]>()
+    for (const refSummary of refs) {
+      const sha = refSummary.peeledSha ?? refSummary.targetSha
+      const existing = shaToRefs.get(sha)
+      if (existing) {
+        existing.push(refSummary.shortName)
+      } else {
+        shaToRefs.set(sha, [refSummary.shortName])
+      }
+    }
+
+    return {
+      refName: ref,
+      entries: entries.map((entry) => ({
+        ...entry,
+        refNames: shaToRefs.get(entry.sha) ?? [],
+      })),
+    }
   }
 
   async deleteBranch(ref: string, force = false): Promise<void> {

@@ -92,6 +92,10 @@ export function rebaseRef(repoId: string, refName: string) {
   return ensureClient().rebaseRef({ repoId, refName })
 }
 
-export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset', refName: string, sha: string) {
+export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create', refName: string, sha: string) {
   return ensureClient().refAction({ repoId, action, refName, sha })
+}
+
+export function getReflog(repoId: string, ref?: string, maxCount?: number) {
+  return ensureClient().getReflog({ repoId, ref, maxCount })
 }

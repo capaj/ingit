@@ -187,8 +187,19 @@ export const router = os.router({
         message = result.message
         break
       }
+      case 'create': {
+        const result = await session.createBranch(input.refName, input.sha)
+        message = result.message
+        break
+      }
     }
     return { ok: true, message }
+  }),
+
+  getReflog: os.getReflog.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    return session.getReflog(input.ref ?? 'HEAD', input.maxCount ?? 300)
   }),
 })
 
