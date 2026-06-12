@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAppStore } from './store'
 import { RepoOpen } from './components/RepoOpen'
 import { RefsSidebar } from './components/RefsSidebar'
@@ -7,6 +7,7 @@ import { CommitDetail } from './components/CommitDetail'
 import { ErrorDialog } from './components/ErrorDialog'
 
 export function App() {
+  const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
   const {
     status, repoPath, recentRepos, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, commitCIStatus, githubUrl, openError,
@@ -69,10 +70,39 @@ export function App() {
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden', background: '#1e1e2e' }}>
-      <RefsSidebar refs={refs} onSelectRef={selectRef} selectedSha={selectedSha} />
+      {refsSidebarOpen && (
+        <RefsSidebar
+          refs={refs}
+          onSelectRef={selectRef}
+          selectedSha={selectedSha}
+          onClose={() => setRefsSidebarOpen(false)}
+        />
+      )}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 14px', borderBottom: '1px solid #313244', background: '#181825', fontSize: 12, color: '#6c7086', gap: 8, overflow: 'hidden' }}>
+          {!refsSidebarOpen && (
+            <button
+              onClick={() => setRefsSidebarOpen(true)}
+              title="Show refs"
+              aria-label="Show refs"
+              style={{
+                width: 24,
+                height: 20,
+                flexShrink: 0,
+                padding: 0,
+                borderRadius: 3,
+                border: '1px solid #313244',
+                background: '#1e1e2e',
+                color: '#6c7086',
+                fontSize: 13,
+                lineHeight: '18px',
+                cursor: 'pointer',
+              }}
+            >
+              ☰
+            </button>
+          )}
           <button
             onClick={() => setShowCommitMessages(!showCommitMessages)}
             style={{

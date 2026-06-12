@@ -5,6 +5,7 @@ interface RefsSidebarProps {
   refs: RefSummary[]
   onSelectRef: (ref: RefSummary) => void
   selectedSha?: string | null
+  onClose: () => void
 }
 
 type RefKind = 'head' | 'remote' | 'tag'
@@ -17,10 +18,7 @@ const KIND_LABELS: Record<RefKind, string> = {
 
 const KIND_ORDER: RefKind[] = ['head', 'remote', 'tag']
 
-const COLLAPSED_WIDTH = 36
-
-export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
+export function RefsSidebar({ refs, onSelectRef, selectedSha, onClose }: RefsSidebarProps) {
   const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({ head: true, remote: true, tag: true })
   const [filter, setFilter] = useState('')
 
@@ -33,41 +31,6 @@ export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps
 
   function toggleGroup(kind: RefKind) {
     setCollapsed((prev) => ({ ...prev, [kind]: !prev[kind] }))
-  }
-
-  if (!sidebarOpen) {
-    return (
-      <div
-        style={{
-          width: COLLAPSED_WIDTH,
-          flexShrink: 0,
-          height: '100%',
-          background: '#181825',
-          borderRight: '1px solid #313244',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          paddingTop: 8,
-          userSelect: 'none',
-        }}
-      >
-        <button
-          onClick={() => setSidebarOpen(true)}
-          title="Show refs"
-          style={{
-            background: 'none',
-            border: 'none',
-            color: '#6c7086',
-            cursor: 'pointer',
-            fontSize: 16,
-            padding: 6,
-            lineHeight: 1,
-          }}
-        >
-          ☰
-        </button>
-      </div>
-    )
   }
 
   return (
@@ -100,7 +63,8 @@ export function RefsSidebar({ refs, onSelectRef, selectedSha }: RefsSidebarProps
       >
         Refs
         <button
-          onClick={() => setSidebarOpen(false)}
+          onClick={onClose}
+          title="Hide refs"
           style={{
             background: 'none',
             border: 'none',
