@@ -119,6 +119,13 @@ export const contract = {
     .input(z.object({}))
     .output(z.array(z.string())),
 
+  discoverRepos: oc
+    .input(z.object({ folder: z.string().optional() }))
+    .output(z.object({
+      folder: z.string(),
+      repos: z.array(z.string()),
+    })),
+
   getRefs: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RefSummary)),

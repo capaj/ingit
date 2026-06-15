@@ -12,7 +12,7 @@ export function App() {
   const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
   const [fetching, setFetching] = useState(false)
   const {
-    status, repoPath, recentRepos, refs, historyWindow, selectedSha,
+    status, repoPath, recentRepos, discoveredFolder, discoveredRepos, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, commitCIStatus, githubUrl, openError,
     errorDialog, dismissError, showError,
     openRepoByPath, openFromUrl, selectRef,
@@ -68,7 +68,13 @@ export function App() {
   if (status === 'no-repo') {
     return (
       <>
-        <RepoOpen onOpen={openRepoByPath} error={openError} recentRepos={recentRepos} />
+        <RepoOpen
+          onOpen={openRepoByPath}
+          error={openError}
+          recentRepos={recentRepos}
+          discoveredFolder={discoveredFolder}
+          discoveredRepos={discoveredRepos}
+        />
         <ErrorDialog error={errorDialog} onDismiss={dismissError} />
       </>
     )

@@ -5,6 +5,7 @@ import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
 import { getMergePreview } from './merge-handler.js'
 import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl } from './ci-status-handler.js'
+import { discoverRepos } from './discover-repos.js'
 
 const sessionManager = new SessionManager()
 
@@ -24,6 +25,10 @@ export const router = os.router({
 
   getRecentRepos: os.getRecentRepos.handler(async () => {
     return sessionManager.getRecentRepos()
+  }),
+
+  discoverRepos: os.discoverRepos.handler(async ({ input }) => {
+    return discoverRepos(input.folder)
   }),
 
   getRefs: os.getRefs.handler(async ({ input }) => {

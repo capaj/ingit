@@ -15,6 +15,7 @@ import type {
 import {
   openRepo,
   getRecentRepos,
+  discoverRepos,
   getRefs,
   queryHistory,
   getCommitDetail,
@@ -104,6 +105,8 @@ interface AppState {
   repoPath: string | null
   totalCommitCount: number
   recentRepos: string[]
+  discoveredFolder: string | null
+  discoveredRepos: string[]
   refs: RefSummary[]
   historyWindow: HistoryWindowResponse | null
   viewMode: ViewMode
@@ -136,6 +139,7 @@ interface AppState {
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
   loadRecentRepos: () => Promise<void>
+  loadDiscoveredRepos: (folder?: string) => Promise<void>
   openFromUrl: () => void
   selectCommit: (sha: string) => void
   selectRef: (ref: RefSummary) => void
@@ -232,6 +236,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   repoPath: null,
   totalCommitCount: 0,
   recentRepos: [],
+  discoveredFolder: null,
+  discoveredRepos: [],
   refs: [],
   historyWindow: null,
   viewMode: 'history',
@@ -475,9 +481,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  loadDiscoveredRepos: async (folder) => {
+    try {
+      const { folder: scanned, repos } = await discoverRepos(folder)
+      set({ discoveredFolder: scanned, discoveredRepos: repos })
+    } catch (err) {
+      console.error('Failed to discover repositories:', err)
+    }
+  },
+
   openFromUrl: () => {
     const path = getRepoPathFromUrl()
     void get().loadRecentRepos()
+    void get().loadDiscoveredRepos()
     if (path) void get().openRepoByPath(path)
   },
 

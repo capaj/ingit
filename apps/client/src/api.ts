@@ -44,6 +44,10 @@ export function getRecentRepos() {
   return ensureClient().getRecentRepos({})
 }
 
+export function discoverRepos(folder?: string) {
+  return ensureClient().discoverRepos({ folder })
+}
+
 export function getRefs(repoId: string) {
   return ensureClient().getRefs({ repoId })
 }
