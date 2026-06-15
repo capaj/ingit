@@ -122,9 +122,16 @@ function cacheKey(ownerRepo: string, sha: string): string {
   return `${ownerRepo}@${sha}`
 }
 
+// When GitHub returns a rate-limit 403/429 we stop hitting the API entirely
+// until this timestamp, so a burst of lookups can't keep hammering an
+// already-limited account (and spamming the logs). Shared across all repos
+// since GitHub's limits are per-account.
+let rateLimitedUntil = 0
+
 export async function resetCIStatusCacheForTests(): Promise<void> {
   cachePromise = Promise.resolve({})
   writeChain = Promise.resolve()
+  rateLimitedUntil = 0
   try {
     await writeFile(CACHE_FILE, '{}')
   } catch {
@@ -237,6 +244,25 @@ export function aggregateCIState(runs: CheckRun[], combined: CombinedStatus | nu
   return 'none'
 }
 
+// How long to wait after a rate-limit response. Prefer GitHub's own guidance
+// (Retry-After seconds, or x-ratelimit-reset epoch seconds), capped so a bad
+// header can't pause lookups for an unreasonable amount of time.
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000
+const MAX_RATE_LIMIT_BACKOFF_MS = 15 * 60_000
+function retryAfterMs(res: Response): number {
+  const retryAfter = res.headers.get('retry-after')
+  if (retryAfter) {
+    const secs = Number(retryAfter)
+    if (Number.isFinite(secs) && secs > 0) return Math.min(secs * 1000, MAX_RATE_LIMIT_BACKOFF_MS)
+  }
+  const reset = res.headers.get('x-ratelimit-reset')
+  if (reset) {
+    const deltaMs = Number(reset) * 1000 - Date.now()
+    if (Number.isFinite(deltaMs) && deltaMs > 0) return Math.min(deltaMs, MAX_RATE_LIMIT_BACKOFF_MS)
+  }
+  return DEFAULT_RATE_LIMIT_BACKOFF_MS
+}
+
 async function fetchJson<T>(path: string, token: string | null): Promise<FetchJsonResult<T>> {
   try {
     const headers: Record<string, string> = {
@@ -253,6 +279,16 @@ async function fetchJson<T>(path: string, token: string | null): Promise<FetchJs
         message = body.message ?? message
       } catch {
         // Keep the HTTP status text when GitHub does not return JSON.
+      }
+      // A 403/429 mentioning a rate limit means GitHub wants us to back off.
+      // (A plain 403 is usually a permissions problem and shouldn't pause
+      // everything.) Honour Retry-After / the rate-limit reset when given.
+      if ((res.status === 403 || res.status === 429) && /rate limit/i.test(message)) {
+        const until = Date.now() + retryAfterMs(res)
+        if (until > rateLimitedUntil) {
+          rateLimitedUntil = until
+          console.warn(`[CI] GitHub rate limit hit; pausing CI lookups for ${Math.round((until - Date.now()) / 1000)}s`)
+        }
       }
       return { ok: false, status: res.status, message }
     }
@@ -340,6 +376,10 @@ export async function fetchCommitCIStatus(ownerRepo: string, sha: string): Promi
   const cache = await loadCache()
   const cached = cache[key]
   if (cached) return cached
+
+  // While rate-limited, don't touch the network — surface a transient error
+  // (not cached) so the client retries once the window passes.
+  if (Date.now() < rateLimitedUntil) return { state: 'error', runs: [] }
 
   try {
     const token = await resolveGithubToken()

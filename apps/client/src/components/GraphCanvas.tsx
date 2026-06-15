@@ -10,6 +10,10 @@ import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButton
 // ---------------------------------------------------------------------------
 
 const NODE_SPACING_Y = 56
+// Cap how many on-screen commits we look up CI for at once. Zoomed out, hundreds
+// can be visible; fetching them all blasts GitHub and trips its secondary rate
+// limit, so we take the newest 20 and ignore the rest.
+const MAX_ONSCREEN_CI_FETCH = 20
 const LANE_WIDTH = 80
 const NODE_RADIUS = 16
 const NODE_FILL = '#11111b'
@@ -1939,7 +1943,9 @@ export function GraphCanvas() {
     [commitMessageLabels, scrollTop],
   )
 
-  const viewportVisibleCommitLabels = useMemo(() => {
+  // Commits actually within the viewport, newest first (commitMessageLabels is
+  // already top-to-bottom = newest-to-oldest).
+  const onScreenCommitLabels = useMemo(() => {
     if (clientHeight === 0) return []
     return commitMessageLabels.filter((label) => {
       const viewY = label.y - scrollTop
@@ -1947,29 +1953,17 @@ export function GraphCanvas() {
     })
   }, [commitMessageLabels, scrollTop, clientHeight])
 
+  // Fetch CI for the on-screen commits (capped, newest first) so each row shows
+  // a status dot — without prefetching the whole graph, which tripped GitHub's
+  // secondary rate limit. The 200ms debounce coalesces scroll/zoom churn.
   useEffect(() => {
-    if (viewportVisibleCommitLabels.length === 0) return
+    if (onScreenCommitLabels.length === 0) return
     const handle = window.setTimeout(() => {
-      // Prefetch a window extending well beyond the viewport so scrolling
-      // hits warm cache. Cheap because the server short-circuits cached SHAs.
-      const visibleShas = new Set(viewportVisibleCommitLabels.map((l) => l.sha))
-      let firstVisibleIdx = -1
-      let lastVisibleIdx = -1
-      for (let i = 0; i < commitMessageLabels.length; i++) {
-        if (visibleShas.has(commitMessageLabels[i].sha)) {
-          if (firstVisibleIdx === -1) firstVisibleIdx = i
-          lastVisibleIdx = i
-        }
-      }
-      if (firstVisibleIdx === -1) return
-      const PREFETCH_AHEAD = 40
-      const start = Math.max(0, firstVisibleIdx - PREFETCH_AHEAD)
-      const end = Math.min(commitMessageLabels.length, lastVisibleIdx + 1 + PREFETCH_AHEAD)
-      const window_ = commitMessageLabels.slice(start, end).map((l) => l.sha)
-      fetchCommitCIStatusesIfNeeded(window_)
+      const shas = onScreenCommitLabels.slice(0, MAX_ONSCREEN_CI_FETCH).map((l) => l.sha)
+      fetchCommitCIStatusesIfNeeded(shas)
     }, 200)
     return () => window.clearTimeout(handle)
-  }, [viewportVisibleCommitLabels, commitMessageLabels, fetchCommitCIStatusesIfNeeded])
+  }, [onScreenCommitLabels, fetchCommitCIStatusesIfNeeded])
 
   const selectedNode = useMemo(
     () => (layout && selectedSha ? layout.shaToNode.get(selectedSha) ?? null : null),
@@ -2153,7 +2147,10 @@ export function GraphCanvas() {
               loading: '#585b70',
               none: '#45475a',
             }
-            const dot = dotColor[status?.state ?? 'loading']
+            // CI is only looked up for commits the user opens, so most rows have
+            // no status — show a dot only once we actually have one, rather than
+            // a perpetual "loading" dot for the entire graph.
+            const dot = status ? dotColor[status.state] : undefined
             return (
               <div
                 key={label.key}
