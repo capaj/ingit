@@ -80,6 +80,13 @@ interface VisibleRefAction {
   action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
   label: string
   tone: 'neutral' | 'warning' | 'danger'
+  force?: boolean
+}
+
+// The server reports a non-fast-forward push rejection as an oRPC CONFLICT error
+// (plain Errors are masked as "Internal server error" over the wire).
+function isNonFastForwardPushError(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'CONFLICT'
 }
 
 interface RefPlacement {
@@ -1653,16 +1660,23 @@ export function GraphCanvas() {
   const selectedRefActions = useMemo<VisibleRefAction[]>(() => {
     if (!selectedRef) return []
     if (selectedRef.kind === 'head') {
+      // The branch diverged from its upstream (e.g. after a rebase), so a normal
+      // push would be rejected as non-fast-forward — force-push instead.
+      const needsForcePush = (selectedRef.behind ?? 0) > 0
+      const pushAction: VisibleRefAction = needsForcePush
+        ? { action: 'push', label: 'Force push', tone: 'warning', force: true }
+        : { action: 'push', label: 'Push', tone: 'neutral' }
+
       if (selectedRef.isCurrent) {
         return [
-          ...(canPushSelectedRef ? [{ action: 'push' as const, label: 'Push', tone: 'neutral' as const }] : []),
+          ...(canPushSelectedRef ? [pushAction] : []),
           ...(canResetSelectedRef ? [{ action: 'reset' as const, label: 'Reset', tone: 'warning' as const }] : []),
         ]
       }
 
       return [
         { action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const },
-        ...(canPushSelectedRef ? [{ action: 'push' as const, label: 'Push', tone: 'neutral' as const }] : []),
+        ...(canPushSelectedRef ? [pushAction] : []),
         ...(canResetSelectedRef ? [{ action: 'reset' as const, label: 'Reset', tone: 'warning' as const }] : []),
         { action: 'delete' as const, label: 'Delete', tone: 'danger' as const },
       ]
@@ -1764,11 +1778,24 @@ export function GraphCanvas() {
     selectGraphRef(refName)
   }, [selectGraphRef])
 
-  const handleRefActionClick = useCallback((action: VisibleRefAction['action']) => {
+  const handleRefActionClick = useCallback((action: VisibleRefAction['action'], force = false) => {
     if (!selectedRefName || !selectedRef) return
     setMergePreviewVisible(false)
-    performRefAction(action, selectedRefName, selectedRef.targetSha).catch((err) => {
-      showError(`${action} failed`, err)
+    const sha = selectedRef.targetSha
+    const refName = selectedRefName
+    performRefAction(action, refName, sha, force).catch((err) => {
+      if (action === 'push' && !force && isNonFastForwardPushError(err)) {
+        // Remote rejected the push because our branch isn't a fast-forward
+        // (diverged / rewritten history). Offer to force-push instead.
+        showError('Push rejected', err, {
+          label: 'Force push',
+          run: () => {
+            performRefAction('push', refName, sha, true).catch((e) => showError('Force push failed', e))
+          },
+        })
+      } else {
+        showError(`${action} failed`, err)
+      }
     })
   }, [selectedRefName, selectedRef, performRefAction, showError])
 
@@ -2625,7 +2652,7 @@ export function GraphCanvas() {
                       key={refAction.action}
                       label={refAction.label}
                       tone={refAction.tone}
-                      onClick={() => handleRefActionClick(refAction.action)}
+                      onClick={() => handleRefActionClick(refAction.action, refAction.force)}
                     />
                   ))}
                 </div>

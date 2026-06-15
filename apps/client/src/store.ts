@@ -32,6 +32,12 @@ import {
   isConnectionLostError,
 } from './api'
 
+/** Optional extra button shown in the error dialog (e.g. "Force push"). */
+export interface ErrorDialogAction {
+  label: string
+  run: () => void
+}
+
 const INITIAL_ROWS = 1000
 const LOAD_MORE_ROWS = 500
 const MAX_RECENT_REPOS = 12
@@ -114,7 +120,7 @@ interface AppState {
   mergePreview: MergePreviewResponse | null
   githubUrl: string | null
   openError: string | null
-  errorDialog: { title: string; message: string } | null
+  errorDialog: { title: string; message: string; action?: ErrorDialogAction } | null
   loadingMore: boolean
   commitCIStatus: Record<string, CIStatusEntry>
   showCommitMessages: boolean
@@ -126,7 +132,7 @@ interface AppState {
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
   runStageAction: (action: StageActionKind, paths: string[]) => Promise<void>
-  showError: (title: string, err: unknown) => void
+  showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
   loadRecentRepos: () => Promise<void>
@@ -138,7 +144,7 @@ interface AppState {
   ensureMergePreview: (refName: string) => Promise<MergePreviewResponse | null>
   navigateTo: (sha: string) => Promise<void>
   requestMore: (direction: 'up' | 'down') => Promise<void>
-  performRefAction: (action: RefActionKind, refName: string, sha: string) => Promise<void>
+  performRefAction: (action: RefActionKind, refName: string, sha: string, force?: boolean) => Promise<void>
   performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
   performMergeRef: (refName: string) => Promise<void>
   performRebaseRef: (refName: string) => Promise<void>
@@ -396,11 +402,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     startCIPolling()
   },
 
-  showError: (title, err) => {
+  showError: (title, err, action) => {
     const message = err instanceof Error ? err.message
       : typeof err === 'string' ? err
       : 'Unknown error'
-    set({ errorDialog: { title, message } })
+    set({ errorDialog: { title, message, action } })
   },
 
   dismissError: () => set({ errorDialog: null }),
@@ -626,12 +632,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  performRefAction: async (action, refName, sha) => {
+  performRefAction: async (action, refName, sha, force) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
     try {
-      await refAction(repoId, action, refName, sha)
+      await refAction(repoId, action, refName, sha, force)
     } catch (err) {
       // Ref actions are idempotent, so they are also safe to retry after
       // the connection dropped mid-call (e.g. dev server restart).
@@ -639,7 +645,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const res = await openRepo({ path: repoPath })
         repoId = res.repoId
         set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-        await refAction(repoId, action, refName, sha)
+        await refAction(repoId, action, refName, sha, force)
       } else {
         throw err
       }

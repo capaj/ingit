@@ -291,6 +291,9 @@ export const contract = {
       action: RefActionKind,
       refName: z.string(),
       sha: CommitSha,
+      // For `push`: force-push (--force-with-lease). Needed after a rebase, when
+      // the branch diverged from its upstream and a normal push is rejected.
+      force: z.boolean().optional(),
     }))
     .output(z.object({
       ok: z.boolean(),

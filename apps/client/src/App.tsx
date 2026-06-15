@@ -10,16 +10,27 @@ import { ErrorDialog } from './components/ErrorDialog'
 
 export function App() {
   const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
+  const [fetching, setFetching] = useState(false)
   const {
     status, repoPath, recentRepos, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, commitCIStatus, githubUrl, openError,
     errorDialog, dismissError, showError,
     openRepoByPath, openFromUrl, selectRef,
-    navigateTo, checkoutSha,
+    navigateTo, checkoutSha, performRefAction,
     showCommitMessages, setShowCommitMessages,
     viewMode, setViewMode,
     worktreeSelected,
   } = useAppStore()
+
+  const handleFetch = async () => {
+    if (fetching) return
+    setFetching(true)
+    // refName/sha are ignored server-side for fetch; it fetches all remotes
+    // and performRefAction reloads refs + history so new commits show up.
+    try { await performRefAction('fetch', '', '') }
+    catch (err) { showError('Fetch failed', err) }
+    finally { setFetching(false) }
+  }
 
   const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
   const selectedCIRuns = selectedCIStatus?.runs ?? []
@@ -160,6 +171,29 @@ export function App() {
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#a6adc8', fontFamily: 'monospace', flex: 1 }}>
             {repoPath}
           </span>
+          <button
+            onClick={handleFetch}
+            disabled={fetching}
+            title="Fetch all remotes"
+            aria-label="Fetch all remotes"
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '4px 10px',
+              borderRadius: 4,
+              border: '1px solid #313244',
+              background: 'transparent',
+              color: fetching ? '#45475a' : '#6c7086',
+              fontSize: 11,
+              cursor: fetching ? 'default' : 'pointer',
+            }}
+          >
+            <span style={{ display: 'inline-block', animation: fetching ? 'spin 0.7s linear infinite' : 'none' }}>⟳</span>
+            {fetching ? 'Fetching…' : 'Fetch'}
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </button>
         </div>
 
         {viewMode === 'reflog' ? <ReflogGraph /> : <GraphCanvas />}

@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 export interface ErrorDialogState {
   title: string
   message: string
+  /** Optional extra button (e.g. "Force push") shown next to Close. */
+  action?: { label: string; run: () => void }
 }
 
 interface ErrorDialogProps {
@@ -135,6 +137,27 @@ export function ErrorDialog({ error, onDismiss }: ErrorDialogProps) {
           >
             {copied ? 'Copied' : 'Copy'}
           </button>
+          {error.action && (
+            <button
+              type="button"
+              onClick={() => {
+                error.action?.run()
+                onDismiss()
+              }}
+              style={{
+                background: '#f9e2af',
+                color: '#1e1e2e',
+                border: 'none',
+                borderRadius: 6,
+                padding: '6px 14px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {error.action.label}
+            </button>
+          )}
           <button
             type="button"
             onClick={onDismiss}

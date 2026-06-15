@@ -1,4 +1,5 @@
-import { implement } from '@orpc/server'
+import { implement, ORPCError } from '@orpc/server'
+import { GitCommandError } from '@ingit/git-core'
 import { contract } from '@ingit/rpc-contract'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
@@ -10,6 +11,11 @@ const sessionManager = new SessionManager()
 export { sessionManager }
 
 const os = implement(contract)
+
+/** Detect a push rejected because the remote tip isn't an ancestor of ours. */
+function isNonFastForwardRejection(stderr: string): boolean {
+  return /\bnon-fast-forward\b|\[rejected\]|\bfetch first\b|tip of your current branch is behind/i.test(stderr)
+}
 
 export const router = os.router({
   openRepo: os.openRepo.handler(async ({ input }) => {
@@ -186,7 +192,20 @@ export const router = os.router({
         break
       }
       case 'push':
-        message = await session.push(input.refName)
+        try {
+          message = await session.push(input.refName, undefined, input.force ?? false)
+        } catch (err) {
+          if (err instanceof GitCommandError && isNonFastForwardRejection(err.stderr)) {
+            // Surface as a typed error so the client can offer a force push.
+            // Plain Errors are masked as "Internal server error" over oRPC;
+            // ORPCError instances pass through with their message + data.
+            throw new ORPCError('CONFLICT', {
+              message: err.stderr.trim() || err.message,
+              data: { reason: 'non-fast-forward' },
+            })
+          }
+          throw err
+        }
         break
       case 'fetch':
         await session.fetch()
