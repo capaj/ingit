@@ -6,6 +6,7 @@ import type {
   HistoryQuery,
   HistoryWindowResponse,
   CommitRow,
+  RefSummary,
 } from '@ingit/rpc-contract'
 
 async function resolveAnchorSha(
@@ -100,6 +101,50 @@ function buildRevListArgs(query: HistoryQuery, anchorSha: string | null): string
   return args
 }
 
+/**
+ * Resolve the tip of the lane-0 "center line".
+ *
+ * Normally this is HEAD. But when the current branch's upstream remote ref is
+ * ahead of HEAD on a pure first-parent line (the common state right after a
+ * `fetch`), the fetched commits are first-parent *descendants* of HEAD. The
+ * lane allocator reserves lane 0 by walking first-parents *down* from the tip,
+ * so it would never reach those descendants and they'd fork into a side lane.
+ * Returning the upstream tip pulls them onto HEAD's vertical lane instead.
+ */
+function resolveCenterLineSha(
+  headSha: string | undefined,
+  rawEntries: RevListEntryWithMeta[],
+  refs: RefSummary[],
+): string | undefined {
+  if (!headSha) return headSha
+  const current = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+  if (!current?.upstream) return headSha
+
+  const upstreamRef = refs.find(
+    (ref) => ref.kind === 'remote' && ref.name === current.upstream,
+  )
+  if (!upstreamRef) return headSha
+
+  const upstreamSha = upstreamRef.peeledSha ?? upstreamRef.targetSha
+  if (upstreamSha === headSha) return headSha
+
+  // Walk first-parents down from the upstream tip; only adopt it as the center
+  // tip if HEAD lies on that chain (otherwise the branches have diverged and
+  // the remote commits are a genuine side branch).
+  const firstParent = new Map<string, string | undefined>()
+  for (const entry of rawEntries) firstParent.set(entry.sha, entry.parentShas[0])
+
+  const seen = new Set<string>()
+  let cursor: string | undefined = upstreamSha
+  while (cursor !== undefined && !seen.has(cursor)) {
+    if (cursor === headSha) return upstreamSha
+    seen.add(cursor)
+    cursor = firstParent.get(cursor)
+  }
+
+  return headSha
+}
+
 export async function handleHistoryQuery(
   session: RepoSession,
   query: HistoryQuery,
@@ -163,10 +208,14 @@ export async function handleHistoryQuery(
     headSha = session.head.sha
   }
 
-  const { lanes, edges } = projection.computeGeometry(0, rawEntries.length - 1, undefined, headSha)
+  // Refs are needed both to label commits and to detect when the current
+  // branch's upstream is ahead of HEAD (so the fetched commits share its lane).
+  const refs = await session.getRefs()
+  const centerLineSha = resolveCenterLineSha(headSha, rawEntries, refs)
+
+  const { lanes, edges } = projection.computeGeometry(0, rawEntries.length - 1, undefined, centerLineSha)
 
   // Build sha → ref names map from refs
-  const refs = await session.getRefs()
   const shaToRefs = new Map<string, string[]>()
   for (const ref of refs) {
     const sha = ref.peeledSha ?? ref.targetSha
