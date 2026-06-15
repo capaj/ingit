@@ -5,6 +5,7 @@ import { RefsSidebar } from './components/RefsSidebar'
 import { GraphCanvas } from './components/GraphCanvas'
 import { ReflogGraph } from './components/ReflogGraph'
 import { CommitDetail } from './components/CommitDetail'
+import { WorkingTreeDetail } from './components/WorkingTreeDetail'
 import { ErrorDialog } from './components/ErrorDialog'
 
 export function App() {
@@ -17,6 +18,7 @@ export function App() {
     navigateTo, checkoutSha,
     showCommitMessages, setShowCommitMessages,
     viewMode, setViewMode,
+    worktreeSelected,
   } = useAppStore()
 
   const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
@@ -163,20 +165,24 @@ export function App() {
         {viewMode === 'reflog' ? <ReflogGraph /> : <GraphCanvas />}
       </div>
 
-      <CommitDetail
-        commit={commitDetail}
-        diff={commitDiff}
-        branchName={selectedBranchName}
-        prs={commitPRs}
-        ciState={selectedCIStatus?.state}
-        ciRuns={selectedCIRuns}
-        githubUrl={githubUrl}
-        onNavigate={navigateTo}
-        onCheckout={async (sha) => {
-          try { await checkoutSha(sha) }
-          catch (err) { showError('Checkout failed', err) }
-        }}
-      />
+      {worktreeSelected ? (
+        <WorkingTreeDetail />
+      ) : (
+        <CommitDetail
+          commit={commitDetail}
+          diff={commitDiff}
+          branchName={selectedBranchName}
+          prs={commitPRs}
+          ciState={selectedCIStatus?.state}
+          ciRuns={selectedCIRuns}
+          githubUrl={githubUrl}
+          onNavigate={navigateTo}
+          onCheckout={async (sha) => {
+            try { await checkoutSha(sha) }
+            catch (err) { showError('Checkout failed', err) }
+          }}
+        />
+      )}
 
       <ErrorDialog error={errorDialog} onDismiss={dismissError} />
     </div>

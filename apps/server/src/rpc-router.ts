@@ -32,6 +32,27 @@ export const router = os.router({
     return session.getStatus()
   }),
 
+  getWorktreeChanges: os.getWorktreeChanges.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    return session.getWorktreeChanges()
+  }),
+
+  stageAction: os.stageAction.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    switch (input.action) {
+      case 'stage':
+        return session.stageFiles(input.paths)
+      case 'unstage':
+        return session.unstageFiles(input.paths)
+      case 'stage-all':
+        return session.stageAll()
+      case 'unstage-all':
+        return session.unstageAll()
+    }
+  }),
+
   queryHistory: os.queryHistory.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')

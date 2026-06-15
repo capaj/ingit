@@ -224,6 +224,32 @@ export interface WorktreeStatusResponse {
   conflictedCount: number
 }
 
+export type WorktreeFileStatus = 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U' | '?'
+
+export interface WorktreeFile {
+  path: string
+  /** Original path for renames/copies. */
+  oldPath?: string
+  status: WorktreeFileStatus
+}
+
+export interface WorktreeChangesResponse {
+  branch?: string
+  headSha: CommitSha
+  /** Files (or file portions) staged in the index. */
+  staged: WorktreeFile[]
+  /** Unstaged worktree changes, including untracked (`?`) and conflicted (`U`). */
+  unstaged: WorktreeFile[]
+}
+
+export type StageActionKind = 'stage' | 'unstage' | 'stage-all' | 'unstage-all'
+
+export interface StageActionRequest {
+  repoId: RepoId
+  action: StageActionKind
+  paths: string[]
+}
+
 // WebSocket event types
 export type WsEvent =
   | { type: 'indexing-progress'; repoId: RepoId; rowsIndexed: number; totalEstimate?: number }

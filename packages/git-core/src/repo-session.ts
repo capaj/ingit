@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { RefSummary, WorktreeStatusResponse, CommitDetailResponse, ReflogResponse } from '@ingit/rpc-contract'
+import type { RefSummary, WorktreeStatusResponse, WorktreeChangesResponse, CommitDetailResponse, ReflogResponse } from '@ingit/rpc-contract'
 import { runGit } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
@@ -7,6 +7,7 @@ import { CommitHydrator } from './hydrator.js'
 import { parseRefs } from './parsers/ref-parser.js'
 import { parseReflog } from './parsers/reflog-parser.js'
 import { parseStatus } from './parsers/status-parser.js'
+import { readWorktreeChanges } from './parsers/worktree-changes-parser.js'
 import { parseCommitDiff } from './parsers/diff-tree-parser.js'
 import { streamRevList, streamRevListWithMeta } from './parsers/rev-list-parser.js'
 import type { RevListEntry, RevListEntryWithMeta } from './parsers/rev-list-parser.js'
@@ -154,6 +155,39 @@ export class RepoSession {
 
   getStatus(): Promise<WorktreeStatusResponse> {
     return parseStatus(this.rootPath)
+  }
+
+  getWorktreeChanges(): Promise<WorktreeChangesResponse> {
+    return readWorktreeChanges(this.rootPath)
+  }
+
+  /** Stage the given paths into the index. Returns the fresh worktree state. */
+  async stageFiles(paths: string[]): Promise<WorktreeChangesResponse> {
+    if (paths.length > 0) {
+      // `git add` stages modifications, additions and deletions for each path.
+      await runGit(['add', '--', ...paths], this.rootPath)
+    }
+    return this.getWorktreeChanges()
+  }
+
+  /** Remove the given paths from the index, keeping worktree changes. */
+  async unstageFiles(paths: string[]): Promise<WorktreeChangesResponse> {
+    if (paths.length > 0) {
+      await runGit(['restore', '--staged', '--', ...paths], this.rootPath)
+    }
+    return this.getWorktreeChanges()
+  }
+
+  async stageAll(): Promise<WorktreeChangesResponse> {
+    await runGit(['add', '-A'], this.rootPath)
+    return this.getWorktreeChanges()
+  }
+
+  async unstageAll(): Promise<WorktreeChangesResponse> {
+    // Mixed reset of the index back to HEAD — unstages everything, keeps the
+    // worktree untouched.
+    await runGit(['reset', '--quiet'], this.rootPath)
+    return this.getWorktreeChanges()
   }
 
   async getCommitDetail(sha: string): Promise<CommitDetailResponse> {

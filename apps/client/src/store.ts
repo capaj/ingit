@@ -9,6 +9,8 @@ import type {
   MergePreviewResponse,
   RefActionKind,
   ReflogResponse,
+  WorktreeChangesResponse,
+  StageActionKind,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -25,6 +27,8 @@ import {
   rebaseRef as rebaseRefApi,
   refAction,
   getReflog,
+  getWorktreeChanges,
+  stageAction,
   isConnectionLostError,
 } from './api'
 
@@ -114,9 +118,14 @@ interface AppState {
   loadingMore: boolean
   commitCIStatus: Record<string, CIStatusEntry>
   showCommitMessages: boolean
+  worktreeChanges: WorktreeChangesResponse | null
+  worktreeSelected: boolean
 
   // Actions
   setShowCommitMessages: (value: boolean) => void
+  loadWorktreeChanges: () => Promise<void>
+  selectWorktree: () => void
+  runStageAction: (action: StageActionKind, paths: string[]) => Promise<void>
   showError: (title: string, err: unknown) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
@@ -135,10 +144,80 @@ interface AppState {
   performRebaseRef: (refName: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
   fetchCommitCIStatusesIfNeeded: (shas: string[]) => void
+  watchCommitCIStatus: (sha: string) => void
   setViewMode: (mode: ViewMode) => void
   loadReflog: () => Promise<void>
   loadMoreReflog: () => Promise<void>
   recoverBranch: (branchName: string, sha: string) => Promise<void>
+}
+
+// --- CI status polling -----------------------------------------------------
+// GitHub doesn't register a commit's check-runs the instant a push lands, so a
+// freshly pushed commit first reads as `none`. We re-fetch watched commits (and
+// any commit whose CI is still in progress) on an interval so the runs show up —
+// and tick to completion — without a manual refresh.
+const CI_POLL_INTERVAL_MS = 10_000
+// Give up chasing a pushed commit after this long if no CI ever shows up, so a
+// branch without workflows doesn't poll forever.
+const CI_POLL_MAX_MS = 10 * 60_000
+const CI_SETTLED = new Set<CIState | 'loading'>(['success', 'failure', 'neutral'])
+
+const ciWatch = new Map<string, number>() // sha -> deadline (epoch ms)
+let ciPollTimer: ReturnType<typeof setInterval> | null = null
+
+function stopCIPolling() {
+  if (ciPollTimer !== null) {
+    clearInterval(ciPollTimer)
+    ciPollTimer = null
+  }
+}
+
+function startCIPolling() {
+  if (ciPollTimer === null) ciPollTimer = setInterval(ciPollTick, CI_POLL_INTERVAL_MS)
+}
+
+// Re-fetch the given commits and fold the results into the store. Unlike
+// `fetchCommitCIStatusesIfNeeded`, this always hits the server (no skip for
+// already-known SHAs) and never flashes a `loading` state, so a background poll
+// updates the dots in place without flicker.
+function fetchCIStatusesInto(shas: string[]) {
+  const { repoId } = useAppStore.getState()
+  if (!repoId || shas.length === 0) return
+  getCommitCIStatuses(repoId, shas)
+    .then((res: Record<string, { state: CIState; runs: CIRun[] }>) => {
+      // Drop the results if the user switched repos mid-flight.
+      if (useAppStore.getState().repoId !== repoId) return
+      useAppStore.setState((s) => {
+        const next = { ...s.commitCIStatus }
+        for (const sha of shas) {
+          const entry = res[sha]
+          next[sha] = entry ? { state: entry.state, runs: entry.runs ?? [] } : { state: 'none', runs: [] }
+        }
+        return { commitCIStatus: next }
+      })
+    })
+    .catch((err: unknown) => console.warn('[CI] poll fetch failed', err))
+}
+
+function ciPollTick() {
+  const { repoId, commitCIStatus } = useAppStore.getState()
+  if (!repoId) { stopCIPolling(); return }
+
+  const now = Date.now()
+  const toPoll = new Set<string>()
+  for (const [sha, deadline] of ciWatch) {
+    const state = commitCIStatus[sha]?.state
+    // Stop watching once CI has settled or the chase window has elapsed.
+    if (now > deadline || (state !== undefined && CI_SETTLED.has(state))) ciWatch.delete(sha)
+    else toPoll.add(sha)
+  }
+  // Keep any in-progress CI fresh until it settles, even if not explicitly watched.
+  for (const [sha, entry] of Object.entries(commitCIStatus)) {
+    if (entry.state === 'pending') toPoll.add(sha)
+  }
+
+  if (toPoll.size === 0) { stopCIPolling(); return }
+  fetchCIStatusesInto([...toPoll])
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -166,6 +245,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   errorDialog: null,
   loadingMore: false,
   commitCIStatus: {},
+  worktreeChanges: null,
+  worktreeSelected: false,
   showCommitMessages: (() => {
     try {
       const stored = localStorage.getItem('showCommitMessages')
@@ -178,6 +259,50 @@ export const useAppStore = create<AppState>((set, get) => ({
   setShowCommitMessages: (value) => {
     try { localStorage.setItem('showCommitMessages', String(value)) } catch {}
     set({ showCommitMessages: value })
+  },
+
+  loadWorktreeChanges: async () => {
+    const { repoId } = get()
+    if (!repoId) return
+    try {
+      const changes = await getWorktreeChanges(repoId)
+      set({ worktreeChanges: changes })
+    } catch (err) {
+      console.error('Failed to load worktree changes:', err)
+    }
+  },
+
+  selectWorktree: () => {
+    set({
+      worktreeSelected: true,
+      selectedSha: null,
+      selectedRefName: null,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      mergePreview: null,
+    })
+    void get().loadWorktreeChanges()
+  },
+
+  runStageAction: async (action, paths) => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+    try {
+      const changes = await stageAction(repoId, action, paths)
+      set({ worktreeChanges: changes })
+    } catch (err) {
+      if (isSessionError(err) || isConnectionLostError(err)) {
+        const res = await openRepo({ path: repoPath })
+        repoId = res.repoId
+        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+        const changes = await stageAction(repoId, action, paths)
+        set({ worktreeChanges: changes })
+      } else {
+        get().showError('Staging action failed', err)
+      }
+    }
   },
 
   setViewMode: (mode) => {
@@ -263,6 +388,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
   },
 
+  watchCommitCIStatus: (sha) => {
+    ciWatch.set(sha, Date.now() + CI_POLL_MAX_MS)
+    // Re-fetch right away so a stale `none` from before the push is replaced as
+    // soon as GitHub registers the run, then keep polling on the interval.
+    fetchCIStatusesInto([sha])
+    startCIPolling()
+  },
+
   showError: (title, err) => {
     const message = err instanceof Error ? err.message
       : typeof err === 'string' ? err
@@ -277,6 +410,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const res = await openRepo({ path })
       setRepoPathInUrl(res.rootPath)
+      // Drop any CI watches/poller left over from a previously open repo.
+      ciWatch.clear()
+      stopCIPolling()
       set({
         status: 'ready',
         repoId: res.repoId,
@@ -288,10 +424,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         openError: null,
         selectedRefName: null,
         mergePreview: null,
+        worktreeChanges: null,
+        worktreeSelected: false,
         reflog: null,
         reflogMaxCount: REFLOG_PAGE_SIZE,
       })
       if (get().viewMode === 'reflog') void get().loadReflog()
+      void get().loadWorktreeChanges()
 
       const [refs, hist] = await Promise.all([
         getRefs(res.repoId),
@@ -337,7 +476,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   selectCommit: (sha) => {
-    set({ selectedSha: sha, scrollToSha: null, scrollToKey: get().scrollToKey, commitDetail: null, commitDiff: null, commitPRs: [] })
+    set({ selectedSha: sha, worktreeSelected: false, scrollToSha: null, scrollToKey: get().scrollToKey, commitDetail: null, commitDiff: null, commitPRs: [] })
     const { repoId, githubUrl } = get()
     if (!repoId) return
     get().fetchCommitCIStatusesIfNeeded([sha])
@@ -366,6 +505,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { repoId } = get()
     set({
       selectedSha: null,
+      worktreeSelected: false,
       selectedRefName: refName,
       commitDetail: null,
       commitDiff: null,
@@ -384,6 +524,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearGraphRefSelection: () => {
     set({
       selectedSha: null,
+      worktreeSelected: false,
       selectedRefName: null,
       commitDetail: null,
       commitDiff: null,
@@ -516,6 +657,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         topoOrder: true,
         }),
     ])
+    void get().loadWorktreeChanges()
     if (action === 'move') {
       set({
         refs,
@@ -547,6 +689,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     }
 
+    // A push is what triggers CI on the remote, so poll the pushed tip until
+    // its check-runs appear and settle.
+    if (action === 'push') get().watchCommitCIStatus(sha)
     set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
   },
 
@@ -613,6 +758,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }).catch(() => {})
     }
     get().fetchCommitCIStatusesIfNeeded([nextSha])
+    void get().loadWorktreeChanges()
     if (get().viewMode === 'reflog') void get().loadReflog()
   },
 
@@ -678,6 +824,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }).catch(() => {})
     }
     get().fetchCommitCIStatusesIfNeeded([nextSha])
+    void get().loadWorktreeChanges()
   },
 
   performRebaseRef: async (refName) => {
@@ -742,6 +889,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }).catch(() => {})
     }
     get().fetchCommitCIStatusesIfNeeded([nextSha])
+    void get().loadWorktreeChanges()
   },
 
   checkoutSha: async (sha) => {
@@ -773,6 +921,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }),
     ])
     set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
+    void get().loadWorktreeChanges()
     if (get().viewMode === 'reflog') void get().loadReflog()
   },
 }))

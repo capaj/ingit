@@ -22,6 +22,7 @@ type CheckRunApi = CheckRun & {
   html_url?: string
   output?: { title?: string | null; summary?: string | null }
   app?: { name?: string; slug?: string }
+  check_suite?: { id?: number }
   started_at?: string | null
   completed_at?: string | null
 }
@@ -32,17 +33,34 @@ type CommitStatusApi = {
   description?: string | null
   target_url?: string | null
 }
+// A check run only carries the job name (e.g. "build") plus its app
+// ("GitHub Actions"). The workflow name ("CI") and trigger ("push") that
+// GitHub shows live on the workflow run, which we join to the check run via the
+// shared check_suite id.
+type WorkflowRunApi = {
+  name?: string | null
+  event?: string | null
+  check_suite_id?: number
+}
+type WorkflowRunsResponse = { workflow_runs?: WorkflowRunApi[] }
+type WorkflowInfo = { name?: string; event?: string }
 type FetchJsonResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; message: string }
 
 // Only cache states that are terminal — i.e. won't change on the next poll.
 // `pending` might resolve later; `error` is usually a transient network or
-// auth hiccup and should be retried.
-const TERMINAL_STATES: ReadonlySet<CIState> = new Set(['success', 'failure', 'neutral', 'none'])
+// auth hiccup and should be retried. `none` is deliberately excluded: GitHub
+// doesn't register a commit's check-runs the instant a push lands, so a
+// freshly pushed commit first reads as `none` and then flips to `pending`
+// seconds later. Caching `none` would pin that first read forever and the CI
+// runs would never show up without a manual refresh.
+const TERMINAL_STATES: ReadonlySet<CIState> = new Set(['success', 'failure', 'neutral'])
 
 const CACHE_DIR = join(tmpdir(), 'ingit')
-const CACHE_FILE = join(CACHE_DIR, 'ci-status-cache.json')
+// Bump the version suffix when the cached `runs` shape/labels change so stale
+// entries (e.g. the pre-workflow-name labels) are dropped instead of served.
+const CACHE_FILE = join(CACHE_DIR, 'ci-status-cache-v2.json')
 
 type CacheEntry = { state: CIState; runs: CIRun[] }
 type CacheMap = Record<string, CacheEntry>
@@ -248,7 +266,7 @@ async function fetchJson<T>(path: string, token: string | null): Promise<FetchJs
   }
 }
 
-function checkRunToCIRun(run: CheckRunApi): CIRun {
+function checkRunToCIRun(run: CheckRunApi, workflowBySuite: Map<number, WorkflowInfo>): CIRun {
   let state: CIRunState
   if (run.status !== 'completed') {
     state = 'pending'
@@ -270,10 +288,22 @@ function checkRunToCIRun(run: CheckRunApi): CIRun {
     }
   }
 
-  const appName = run.app?.name ?? run.app?.slug
-  const displayName = appName && !run.name.toLowerCase().includes(appName.toLowerCase())
-    ? `${appName} / ${run.name}`
-    : run.name
+  // Prefer GitHub's own label: "<workflow> / <job> (<event>)", e.g.
+  // "CI / build (push)". This is what disambiguates two "deploy" jobs that come
+  // from different workflows. Fall back to the app name when the check run
+  // isn't backed by a workflow run (third-party checks, or the Actions API was
+  // unreadable).
+  const workflow = run.check_suite?.id !== undefined ? workflowBySuite.get(run.check_suite.id) : undefined
+  let displayName: string
+  if (workflow?.name) {
+    displayName = `${workflow.name} / ${run.name}`
+    if (workflow.event) displayName += ` (${workflow.event})`
+  } else {
+    const appName = run.app?.name ?? run.app?.slug
+    displayName = appName && !run.name.toLowerCase().includes(appName.toLowerCase())
+      ? `${appName} / ${run.name}`
+      : run.name
+  }
 
   let description: string | undefined
   if (run.output?.title) {
@@ -318,9 +348,13 @@ export async function fetchCommitCIStatus(ownerRepo: string, sha: string): Promi
       console.warn('[CI] No GitHub token available; private repository CI will not be readable')
     }
 
-    const [checks, combined] = await Promise.all([
+    const [checks, combined, workflows] = await Promise.all([
       fetchJson<CheckRunsResponse>(`repos/${ownerRepo}/commits/${sha}/check-runs?per_page=100`, token),
       fetchJson<CombinedStatus & { statuses?: CommitStatusApi[] }>(`repos/${ownerRepo}/commits/${sha}/status`, token),
+      // Supplementary: maps each check suite to its workflow name + trigger so
+      // we can label runs the way GitHub does. A failure here is non-fatal — we
+      // just fall back to the app name.
+      fetchJson<WorkflowRunsResponse>(`repos/${ownerRepo}/actions/runs?head_sha=${sha}&per_page=100`, token),
     ])
 
     if (!checks.ok && !combined.ok) {
@@ -336,8 +370,20 @@ export async function fetchCommitCIStatus(ownerRepo: string, sha: string): Promi
     const checkRuns = checks.ok ? checks.data.check_runs ?? [] : []
     const combinedStatuses = combined.ok ? combined.data.statuses ?? [] : []
 
+    const workflowBySuite = new Map<number, WorkflowInfo>()
+    if (workflows.ok) {
+      for (const run of workflows.data.workflow_runs ?? []) {
+        if (typeof run.check_suite_id === 'number') {
+          workflowBySuite.set(run.check_suite_id, {
+            name: run.name ?? undefined,
+            event: run.event ?? undefined,
+          })
+        }
+      }
+    }
+
     const runs: CIRun[] = [
-      ...checkRuns.map(checkRunToCIRun),
+      ...checkRuns.map((run) => checkRunToCIRun(run, workflowBySuite)),
       ...combinedStatuses.map(commitStatusToCIRun),
     ]
 

@@ -1059,6 +1059,9 @@ export function GraphCanvas() {
   const showError = useAppStore((state) => state.showError)
   const commitCIStatus = useAppStore((state) => state.commitCIStatus)
   const fetchCommitCIStatusesIfNeeded = useAppStore((state) => state.fetchCommitCIStatusesIfNeeded)
+  const worktreeChanges = useAppStore((state) => state.worktreeChanges)
+  const worktreeSelected = useAppStore((state) => state.worktreeSelected)
+  const selectWorktree = useAppStore((state) => state.selectWorktree)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
@@ -1106,6 +1109,29 @@ export function GraphCanvas() {
     const current = refs.find((ref) => ref.isCurrent)
     return current?.shortName ?? null
   }, [refs])
+
+  // The working-tree ("uncommitted changes") node floats one row above the HEAD
+  // commit, in HEAD's lane, connected by a dashed edge. Only present when the
+  // worktree is dirty and HEAD is within the loaded window.
+  const worktreeNode = useMemo(() => {
+    if (!layout || !worktreeChanges) return null
+    const count = worktreeChanges.staged.length + worktreeChanges.unstaged.length
+    if (count === 0) return null
+    // Anchor to the current branch tip, which updates synchronously with `refs`
+    // on checkout, so the node follows the graph immediately. Fall back to the
+    // worktree's reported HEAD sha for detached HEAD (no current branch).
+    const headNode =
+      (currentBranch ? layout.nodes.find((node) => node.row.refNames.includes(currentBranch)) : undefined)
+      ?? layout.shaToNode.get(worktreeChanges.headSha)
+    if (!headNode) return null
+    return {
+      x: headNode.x,
+      y: headNode.y - NODE_SPACING_Y,
+      headY: headNode.y,
+      color: laneColor(headNode.row.lane),
+      count,
+    }
+  }, [layout, worktreeChanges, currentBranch])
 
   const syncScrollTopState = useCallback((nextScrollTop: number) => {
     pendingScrollTopRef.current = nextScrollTop
@@ -2460,6 +2486,61 @@ export function GraphCanvas() {
               </animated.g>
             )
           })}
+          {worktreeNode && !isGraphAnimating && (
+            <g
+              onClick={(e) => { e.stopPropagation(); selectWorktree() }}
+              style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+            >
+              <title>{`Uncommitted changes — ${worktreeNode.count} file${worktreeNode.count === 1 ? '' : 's'}\nClick to stage / unstage`}</title>
+              {/* dashed connector down to the HEAD commit */}
+              <line
+                x1={worktreeNode.x}
+                y1={worktreeNode.y + NODE_RADIUS}
+                x2={worktreeNode.x}
+                y2={worktreeNode.headY - NODE_RADIUS}
+                stroke={worktreeNode.color}
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeDasharray="3 5"
+                opacity={0.7}
+              />
+              {worktreeSelected && (
+                <circle cx={worktreeNode.x} cy={worktreeNode.y} r={NODE_RADIUS * 2.5} fill={worktreeNode.color} opacity={0.15} />
+              )}
+              <circle
+                cx={worktreeNode.x}
+                cy={worktreeNode.y}
+                r={NODE_RADIUS}
+                fill={NODE_FILL}
+                stroke={worktreeNode.color}
+                strokeWidth={worktreeSelected ? 3.5 : 2.75}
+                strokeDasharray="4 3"
+              />
+              <text
+                x={worktreeNode.x}
+                y={worktreeNode.y}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={12}
+                fontWeight={700}
+                fill={worktreeNode.color}
+                style={{ pointerEvents: 'none', userSelect: 'none' }}
+              >
+                {worktreeNode.count}
+              </text>
+              <text
+                x={worktreeNode.x + NODE_RADIUS + 10}
+                y={worktreeNode.y}
+                dominantBaseline="central"
+                fontSize={12}
+                fontWeight={600}
+                fill={worktreeSelected ? worktreeNode.color : '#a6adc8'}
+                style={{ pointerEvents: 'none', userSelect: 'none' }}
+              >
+                Uncommitted changes
+              </text>
+            </g>
+          )}
         </svg>
 
         {renderedRefItems.map((refItem) => {

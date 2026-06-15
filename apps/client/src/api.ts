@@ -1,6 +1,6 @@
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
-import type { HistoryQuery } from '@ingit/rpc-contract'
+import type { HistoryQuery, StageActionKind } from '@ingit/rpc-contract'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any = null
@@ -50,6 +50,14 @@ export function getRefs(repoId: string) {
 
 export function getStatus(repoId: string) {
   return ensureClient().getStatus({ repoId })
+}
+
+export function getWorktreeChanges(repoId: string) {
+  return ensureClient().getWorktreeChanges({ repoId })
+}
+
+export function stageAction(repoId: string, action: StageActionKind, paths: string[]) {
+  return ensureClient().stageAction({ repoId, action, paths })
 }
 
 export function queryHistory(_repoId: string, query: HistoryQuery) {

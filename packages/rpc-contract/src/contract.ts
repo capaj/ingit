@@ -57,6 +57,23 @@ export const ChangedPath = z.object({
   status: z.enum(['A', 'M', 'D', 'R', 'C', 'T', 'U']),
 })
 
+export const WorktreeFileStatus = z.enum(['A', 'M', 'D', 'R', 'C', 'T', 'U', '?'])
+
+export const WorktreeFile = z.object({
+  path: z.string(),
+  oldPath: z.string().optional(),
+  status: WorktreeFileStatus,
+})
+
+export const WorktreeChanges = z.object({
+  branch: z.string().optional(),
+  headSha: CommitSha,
+  staged: z.array(WorktreeFile),
+  unstaged: z.array(WorktreeFile),
+})
+
+export const StageActionKind = z.enum(['stage', 'unstage', 'stage-all', 'unstage-all'])
+
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
 export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create'])
@@ -116,6 +133,18 @@ export const contract = {
       untrackedCount: z.number(),
       conflictedCount: z.number(),
     })),
+
+  getWorktreeChanges: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(WorktreeChanges),
+
+  stageAction: oc
+    .input(z.object({
+      repoId: RepoId,
+      action: StageActionKind,
+      paths: z.array(z.string()),
+    }))
+    .output(WorktreeChanges),
 
   queryHistory: oc
     .input(z.object({
