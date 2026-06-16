@@ -44,6 +44,10 @@ export function getRecentRepos() {
   return ensureClient().getRecentRepos({})
 }
 
+export function discoverRepos(folder?: string) {
+  return ensureClient().discoverRepos({ folder })
+}
+
 export function getRefs(repoId: string) {
   return ensureClient().getRefs({ repoId })
 }
@@ -100,8 +104,8 @@ export function rebaseRef(repoId: string, refName: string) {
   return ensureClient().rebaseRef({ repoId, refName })
 }
 
-export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create', refName: string, sha: string) {
-  return ensureClient().refAction({ repoId, action, refName, sha })
+export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create', refName: string, sha: string, force?: boolean) {
+  return ensureClient().refAction({ repoId, action, refName, sha, force })
 }
 
 export function getReflog(repoId: string, ref?: string, maxCount?: number) {

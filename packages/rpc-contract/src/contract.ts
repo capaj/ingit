@@ -119,6 +119,13 @@ export const contract = {
     .input(z.object({}))
     .output(z.array(z.string())),
 
+  discoverRepos: oc
+    .input(z.object({ folder: z.string().optional() }))
+    .output(z.object({
+      folder: z.string(),
+      repos: z.array(z.string()),
+    })),
+
   getRefs: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RefSummary)),
@@ -291,6 +298,9 @@ export const contract = {
       action: RefActionKind,
       refName: z.string(),
       sha: CommitSha,
+      // For `push`: force-push (--force-with-lease). Needed after a rebase, when
+      // the branch diverged from its upstream and a normal push is rejected.
+      force: z.boolean().optional(),
     }))
     .output(z.object({
       ok: z.boolean(),

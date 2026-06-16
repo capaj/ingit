@@ -15,6 +15,7 @@ import type {
 import {
   openRepo,
   getRecentRepos,
+  discoverRepos,
   getRefs,
   queryHistory,
   getCommitDetail,
@@ -31,10 +32,163 @@ import {
   stageAction,
   isConnectionLostError,
 } from './api'
+import {
+  predictCheckout,
+  predictMoveRef,
+  predictUncommit,
+  predictAppendOnHead,
+  predictMerge,
+  predictRebase,
+  type OptimisticGraph,
+} from './optimistic-graph'
+
+/** Optional extra button shown in the error dialog (e.g. "Force push"). */
+export interface ErrorDialogAction {
+  label: string
+  run: () => void
+}
 
 const INITIAL_ROWS = 1000
 const LOAD_MORE_ROWS = 500
 const MAX_RECENT_REPOS = 12
+
+// Optimistic mutations assume success and animate immediately. If the server
+// hasn't confirmed within this window we treat it as a failure and roll the
+// graph back to where it started (per product intent: a timeout is a failure).
+const MUTATION_TIMEOUT_MS = 30_000
+
+class MutationTimeoutError extends Error {
+  constructor() {
+    super('The operation timed out')
+    this.name = 'MutationTimeoutError'
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new MutationTimeoutError()), ms)
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value) },
+      (err) => { clearTimeout(timer); reject(err) },
+    )
+  })
+}
+
+// The slice of state an optimistic mutation touches, captured before applying
+// the prediction so a failure (or timeout) can restore the original layout.
+interface OptimisticSnapshot {
+  refs: RefSummary[]
+  historyWindow: HistoryWindowResponse | null
+  selectedSha: string | null
+  selectedRefName: string | null
+  scrollToSha: string | null
+  totalCommitCount: number
+  mergePreview: MergePreviewResponse | null
+  // Captured so a failed mutation restores the previously-open detail panel
+  // (the optimistic apply clears these for the predicted selection).
+  commitDetail: CommitDetailResponse | null
+  commitDiff: CommitDiffResponse | null
+  commitPRs: CommitPRInfo
+}
+
+type StoreSetter = (
+  partial: Partial<AppState> | ((state: AppState) => Partial<AppState>),
+) => void
+
+// Apply a history-rewriting prediction (commit action / merge / rebase): show
+// the predicted layout, select + scroll to the predicted new HEAD, and take the
+// pending lock. With no prediction we still take the lock to block further
+// actions while the server works.
+function applyOptimisticRewrite(
+  set: StoreSetter,
+  snapshot: OptimisticSnapshot,
+  predicted: OptimisticGraph | null,
+) {
+  if (!predicted) {
+    set({ pendingMutation: true })
+    return
+  }
+  set((s) => ({
+    pendingMutation: true,
+    refs: predicted.refs,
+    historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
+    selectedSha: predicted.headSha,
+    selectedRefName: null,
+    scrollToSha: predicted.headSha,
+    scrollToKey: s.scrollToKey + 1,
+    commitDetail: null,
+    commitDiff: null,
+    commitPRs: [],
+    mergePreview: null,
+  }))
+}
+
+function captureSnapshot(s: AppState): OptimisticSnapshot {
+  return {
+    refs: s.refs,
+    historyWindow: s.historyWindow,
+    selectedSha: s.selectedSha,
+    selectedRefName: s.selectedRefName,
+    scrollToSha: s.scrollToSha,
+    totalCommitCount: s.totalCommitCount,
+    mergePreview: s.mergePreview,
+    commitDetail: s.commitDetail,
+    commitDiff: s.commitDiff,
+    commitPRs: s.commitPRs,
+  }
+}
+
+// Swap the predicted rows into the loaded window, preserving the rest of the
+// response (edges are recomputed client-side from rows, so they can stay).
+function optimisticHistoryWindow(
+  base: HistoryWindowResponse | null,
+  rows: CommitRow[],
+): HistoryWindowResponse | null {
+  if (!base) return null
+  return {
+    ...base,
+    rows,
+    totalRowsKnown: rows.length,
+    checkpointsKnownUntilRow: Math.max(0, rows.length - 1),
+  }
+}
+
+// Authoritative reload run after a mutation lands (mirrors the initial query).
+function fetchRefsAndHistory(repoId: string): Promise<[RefSummary[], HistoryWindowResponse]> {
+  return Promise.all([
+    getRefs(repoId),
+    queryHistory(repoId, {
+      repoId,
+      scope: { kind: 'all' },
+      anchor: { kind: 'head' },
+      beforeRows: 0,
+      afterRows: INITIAL_ROWS,
+      firstParent: false,
+      topoOrder: true,
+    }),
+  ])
+}
+
+// Load detail / diff / PRs / CI for the commit a mutation left selected. Each
+// result is dropped if the selection moved on before it arrived.
+function loadSelectedCommitExtras(repoId: string, sha: string) {
+  Promise.all([getCommitDetail(repoId, sha), getCommitDiff(repoId, sha)])
+    .then(([detail, diff]) => {
+      if (useAppStore.getState().selectedSha === sha) {
+        useAppStore.setState({ commitDetail: detail, commitDiff: diff })
+      }
+    })
+    .catch((err) => console.error('Failed to load commit detail:', err))
+
+  if (useAppStore.getState().githubUrl) {
+    getCommitPRs(repoId, sha)
+      .then((prs: CommitPRInfo) => {
+        if (useAppStore.getState().selectedSha === sha) useAppStore.setState({ commitPRs: prs })
+      })
+      .catch(() => {})
+  }
+  useAppStore.getState().fetchCommitCIStatusesIfNeeded([sha])
+}
 
 function getRepoPathFromUrl(): string | null {
   const hash = window.location.hash
@@ -98,6 +252,8 @@ interface AppState {
   repoPath: string | null
   totalCommitCount: number
   recentRepos: string[]
+  discoveredFolder: string | null
+  discoveredRepos: string[]
   refs: RefSummary[]
   historyWindow: HistoryWindowResponse | null
   viewMode: ViewMode
@@ -114,22 +270,30 @@ interface AppState {
   mergePreview: MergePreviewResponse | null
   githubUrl: string | null
   openError: string | null
-  errorDialog: { title: string; message: string } | null
+  errorDialog: { title: string; message: string; action?: ErrorDialogAction } | null
   loadingMore: boolean
   commitCIStatus: Record<string, CIStatusEntry>
   showCommitMessages: boolean
   worktreeChanges: WorktreeChangesResponse | null
   worktreeSelected: boolean
+  // True while an optimistic mutation is in flight. Blocks further node actions
+  // until the current one is confirmed (or rolled back).
+  pendingMutation: boolean
+  // Bumped when the store reconciles an optimistic prediction with the server's
+  // authoritative result. GraphCanvas watches it to swap to the real layout
+  // *without* re-animating (the predicted nodes are already in place).
+  graphAnimationSuppressToken: number
 
   // Actions
   setShowCommitMessages: (value: boolean) => void
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
   runStageAction: (action: StageActionKind, paths: string[]) => Promise<void>
-  showError: (title: string, err: unknown) => void
+  showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
   loadRecentRepos: () => Promise<void>
+  loadDiscoveredRepos: (folder?: string) => Promise<void>
   openFromUrl: () => void
   selectCommit: (sha: string) => void
   selectRef: (ref: RefSummary) => void
@@ -138,7 +302,7 @@ interface AppState {
   ensureMergePreview: (refName: string) => Promise<MergePreviewResponse | null>
   navigateTo: (sha: string) => Promise<void>
   requestMore: (direction: 'up' | 'down') => Promise<void>
-  performRefAction: (action: RefActionKind, refName: string, sha: string) => Promise<void>
+  performRefAction: (action: RefActionKind, refName: string, sha: string, force?: boolean) => Promise<void>
   performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
   performMergeRef: (refName: string) => Promise<void>
   performRebaseRef: (refName: string) => Promise<void>
@@ -226,6 +390,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   repoPath: null,
   totalCommitCount: 0,
   recentRepos: [],
+  discoveredFolder: null,
+  discoveredRepos: [],
   refs: [],
   historyWindow: null,
   viewMode: 'history',
@@ -247,6 +413,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   commitCIStatus: {},
   worktreeChanges: null,
   worktreeSelected: false,
+  pendingMutation: false,
+  graphAnimationSuppressToken: 0,
   showCommitMessages: (() => {
     try {
       const stored = localStorage.getItem('showCommitMessages')
@@ -396,11 +564,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     startCIPolling()
   },
 
-  showError: (title, err) => {
+  showError: (title, err, action) => {
     const message = err instanceof Error ? err.message
       : typeof err === 'string' ? err
       : 'Unknown error'
-    set({ errorDialog: { title, message } })
+    set({ errorDialog: { title, message, action } })
   },
 
   dismissError: () => set({ errorDialog: null }),
@@ -469,9 +637,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  loadDiscoveredRepos: async (folder) => {
+    try {
+      const { folder: scanned, repos } = await discoverRepos(folder)
+      set({ discoveredFolder: scanned, discoveredRepos: repos })
+    } catch (err) {
+      console.error('Failed to discover repositories:', err)
+    }
+  },
+
   openFromUrl: () => {
     const path = getRepoPathFromUrl()
     void get().loadRecentRepos()
+    void get().loadDiscoveredRepos()
     if (path) void get().openRepoByPath(path)
   },
 
@@ -626,40 +804,78 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  performRefAction: async (action, refName, sha) => {
+  performRefAction: async (action, refName, sha, force) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
-    try {
-      await refAction(repoId, action, refName, sha)
-    } catch (err) {
-      // Ref actions are idempotent, so they are also safe to retry after
-      // the connection dropped mid-call (e.g. dev server restart).
-      if (isSessionError(err) || isConnectionLostError(err)) {
-        const res = await openRepo({ path: repoPath })
-        repoId = res.repoId
-        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-        await refAction(repoId, action, refName, sha)
-      } else {
-        throw err
-      }
+    if (get().pendingMutation) return
+
+    const snapshot = captureSnapshot(get())
+    const rows = snapshot.historyWindow?.rows ?? []
+
+    // Predict the layout for the actions that change it so the graph animates
+    // on click. Checkout only shifts the center lane; move/reset relocate a
+    // branch label (and HEAD, if it's the current branch).
+    let predicted: OptimisticGraph | null = null
+    if (action === 'checkout') {
+      predicted = predictCheckout(rows, snapshot.refs, refName, sha)
+    } else if (action === 'move' || action === 'reset') {
+      predicted = predictMoveRef(rows, snapshot.refs, refName, sha)
     }
-    // Reload
-    const [refs, hist] = await Promise.all([
-      getRefs(repoId),
-      queryHistory(repoId, {
-        repoId,
-        scope: { kind: 'all' },
-        anchor: { kind: 'head' },
-        beforeRows: 0,
-        afterRows: INITIAL_ROWS,
-        firstParent: false,
-        topoOrder: true,
-        }),
-    ])
+
+    if (predicted) {
+      set({
+        pendingMutation: true,
+        refs: predicted.refs,
+        historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
+        mergePreview: null,
+        ...(action === 'move'
+          ? {
+              selectedRefName: refName,
+              selectedSha: sha,
+              scrollToSha: null,
+              commitDetail: null,
+              commitDiff: null,
+              commitPRs: [],
+            }
+          : { selectedRefName: null }),
+      })
+    } else {
+      set({ pendingMutation: true })
+    }
+
+    try {
+      await withTimeout((async () => {
+        try {
+          await refAction(repoId, action, refName, sha, force)
+        } catch (err) {
+          // Ref actions are idempotent, so they are also safe to retry after
+          // the connection dropped mid-call (e.g. dev server restart).
+          if (isSessionError(err) || isConnectionLostError(err)) {
+            const res = await openRepo({ path: repoPath })
+            repoId = res.repoId
+            set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+            await refAction(repoId, action, refName, sha, force)
+          } else {
+            throw err
+          }
+        }
+      })(), MUTATION_TIMEOUT_MS)
+    } catch (err) {
+      set({ ...snapshot, pendingMutation: false })
+      throw err
+    }
+
+    // Reconcile against the authoritative reload. Suppress the relayout
+    // animation only when we already animated to a prediction.
+    const [refs, hist] = await fetchRefsAndHistory(repoId)
     void get().loadWorktreeChanges()
     if (action === 'move') {
-      set({
+      set((s) => ({
+        pendingMutation: false,
+        graphAnimationSuppressToken: predicted
+          ? s.graphAnimationSuppressToken + 1
+          : s.graphAnimationSuppressToken,
         refs,
         historyWindow: hist,
         selectedRefName: refName,
@@ -669,67 +885,78 @@ export const useAppStore = create<AppState>((set, get) => ({
         commitDiff: null,
         commitPRs: [],
         mergePreview: null,
-      })
-
-      Promise.all([
-        getCommitDetail(repoId, sha),
-        getCommitDiff(repoId, sha),
-      ]).then(([detail, diff]) => {
-        if (get().selectedSha === sha) {
-          set({ commitDetail: detail, commitDiff: diff })
-        }
-      }).catch((err) => console.error('Failed to load commit detail:', err))
-
-      if (get().githubUrl) {
-        getCommitPRs(repoId, sha).then((prs: CommitPRInfo) => {
-          if (get().selectedSha === sha) set({ commitPRs: prs })
-        }).catch(() => {})
-      }
-      get().fetchCommitCIStatusesIfNeeded([sha])
+      }))
+      loadSelectedCommitExtras(repoId, sha)
       return
     }
 
     // A push is what triggers CI on the remote, so poll the pushed tip until
     // its check-runs appear and settle.
     if (action === 'push') get().watchCommitCIStatus(sha)
-    set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
+    set((s) => ({
+      pendingMutation: false,
+      graphAnimationSuppressToken: predicted
+        ? s.graphAnimationSuppressToken + 1
+        : s.graphAnimationSuppressToken,
+      refs,
+      historyWindow: hist,
+      selectedRefName: null,
+      mergePreview: null,
+    }))
   },
 
   performCommitAction: async (action, sha) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
+    if (get().pendingMutation) return
+
+    const snapshot = captureSnapshot(get())
+    const rows = snapshot.historyWindow?.rows ?? []
+
+    // Predict: uncommit drops the tip; cherry-pick/revert append a fresh commit
+    // (placeholder sha, swapped for the real one on reconcile).
+    let predicted: OptimisticGraph | null = null
+    if (action === 'uncommit') {
+      predicted = predictUncommit(rows, snapshot.refs, sha)
+    } else {
+      const original = rows.find((r) => r.sha === sha)
+      const subject =
+        action === 'revert'
+          ? `Revert "${original?.subject ?? sha.slice(0, 8)}"`
+          : (original?.subject ?? sha.slice(0, 8))
+      predicted = predictAppendOnHead(rows, snapshot.refs, subject, action)
+    }
+    applyOptimisticRewrite(set, snapshot, predicted)
 
     let result: { ok: boolean; message: string; headSha: string }
     try {
-      result = await commitAction(repoId, action, sha)
+      result = await withTimeout((async () => {
+        try {
+          return await commitAction(repoId, action, sha)
+        } catch (err) {
+          if (isSessionError(err)) {
+            const res = await openRepo({ path: repoPath })
+            repoId = res.repoId
+            set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+            return await commitAction(repoId, action, sha)
+          }
+          throw err
+        }
+      })(), MUTATION_TIMEOUT_MS)
     } catch (err) {
-      if (isSessionError(err)) {
-        const res = await openRepo({ path: repoPath })
-        repoId = res.repoId
-        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-        result = await commitAction(repoId, action, sha)
-      } else {
-        throw err
-      }
+      set({ ...snapshot, pendingMutation: false })
+      throw err
     }
 
-    const [refs, hist] = await Promise.all([
-      getRefs(repoId),
-      queryHistory(repoId, {
-        repoId,
-        scope: { kind: 'all' },
-        anchor: { kind: 'head' },
-        beforeRows: 0,
-        afterRows: INITIAL_ROWS,
-        firstParent: false,
-        topoOrder: true,
-      }),
-    ])
-
+    const [refs, hist] = await fetchRefsAndHistory(repoId)
     const nextSha = result.headSha
     const totalCommitCountDelta = action === 'uncommit' ? -1 : 1
     set((s) => ({
+      pendingMutation: false,
+      graphAnimationSuppressToken: predicted
+        ? s.graphAnimationSuppressToken + 1
+        : s.graphAnimationSuppressToken,
       refs,
       historyWindow: hist,
       totalCommitCount: Math.max(s.totalCommitCount + totalCommitCountDelta, hist.rows.length),
@@ -743,21 +970,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       mergePreview: null,
     }))
 
-    Promise.all([
-      getCommitDetail(repoId, nextSha),
-      getCommitDiff(repoId, nextSha),
-    ]).then(([detail, diff]) => {
-      if (get().selectedSha === nextSha) {
-        set({ commitDetail: detail, commitDiff: diff })
-      }
-    }).catch((err) => console.error('Failed to load commit detail:', err))
-
-    if (get().githubUrl) {
-      getCommitPRs(repoId, nextSha).then((prs: CommitPRInfo) => {
-        if (get().selectedSha === nextSha) set({ commitPRs: prs })
-      }).catch(() => {})
-    }
-    get().fetchCommitCIStatusesIfNeeded([nextSha])
+    loadSelectedCommitExtras(repoId, nextSha)
     void get().loadWorktreeChanges()
     if (get().viewMode === 'reflog') void get().loadReflog()
   },
@@ -766,36 +979,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
+    if (get().pendingMutation) return
+
+    const snapshot = captureSnapshot(get())
+    const predicted = predictMerge(snapshot.historyWindow?.rows ?? [], snapshot.refs, refName)
+    applyOptimisticRewrite(set, snapshot, predicted)
 
     let result: { ok: boolean; message: string; headSha: string }
     try {
-      result = await mergeRefApi(repoId, refName)
+      result = await withTimeout((async () => {
+        try {
+          return await mergeRefApi(repoId, refName)
+        } catch (err) {
+          if (isSessionError(err)) {
+            const res = await openRepo({ path: repoPath })
+            repoId = res.repoId
+            set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+            return await mergeRefApi(repoId, refName)
+          }
+          throw err
+        }
+      })(), MUTATION_TIMEOUT_MS)
     } catch (err) {
-      if (isSessionError(err)) {
-        const res = await openRepo({ path: repoPath })
-        repoId = res.repoId
-        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-        result = await mergeRefApi(repoId, refName)
-      } else {
-        throw err
-      }
+      set({ ...snapshot, pendingMutation: false })
+      throw err
     }
 
-    const [refs, hist] = await Promise.all([
-      getRefs(repoId),
-      queryHistory(repoId, {
-        repoId,
-        scope: { kind: 'all' },
-        anchor: { kind: 'head' },
-        beforeRows: 0,
-        afterRows: INITIAL_ROWS,
-        firstParent: false,
-        topoOrder: true,
-      }),
-    ])
-
+    const [refs, hist] = await fetchRefsAndHistory(repoId)
     const nextSha = result.headSha
     set((s) => ({
+      pendingMutation: false,
+      graphAnimationSuppressToken: predicted
+        ? s.graphAnimationSuppressToken + 1
+        : s.graphAnimationSuppressToken,
       refs,
       historyWindow: hist,
       totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
@@ -809,21 +1025,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       mergePreview: null,
     }))
 
-    Promise.all([
-      getCommitDetail(repoId, nextSha),
-      getCommitDiff(repoId, nextSha),
-    ]).then(([detail, diff]) => {
-      if (get().selectedSha === nextSha) {
-        set({ commitDetail: detail, commitDiff: diff })
-      }
-    }).catch((err) => console.error('Failed to load commit detail:', err))
-
-    if (get().githubUrl) {
-      getCommitPRs(repoId, nextSha).then((prs: CommitPRInfo) => {
-        if (get().selectedSha === nextSha) set({ commitPRs: prs })
-      }).catch(() => {})
-    }
-    get().fetchCommitCIStatusesIfNeeded([nextSha])
+    loadSelectedCommitExtras(repoId, nextSha)
     void get().loadWorktreeChanges()
   },
 
@@ -831,36 +1033,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
+    if (get().pendingMutation) return
+
+    const snapshot = captureSnapshot(get())
+    const predicted = predictRebase(snapshot.historyWindow?.rows ?? [], snapshot.refs, refName)
+    applyOptimisticRewrite(set, snapshot, predicted)
 
     let result: { ok: boolean; message: string; headSha: string }
     try {
-      result = await rebaseRefApi(repoId, refName)
+      result = await withTimeout((async () => {
+        try {
+          return await rebaseRefApi(repoId, refName)
+        } catch (err) {
+          if (isSessionError(err)) {
+            const res = await openRepo({ path: repoPath })
+            repoId = res.repoId
+            set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+            return await rebaseRefApi(repoId, refName)
+          }
+          throw err
+        }
+      })(), MUTATION_TIMEOUT_MS)
     } catch (err) {
-      if (isSessionError(err)) {
-        const res = await openRepo({ path: repoPath })
-        repoId = res.repoId
-        set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-        result = await rebaseRefApi(repoId, refName)
-      } else {
-        throw err
-      }
+      set({ ...snapshot, pendingMutation: false })
+      throw err
     }
 
-    const [refs, hist] = await Promise.all([
-      getRefs(repoId),
-      queryHistory(repoId, {
-        repoId,
-        scope: { kind: 'all' },
-        anchor: { kind: 'head' },
-        beforeRows: 0,
-        afterRows: INITIAL_ROWS,
-        firstParent: false,
-        topoOrder: true,
-      }),
-    ])
-
+    const [refs, hist] = await fetchRefsAndHistory(repoId)
     const nextSha = result.headSha
     set((s) => ({
+      pendingMutation: false,
+      graphAnimationSuppressToken: predicted
+        ? s.graphAnimationSuppressToken + 1
+        : s.graphAnimationSuppressToken,
       refs,
       historyWindow: hist,
       totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
@@ -874,21 +1079,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       mergePreview: null,
     }))
 
-    Promise.all([
-      getCommitDetail(repoId, nextSha),
-      getCommitDiff(repoId, nextSha),
-    ]).then(([detail, diff]) => {
-      if (get().selectedSha === nextSha) {
-        set({ commitDetail: detail, commitDiff: diff })
-      }
-    }).catch((err) => console.error('Failed to load commit detail:', err))
-
-    if (get().githubUrl) {
-      getCommitPRs(repoId, nextSha).then((prs: CommitPRInfo) => {
-        if (get().selectedSha === nextSha) set({ commitPRs: prs })
-      }).catch(() => {})
-    }
-    get().fetchCommitCIStatusesIfNeeded([nextSha])
+    loadSelectedCommitExtras(repoId, nextSha)
     void get().loadWorktreeChanges()
   },
 
@@ -896,31 +1087,54 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
-    try {
-      await refAction(repoId, 'checkout', sha, sha)
-    } catch (err) {
-      if (isSessionError(err)) {
-        const res = await openRepo({ path: repoPath })
-        repoId = res.repoId
-        set({ repoId })
-        await refAction(repoId, 'checkout', sha, sha)
-      } else {
-        throw err
-      }
+    if (get().pendingMutation) return
+
+    const snapshot = captureSnapshot(get())
+    // Detached checkout of a bare commit: no branch becomes current.
+    const predicted = predictCheckout(snapshot.historyWindow?.rows ?? [], snapshot.refs, null, sha)
+    if (predicted) {
+      set({
+        pendingMutation: true,
+        refs: predicted.refs,
+        historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
+        selectedRefName: null,
+        mergePreview: null,
+      })
+    } else {
+      set({ pendingMutation: true })
     }
-    const [refs, hist] = await Promise.all([
-      getRefs(repoId),
-      queryHistory(repoId, {
-        repoId,
-        scope: { kind: 'all' },
-        anchor: { kind: 'head' },
-        beforeRows: 0,
-        afterRows: INITIAL_ROWS,
-        firstParent: false,
-        topoOrder: true,
-        }),
-    ])
-    set({ refs, historyWindow: hist, selectedRefName: null, mergePreview: null })
+
+    try {
+      await withTimeout((async () => {
+        try {
+          await refAction(repoId, 'checkout', sha, sha)
+        } catch (err) {
+          if (isSessionError(err)) {
+            const res = await openRepo({ path: repoPath })
+            repoId = res.repoId
+            set({ repoId })
+            await refAction(repoId, 'checkout', sha, sha)
+          } else {
+            throw err
+          }
+        }
+      })(), MUTATION_TIMEOUT_MS)
+    } catch (err) {
+      set({ ...snapshot, pendingMutation: false })
+      throw err
+    }
+
+    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    set((s) => ({
+      pendingMutation: false,
+      graphAnimationSuppressToken: predicted
+        ? s.graphAnimationSuppressToken + 1
+        : s.graphAnimationSuppressToken,
+      refs,
+      historyWindow: hist,
+      selectedRefName: null,
+      mergePreview: null,
+    }))
     void get().loadWorktreeChanges()
     if (get().viewMode === 'reflog') void get().loadReflog()
   },

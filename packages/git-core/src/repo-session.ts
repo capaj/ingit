@@ -429,9 +429,15 @@ export class RepoSession {
     }
   }
 
-  async push(ref: string, remote = 'origin'): Promise<string> {
-    // No ziggit C-API for push yet — use git CLI
-    const { stdout, stderr } = await runGit(['push', remote, ref], this.rootPath)
+  async push(ref: string, remote = 'origin', force = false): Promise<string> {
+    // No ziggit C-API for push yet — use git CLI.
+    // `--force-with-lease` overwrites a rewritten branch (e.g. right after a
+    // rebase) but still refuses if the remote moved in a way we haven't fetched,
+    // so it won't clobber someone else's commits.
+    const args = force
+      ? ['push', '--force-with-lease', remote, ref]
+      : ['push', remote, ref]
+    const { stdout, stderr } = await runGit(args, this.rootPath)
     return (stdout + stderr).trim()
   }
 

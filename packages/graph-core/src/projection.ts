@@ -133,18 +133,22 @@ export class Projection {
     startRow: number,
     endRow: number,
     fromCheckpoint?: ProjectionCheckpoint,
-    headSha?: string
+    centerLineSha?: string
   ): GeometryResult {
     const clampedStart = Math.max(0, startRow)
     const clampedEnd = Math.min(this.entries.length - 1, endRow)
 
     const allocator = new LaneAllocator()
 
-    // Reserve lane 0 for HEAD's entire first-parent chain so the checked-out
-    // branch stays in the visual center while side branches fan outward on
-    // both sides.
-    if (headSha) {
-      let walkSha: string | undefined = headSha
+    // Reserve lane 0 for the center line's entire first-parent chain so the
+    // checked-out branch stays in the visual center while side branches fan
+    // outward on both sides. The caller passes the tip of that line: usually
+    // HEAD, but when the upstream remote ref is a first-parent descendant of
+    // HEAD (i.e. the branch is behind its remote after a fetch) it passes the
+    // remote tip so the fetched commits share HEAD's vertical lane instead of
+    // forking off to the side.
+    if (centerLineSha) {
+      let walkSha: string | undefined = centerLineSha
       while (walkSha !== undefined) {
         allocator.reserveLane(walkSha, 0)
         const idx = this.shaIndex.get(walkSha)

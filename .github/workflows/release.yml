@@ -1,0 +1,127 @@
+name: release
+
+# Build self-contained binaries and publish to npm on every semver tag.
+#   git tag v1.2.3 && git push origin v1.2.3
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: '1.3.14'
+  ZIG_VERSION: '0.14.1'
+
+jobs:
+  build:
+    name: build ${{ matrix.id }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - id: linux
+            os: ubuntu-latest
+            targets: 'linux-x64 linux-arm64'
+          - id: darwin
+            os: macos-latest
+            targets: 'darwin-x64 darwin-arm64'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build native libraries (per target)
+        working-directory: packages/git-core
+        run: |
+          set -euo pipefail
+          for id in ${{ matrix.targets }}; do
+            case "$id" in
+              linux-x64)    triple=x86_64-linux-gnu;  ext=so;;
+              linux-arm64)  triple=aarch64-linux-gnu; ext=so;;
+              darwin-x64)   triple=x86_64-macos;      ext=dylib;;
+              darwin-arm64) triple=aarch64-macos;     ext=dylib;;
+              *) echo "unknown target $id" >&2; exit 1;;
+            esac
+            echo "::group::zig build $id ($triple)"
+            rm -rf zig-out
+            zig build -Doptimize=ReleaseFast -Dtarget="$triple"
+            mkdir -p "native-dist/$id"
+            cp "zig-out/lib/libziggit.$ext" "native-dist/$id/"
+            echo "::endgroup::"
+          done
+
+      - name: Build packages
+        working-directory: apps/cli
+        env:
+          INGIT_VERSION: ${{ github.ref_name }}
+        run: bun scripts/build.ts ${{ matrix.targets }}
+
+      - name: Upload linux packages + launcher
+        if: matrix.id == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkgs-linux
+          path: |
+            apps/cli/release/cli-linux-x64
+            apps/cli/release/cli-linux-arm64
+            apps/cli/release/ingit
+          if-no-files-found: error
+
+      - name: Upload darwin packages
+        if: matrix.id == 'darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkgs-darwin
+          path: |
+            apps/cli/release/cli-darwin-x64
+            apps/cli/release/cli-darwin-arm64
+          if-no-files-found: error
+
+  publish:
+    name: publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish packages
+        working-directory: release
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          npm_tag=latest
+          case "$version" in *-*) npm_tag=next;; esac
+          echo "Publishing version $version (dist-tag: $npm_tag)"
+
+          # Platform packages first — the launcher's optionalDependencies need them.
+          for dir in cli-*; do
+            echo "::group::publish $dir"
+            (cd "$dir" && npm publish --access public --tag "$npm_tag")
+            echo "::endgroup::"
+          done
+
+          echo "::group::publish ingit"
+          (cd ingit && npm publish --access public --tag "$npm_tag")
+          echo "::endgroup::"
