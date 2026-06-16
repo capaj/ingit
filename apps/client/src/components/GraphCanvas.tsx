@@ -54,9 +54,27 @@ const LANE_COLORS = [
   '#94e2d5', '#fab387', '#74c7ec', '#f5c2e7', '#b4befe',
 ]
 
+// Stable empty fallback so memo factories don't allocate a fresh map per render
+// when no layout is loaded yet.
+const EMPTY_SHA_COLOR: Map<string, string> = new Map()
+
 function laneColor(lane: number) {
   const normalized = ((lane % LANE_COLORS.length) + LANE_COLORS.length) % LANE_COLORS.length
   return LANE_COLORS[normalized]
+}
+
+// Branch colors must be stable: a commit's color depends on the branch line it
+// belongs to, never on its lane index. Lane indices shift on every checkout
+// (the current branch is pulled to lane 0), so coloring by lane made the whole
+// graph recolor itself on checkout. Hashing a stable identity (the branch name,
+// or the sha for unlabeled commits) keeps each line's color fixed.
+function colorForBranchName(name: string) {
+  return LANE_COLORS[hashText(name) % LANE_COLORS.length]
+}
+
+function stableColorForNode(sha: string, shaToBranch: Map<string, string>) {
+  const branch = shaToBranch.get(sha)
+  return branch ? colorForBranchName(branch) : LANE_COLORS[hashText(sha) % LANE_COLORS.length]
 }
 
 function verticalOffsetForHeight(height: number) {
@@ -157,6 +175,7 @@ interface RenderedNodeItem {
   key: string
   row: CommitRow
   interactive: boolean
+  color: string
   fromX: number
   fromY: number
   toX: number
@@ -266,10 +285,16 @@ function buildLayout(rows: CommitRow[], extraLeftGutter = 0) {
     }
   }
 
+  const shaToColor = new Map<string, string>()
+  for (const node of nodes) {
+    shaToColor.set(node.row.sha, stableColorForNode(node.row.sha, shaToBranch))
+  }
+
   return {
     nodes,
     shaToNode,
     shaToBranch,
+    shaToColor,
     maxLane,
     totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + extraLeftGutter + (laneRadius * 2 + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
     totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2 + GRAPH_TOP_HEADROOM,
@@ -804,7 +829,12 @@ function estimateRefPillWidth(refName: string, isRemote: boolean, isCurrent: boo
   return REF_PILL_HORIZONTAL_PADDING + Math.ceil(measureRefPillText(text))
 }
 
-function buildRefPlacements(nodes: LayoutNode[], currentBranch: string | null, selectedRefName: string | null) {
+function buildRefPlacements(
+  nodes: LayoutNode[],
+  currentBranch: string | null,
+  selectedRefName: string | null,
+  shaToColor: Map<string, string>,
+) {
   const placements: RefPlacement[] = []
   const rowWidths = new Map<string, number>()
 
@@ -821,7 +851,7 @@ function buildRefPlacements(nodes: LayoutNode[], currentBranch: string | null, s
         nodeSha: node.row.sha,
         x: cursorX,
         y,
-        color: laneColor(node.row.lane),
+        color: shaToColor.get(node.row.sha) ?? laneColor(node.row.lane),
         isCurrent,
         isSelected: refName === selectedRefName,
         isRemote,
@@ -946,8 +976,36 @@ function buildCurrentLaneHighlight(layout: GraphLayout | null, currentBranch: st
   return {
     key: currentBranch,
     x: tipNode.x - PRIMARY_LANE_HIGHLIGHT_WIDTH / 2,
-    color: laneColor(tipNode.row.lane),
+    color: layout.shaToColor.get(tipNode.row.sha) ?? laneColor(tipNode.row.lane),
   }
+}
+
+// The worktree label sits on the worktree node's row (one row above HEAD). Pick
+// the side whose neighbouring lane is free so the text never overlays a node or
+// a vertical rail. Returns null when both sides are taken, so the caller hides
+// the text entirely.
+function computeWorktreeLabelSide(layout: GraphLayout, headNode: LayoutNode): 'left' | 'right' | null {
+  const headLane = headNode.row.lane
+  const labelRow = headNode.idx - 1 // row index sharing the worktree node's y
+
+  const laneOccupied = (lane: number) => {
+    for (const node of layout.nodes) {
+      // a node sitting directly on the worktree node's row
+      if (node.idx === labelRow && node.row.lane === lane) return true
+      // a straight vertical rail passing through that row
+      if (node.row.lane !== lane) continue
+      const firstParentSha = node.row.parentShas[0]
+      if (!firstParentSha) continue
+      const parent = layout.shaToNode.get(firstParentSha)
+      if (!parent || parent.row.lane !== lane) continue
+      if (node.idx <= labelRow && labelRow <= parent.idx) return true
+    }
+    return false
+  }
+
+  if (!laneOccupied(headLane + 1)) return 'right'
+  if (!laneOccupied(headLane - 1)) return 'left'
+  return null
 }
 
 function buildEdgeRoutingData(visibleEdges: VisibleEdge[], occupiedLanes: number[]): EdgeRoutingData {
@@ -1008,9 +1066,13 @@ function buildVisibleEdgeItems(
   edgeRouting: EdgeRoutingData,
   occupiedLanes: number[],
   currentBranchEdgeKeys: Set<string>,
+  shaToColor: Map<string, string>,
 ) {
   return visibleEdges.map<VisibleEdgeItem>((edge) => {
     const isCurrentBranchEdge = currentBranchEdgeKeys.has(edge.key)
+    // An edge takes the color of the branch line it travels along: the child for
+    // a normal edge, the merged-in parent for a merge edge.
+    const colorNode = edge.isMerge ? edge.to : edge.from
     return {
       key: edge.key,
       path: routedEdgePath(
@@ -1024,7 +1086,7 @@ function buildVisibleEdgeItems(
       x2: edge.to.x,
       y2: edge.to.y,
       isMerge: edge.isMerge,
-      stroke: edge.isMerge ? laneColor(edge.to.row.lane) : laneColor(edge.from.row.lane),
+      stroke: shaToColor.get(colorNode.row.sha) ?? laneColor(colorNode.row.lane),
       strokeWidth: isCurrentBranchEdge ? 4.5 : edge.isMerge ? 2 : 3,
       opacity: isCurrentBranchEdge ? 0.95 : 0.8,
     }
@@ -1066,6 +1128,8 @@ export function GraphCanvas() {
   const performCommitAction = useAppStore((state) => state.performCommitAction)
   const performMergeRef = useAppStore((state) => state.performMergeRef)
   const performRebaseRef = useAppStore((state) => state.performRebaseRef)
+  const pendingMutation = useAppStore((state) => state.pendingMutation)
+  const graphAnimationSuppressToken = useAppStore((state) => state.graphAnimationSuppressToken)
   const showCommitMessages = useAppStore((state) => state.showCommitMessages)
   const showError = useAppStore((state) => state.showError)
   const commitCIStatus = useAppStore((state) => state.commitCIStatus)
@@ -1094,9 +1158,16 @@ export function GraphCanvas() {
   }))
   const zoomRef = useRef(1)
   const suppressAutoScrollUntilRef = useRef(0)
+  // While a programmatic scroll-to-commit is in flight we must not treat the
+  // resulting scroll events as a user gesture that cancels the graph animation —
+  // the morph and the follow-scroll are meant to play together.
+  const programmaticScrollUntilRef = useRef(0)
   const previousRowsRef = useRef<CommitRow[] | null>(null)
   const previousLayoutRef = useRef<GraphLayout | null>(null)
   const previousCurrentBranchRef = useRef<string | null>(null)
+  // Tracks the last reconcile token we've seen, so a server reconciliation of an
+  // optimistic prediction swaps in the real layout without re-animating.
+  const lastSuppressTokenRef = useRef(graphAnimationSuppressToken)
   // Force re-render counter — incremented when scroll position changes enough
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
@@ -1139,8 +1210,9 @@ export function GraphCanvas() {
       x: headNode.x,
       y: headNode.y - NODE_SPACING_Y,
       headY: headNode.y,
-      color: laneColor(headNode.row.lane),
+      color: layout.shaToColor.get(headNode.row.sha) ?? laneColor(headNode.row.lane),
       count,
+      labelSide: computeWorktreeLabelSide(layout, headNode),
     }
   }, [layout, worktreeChanges, currentBranch])
 
@@ -1211,6 +1283,22 @@ export function GraphCanvas() {
       return
     }
 
+    // A bumped suppress token means this render is the server reconciling an
+    // optimistic prediction we already animated to. Adopt the authoritative
+    // layout as the new baseline, but let any in-flight animation finish on its
+    // own — predicted ≈ real, so the final swap is invisible. Don't animate the
+    // swap, and don't hard-stop (that would cut the "slow animation" short when
+    // the server confirms faster than the spring settles).
+    const isReconcileSwap = graphAnimationSuppressToken !== lastSuppressTokenRef.current
+    lastSuppressTokenRef.current = graphAnimationSuppressToken
+
+    if (isReconcileSwap) {
+      previousRowsRef.current = histWindow.rows
+      previousLayoutRef.current = layout
+      previousCurrentBranchRef.current = currentBranch
+      return
+    }
+
     const shouldAnimate = shouldAnimateGraphMutation(
       previousRowsRef.current,
       histWindow.rows,
@@ -1234,7 +1322,7 @@ export function GraphCanvas() {
     previousRowsRef.current = histWindow.rows
     previousLayoutRef.current = layout
     previousCurrentBranchRef.current = currentBranch
-  }, [currentBranch, histWindow, layout, startGraphAnimation, stopGraphAnimation])
+  }, [currentBranch, histWindow, layout, graphAnimationSuppressToken, startGraphAnimation, stopGraphAnimation])
 
   useEffect(() => () => {
     graphProgressApi.stop()
@@ -1282,6 +1370,9 @@ export function GraphCanvas() {
     if (!node) return
     const el = scrollRef.current
     const targetTop = node.y * zoom - el.clientHeight / 2
+    // Let the follow-scroll ride alongside an in-flight graph animation instead
+    // of cancelling it (see programmaticScrollUntilRef).
+    programmaticScrollUntilRef.current = Date.now() + 700
     el.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
   }, [scrollToSha, scrollToKey, layout, zoom])
 
@@ -1297,7 +1388,9 @@ export function GraphCanvas() {
       viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
       setClientHeight(el.clientHeight)
       lastObservedScrollTopRef.current = nextScrollTop
-      if (didScroll) stopGraphAnimation()
+      // A user scroll cancels the morph, but a programmatic follow-scroll riding
+      // alongside it must not.
+      if (didScroll && Date.now() >= programmaticScrollUntilRef.current) stopGraphAnimation()
       syncScrollTopState(el.scrollTop)
       if (timeLabelsLayerRef.current) {
         timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
@@ -1412,13 +1505,13 @@ export function GraphCanvas() {
   )
 
   const { placements: visibleRefPlacements, rowWidths: rowRefWidths } = useMemo(
-    () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName),
-    [visibleNodes, currentBranch, selectedRefName],
+    () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName, layout?.shaToColor ?? EMPTY_SHA_COLOR),
+    [visibleNodes, currentBranch, selectedRefName, layout],
   )
 
   const visibleEdgeItems = useMemo(
-    () => buildVisibleEdgeItems(visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys),
-    [visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys],
+    () => buildVisibleEdgeItems(visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys, layout?.shaToColor ?? EMPTY_SHA_COLOR),
+    [visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys, layout],
   )
 
   const currentLaneHighlight = useMemo(
@@ -1444,22 +1537,26 @@ export function GraphCanvas() {
       fromRouting,
       fromOccupiedLanes,
       buildCurrentBranchEdgeKeys(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch),
+      graphAnimation.fromLayout.shaToColor,
     )
     const toEdgeItems = buildVisibleEdgeItems(
       toWindow.visibleEdges,
       toRouting,
       toOccupiedLanes,
       buildCurrentBranchEdgeKeys(graphAnimation.toLayout, graphAnimation.toCurrentBranch),
+      graphAnimation.toLayout.shaToColor,
     )
     const fromRefPlacements = buildRefPlacements(
       fromWindow.visibleNodes,
       graphAnimation.fromCurrentBranch,
       selectedRefName,
+      graphAnimation.fromLayout.shaToColor,
     ).placements
     const toRefPlacements = buildRefPlacements(
       toWindow.visibleNodes,
       graphAnimation.toCurrentBranch,
       selectedRefName,
+      graphAnimation.toLayout.shaToColor,
     ).placements
     const fromLaneHighlight = buildCurrentLaneHighlight(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch)
     const toLaneHighlight = buildCurrentLaneHighlight(graphAnimation.toLayout, graphAnimation.toCurrentBranch)
@@ -1478,12 +1575,14 @@ export function GraphCanvas() {
         const displayNode = toNode ?? fromNode
         if (!displayNode) return null
 
+        const colorLayout = toNode ? graphAnimation.toLayout : graphAnimation.fromLayout
         return {
           sortIdx: toNode?.idx ?? fromNode?.idx ?? 0,
           item: {
             key,
             row: displayNode.row,
             interactive: !!toNode,
+            color: colorLayout.shaToColor.get(key) ?? laneColor(displayNode.row.lane),
             fromX: fromNode?.x ?? displayNode.x,
             fromY: fromNode ? fromNode.y : displayNode.y + GRAPH_ENTER_OFFSET_Y,
             toX: toNode?.x ?? displayNode.x,
@@ -1576,6 +1675,7 @@ export function GraphCanvas() {
       key: node.row.sha,
       row: node.row,
       interactive: true,
+      color: layout?.shaToColor.get(node.row.sha) ?? laneColor(node.row.lane),
       fromX: node.x,
       fromY: node.y,
       toX: node.x,
@@ -1583,7 +1683,7 @@ export function GraphCanvas() {
       fromOpacity: 1,
       toOpacity: 1,
     })),
-    [graphAnimationRenderData, visibleNodes],
+    [graphAnimationRenderData, visibleNodes, layout],
   )
 
   const renderedEdgeItems = useMemo(
@@ -1763,7 +1863,7 @@ export function GraphCanvas() {
         targetPlan,
         edgeRouting.bundleOffsets.get(targetKey) ?? 0,
       ),
-      color: laneColor(targetNode.row.lane),
+      color: layout.shaToColor.get(targetNode.row.sha) ?? laneColor(targetNode.row.lane),
     }
   }, [layout, selectedRefName, mergePreview, occupiedLanes, edgeRouting.bundleOffsets])
 
@@ -1780,6 +1880,7 @@ export function GraphCanvas() {
 
   const handleRefActionClick = useCallback((action: VisibleRefAction['action'], force = false) => {
     if (!selectedRefName || !selectedRef) return
+    if (pendingMutation) return
     setMergePreviewVisible(false)
     const sha = selectedRef.targetSha
     const refName = selectedRefName
@@ -1797,10 +1898,11 @@ export function GraphCanvas() {
         showError(`${action} failed`, err)
       }
     })
-  }, [selectedRefName, selectedRef, performRefAction, showError])
+  }, [selectedRefName, selectedRef, performRefAction, showError, pendingMutation])
 
   const handleMoveBranch = useCallback((targetSha: string) => {
     if (!movableBranchRefName) return
+    if (pendingMutation) return
     const confirmed = window.confirm(`Move branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}?`)
     if (!confirmed) return
 
@@ -1808,7 +1910,7 @@ export function GraphCanvas() {
     performRefAction('move', movableBranchRefName, targetSha).catch((err) => {
       showError('Move failed', err)
     })
-  }, [movableBranchRefName, performRefAction, showError])
+  }, [movableBranchRefName, performRefAction, showError, pendingMutation])
 
   const handleMergeHoverStart = useCallback(() => {
     if (!selectedRefName) return
@@ -1843,15 +1945,17 @@ export function GraphCanvas() {
 
   const handleMergeClick = useCallback(() => {
     if (!selectedRefName) return
+    if (pendingMutation) return
     setMergePreviewVisible(true)
     takeOverMergeViewport()
     performMergeRef(selectedRefName).catch((err) => {
       showError('Merge failed', err)
     })
-  }, [selectedRefName, performMergeRef, takeOverMergeViewport, showError])
+  }, [selectedRefName, performMergeRef, takeOverMergeViewport, showError, pendingMutation])
 
   const handleRebaseClick = useCallback((targetRefName: string) => {
     if (!selectedCurrentBranchRef) return
+    if (pendingMutation) return
 
     const confirmed = window.confirm(
       `Rebase ${selectedCurrentBranchRef.shortName} onto ${targetRefName}? This rewrites the current branch history.`,
@@ -1862,7 +1966,7 @@ export function GraphCanvas() {
     performRebaseRef(targetRefName).catch((err) => {
       showError('Rebase failed', err)
     })
-  }, [selectedCurrentBranchRef, performRebaseRef, showError])
+  }, [selectedCurrentBranchRef, performRebaseRef, showError, pendingMutation])
 
   // Sticky lane labels: show a branch name when its tip is above the viewport
   // AND the topmost visible commit on that lane belongs to that branch
@@ -1901,7 +2005,7 @@ export function GraphCanvas() {
       labels.set(lane, {
         name: refName,
         x: node.x,
-        color: laneColor(lane),
+        color: colorForBranchName(refName),
       })
     }
     // Assign vertical rows to avoid overlaps
@@ -2052,6 +2156,7 @@ export function GraphCanvas() {
 
   const handleCommitAction = useCallback((action: CommitActionKind) => {
     if (!selectedNode) return
+    if (pendingMutation) return
 
     const shortSha = selectedNode.row.sha.slice(0, 8)
     const confirmed = action === 'uncommit'
@@ -2062,7 +2167,7 @@ export function GraphCanvas() {
     performCommitAction(action, selectedNode.row.sha).catch((err) => {
       showError(`${action} failed`, err)
     })
-  }, [selectedNode, performCommitAction, showError])
+  }, [selectedNode, performCommitAction, showError, pendingMutation])
   const isGraphAnimating = graphAnimation !== null
 
   if (!layout) {
@@ -2373,7 +2478,7 @@ export function GraphCanvas() {
           {renderedNodeItems.map((node) => {
             const { row } = node
             const selected = row.sha === selectedSha
-            const color = laneColor(row.lane)
+            const color = node.color
             const gaugeDiameter = GAUGE_RADIUS * 2
             const additionsFillHeight = computeGaugeFillHeight(row.additions, locScaleMax, gaugeDiameter)
             const deletionsFillHeight = computeGaugeFillHeight(row.deletions, locScaleMax, gaugeDiameter)
@@ -2552,17 +2657,22 @@ export function GraphCanvas() {
               >
                 {worktreeNode.count}
               </text>
-              <text
-                x={worktreeNode.x + NODE_RADIUS + 10}
-                y={worktreeNode.y}
-                dominantBaseline="central"
-                fontSize={12}
-                fontWeight={600}
-                fill={worktreeSelected ? worktreeNode.color : '#a6adc8'}
-                style={{ pointerEvents: 'none', userSelect: 'none' }}
-              >
-                Uncommitted changes
-              </text>
+              {worktreeNode.labelSide && (
+                <text
+                  x={worktreeNode.labelSide === 'left'
+                    ? worktreeNode.x - NODE_RADIUS - 10
+                    : worktreeNode.x + NODE_RADIUS + 10}
+                  y={worktreeNode.y}
+                  textAnchor={worktreeNode.labelSide === 'left' ? 'end' : 'start'}
+                  dominantBaseline="central"
+                  fontSize={12}
+                  fontWeight={600}
+                  fill={worktreeSelected ? worktreeNode.color : '#a6adc8'}
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}
+                >
+                  Uncommitted changes
+                </text>
+              )}
             </g>
           )}
         </svg>
