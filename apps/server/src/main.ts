@@ -9,11 +9,11 @@ import { onError } from '@orpc/server'
 import { detectGit } from '@ingit/git-core'
 import { router, sessionManager } from './rpc-router.js'
 
-const HOST = '127.0.0.1'
-const PORT = 8488
+const DEFAULT_HOST = '127.0.0.1'
+const DEFAULT_PORT = 8488
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
-const CLIENT_DIST = resolve(__dirname, '../../client/dist')
+const DEFAULT_CLIENT_DIST = resolve(__dirname, '../../client/dist')
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -39,8 +39,8 @@ function serveStatic(res: ServerResponse, filePath: string): void {
   createReadStream(filePath).pipe(res)
 }
 
-function serveIndexHtml(res: ServerResponse, sessionToken: string): void {
-  const indexPath = join(CLIENT_DIST, 'index.html')
+function serveIndexHtml(res: ServerResponse, clientDist: string, sessionToken: string): void {
+  const indexPath = join(clientDist, 'index.html')
   if (!existsSync(indexPath)) {
     res.writeHead(404, { 'Content-Type': 'text/plain' })
     res.end('Frontend not built. Run the client build first.')
@@ -61,14 +61,56 @@ function serveIndexHtml(res: ServerResponse, sessionToken: string): void {
   }
 }
 
-async function main(): Promise<void> {
-  try {
-    const gitInfo = await detectGit()
-    console.log(`git found: ${gitInfo.path} (version ${gitInfo.version})`)
-  } catch (err) {
-    console.error(`ERROR: ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
+export interface StartServerOptions {
+  host?: string
+  /** Preferred port. If taken, the next free port is used. */
+  port?: number
+  /** Directory holding the built client (index.html + assets). */
+  clientDist?: string
+}
+
+export interface RunningServer {
+  host: string
+  port: number
+  url: string
+  close: () => void
+}
+
+function listen(
+  server: ReturnType<typeof createServer>,
+  host: string,
+  startPort: number,
+): Promise<number> {
+  return new Promise((resolvePort, reject) => {
+    let port = startPort
+    let attempts = 0
+
+    const tryListen = (): void => {
+      server.listen(port, host)
+    }
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && attempts < 20) {
+        attempts += 1
+        port += 1
+        tryListen()
+        return
+      }
+      reject(err)
+    })
+
+    server.on('listening', () => resolvePort(port))
+    tryListen()
+  })
+}
+
+export async function startServer(opts: StartServerOptions = {}): Promise<RunningServer> {
+  const host = opts.host ?? DEFAULT_HOST
+  const startPort = opts.port ?? (process.env.PORT ? Number(process.env.PORT) : DEFAULT_PORT)
+  const clientDist = opts.clientDist ?? process.env.INGIT_CLIENT_DIST ?? DEFAULT_CLIENT_DIST
+
+  const gitInfo = await detectGit()
+  console.log(`git found: ${gitInfo.path} (version ${gitInfo.version})`)
 
   const sessionToken = randomBytes(32).toString('hex')
 
@@ -99,16 +141,16 @@ async function main(): Promise<void> {
 
     // Serve static files
     const safePath = url.replace(/\.\./g, '').replace(/\/+/g, '/')
-    const filePath = join(CLIENT_DIST, safePath === '/' ? 'index.html' : safePath)
+    const filePath = join(clientDist, safePath === '/' ? 'index.html' : safePath)
 
     if (safePath !== '/' && existsSync(filePath) && statSync(filePath).isFile()) {
       if (extname(filePath) === '.html') {
-        serveIndexHtml(res, sessionToken)
+        serveIndexHtml(res, clientDist, sessionToken)
       } else {
         serveStatic(res, filePath)
       }
     } else {
-      serveIndexHtml(res, sessionToken)
+      serveIndexHtml(res, clientDist, sessionToken)
     }
   })
 
@@ -118,22 +160,32 @@ async function main(): Promise<void> {
     rpcHandler.upgrade(ws, { context: {} })
   })
 
+  const port = await listen(httpServer, host, startPort)
+  const url = `http://${host}:${port}`
+
   // Graceful shutdown
+  const close = (): void => {
+    sessionManager.closeAll()
+    httpServer.close()
+  }
   const shutdown = (): void => {
     console.log('\nShutting down...')
-    sessionManager.closeAll()
-    httpServer.close(() => process.exit(0))
+    close()
+    process.exit(0)
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  httpServer.listen(PORT, HOST, () => {
-    console.log(`ingit server running at http://${HOST}:${PORT}`)
-    console.log(`oRPC WebSocket endpoint: ws://${HOST}:${PORT}/rpc`)
-  })
+  console.log(`ingit server running at ${url}`)
+  console.log(`oRPC WebSocket endpoint: ws://${host}:${port}/rpc`)
+
+  return { host, port, url, close }
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err)
-  process.exit(1)
-})
+// Run directly (dev: `bun src/main.ts`) but not when imported by the CLI.
+if (import.meta.main) {
+  startServer().catch((err) => {
+    console.error('Fatal error:', err)
+    process.exit(1)
+  })
+}

@@ -16,7 +16,11 @@ function getLibraryFilename(): string {
   }
 }
 
-const LIB_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', getLibraryFilename())
+// `INGIT_ZIGGIT_LIB` lets the packaged CLI point at the native library shipped
+// next to the compiled binary, where the source-relative path doesn't exist.
+const LIB_PATH =
+  process.env.INGIT_ZIGGIT_LIB ??
+  join(dirname(fileURLToPath(import.meta.url)), '..', getLibraryFilename())
 
 const BUFFER_SIZE = 1024 * 64 // 64KB for most operations
 

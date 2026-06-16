@@ -11,6 +11,7 @@
     "dev:client": "bun run --filter '@ingit/client' dev",
     "build": "bun run --filter '*' build",
     "build:packages": "bun run --filter '@ingit/rpc-contract' build && bun run --filter '@ingit/git-core' build && bun run --filter '@ingit/graph-core' build",
+    "cli:release": "bun run --filter '@ingit/cli' release",
     "typecheck": "tsc --build",
     "bump": "bunx npm-check-updates -u --workspaces --root && bun install"
   },

@@ -5,6 +5,7 @@
     { "path": "packages/git-core" },
     { "path": "packages/graph-core" },
     { "path": "apps/server" },
+    { "path": "apps/cli" },
     { "path": "apps/client" }
   ]
 }
