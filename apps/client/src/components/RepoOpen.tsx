@@ -931,7 +931,7 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
                 <span className="repo-open-claude-chips">
                   {group.sessions.map((session) => (
                     <button
-                      key={session.pid}
+                      key={`${session.pid}:${session.cwd}`}
                       type="button"
                       className={`repo-open-claude-chip${session.busy ? ' repo-open-claude-chip-busy' : ''}`}
                       disabled={!session.focusable || focusingPid !== null}

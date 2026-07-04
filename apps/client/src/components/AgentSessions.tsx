@@ -154,7 +154,7 @@ export function AgentSessions() {
             const disabled = !session.focusable
             return (
               <button
-                key={session.pid}
+                key={`${session.pid}:${session.cwd}`}
                 onClick={() => !disabled && void handleFocus(session)}
                 disabled={disabled || focusingPid !== null}
                 title={

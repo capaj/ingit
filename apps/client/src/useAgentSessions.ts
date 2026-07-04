@@ -102,7 +102,7 @@ export function useAgentSessions() {
   const focus = useCallback(async (session: AgentSession): Promise<boolean> => {
     setFocusingPid(session.pid)
     try {
-      const res = await focusAgentSession(session.pid)
+      const res = await focusAgentSession(session.pid, session.cwd)
       if (!res.ok) {
         showError('Could not focus agent session', res.error ?? 'Unknown error')
         return false

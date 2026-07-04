@@ -257,7 +257,7 @@ export const router = os.router({
   }),
 
   focusAgentSession: os.focusAgentSession.handler(async ({ input }) => {
-    return focusAgentSession(input.pid)
+    return focusAgentSession(input.pid, input.cwd)
   }),
 
   installWindowCalls: os.installWindowCalls.handler(async () => {

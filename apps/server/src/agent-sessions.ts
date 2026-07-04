@@ -104,10 +104,15 @@ const IDE_MARKERS: Array<{ pattern: RegExp; ide: string; cli: string }> = [
 
 // Plumbing processes that belong to a session but aren't one themselves.
 const CLAUDE_INFRA_FLAGS = new Set(['--bg-pty-host', '--bg-spare', '--claude-in-chrome-mcp'])
-// Codex subcommands that serve tooling. The VS Code extension's app-server is
-// one shared process for every window (cwd = home), so it can't be attributed
-// to a repo or focused meaningfully — infra too.
-const CODEX_INFRA_SUBCOMMANDS = new Set(['app-server', 'mcp-server', 'login', 'logout', 'completion'])
+// Codex subcommands that serve tooling. `app-server` (the VS Code extension's
+// backend) is NOT here — it's handled specially: its own cwd is useless
+// (home), but each conversation it hosts holds a rollout file open whose
+// session_meta carries the real workspace cwd.
+const CODEX_INFRA_SUBCOMMANDS = new Set(['mcp-server', 'login', 'logout', 'completion'])
+
+function isCodexAppServer(info: ProcInfo): boolean {
+  return (basename(info.exe) === 'codex' || info.comm === 'codex') && info.argv[1] === 'app-server'
+}
 
 function detectAgent(info: ProcInfo): AgentName | null {
   if (
@@ -281,10 +286,42 @@ async function claudeTranscriptTitle(path: string): Promise<string | null> {
   }
 }
 
+/** Workspace cwd from a rollout's leading session_meta record. */
+async function codexRolloutCwd(path: string): Promise<string | null> {
+  try {
+    // The session_meta line embeds the agent's full base instructions, so it
+    // alone can run tens of KB — slice generously or the JSON parse fails.
+    const head = await readFileSlice(path, 262_144, false)
+    for (const line of head.split('\n')) {
+      if (!line.includes('"session_meta"')) continue
+      try {
+        const entry = JSON.parse(line)
+        const cwd = entry.payload?.cwd
+        if (typeof cwd === 'string' && cwd) return cwd
+      } catch { /* skip malformed line */ }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Rollout files a codex process currently holds open. */
+async function openCodexRollouts(pid: number): Promise<string[]> {
+  const rollouts = new Set<string>()
+  try {
+    for (const fd of await readdir(`/proc/${pid}/fd`)) {
+      const link = await readlink(`/proc/${pid}/fd/${fd}`).catch(() => '')
+      if (link.includes('/.codex/sessions/') && link.endsWith('.jsonl')) rollouts.add(link)
+    }
+  } catch { /* process gone or fds unreadable */ }
+  return [...rollouts]
+}
+
 /** First user message from a Codex rollout file. */
 async function codexRolloutTitle(path: string): Promise<string | null> {
   try {
-    const head = await readFileSlice(path, 65_536, false)
+    const head = await readFileSlice(path, 262_144, false)
     for (const line of head.split('\n')) {
       if (!line.includes('user_message')) continue
       try {
@@ -374,17 +411,9 @@ async function resolveClaudeTranscript(
 async function resolveCodexRollout(pid: number): Promise<string | null> {
   const cached = transcriptByPid.get(pid)
   if (cached) return cached
-  try {
-    const fds = await readdir(`/proc/${pid}/fd`)
-    for (const fd of fds) {
-      const link = await readlink(`/proc/${pid}/fd/${fd}`).catch(() => '')
-      if (link.includes('/.codex/sessions/') && link.endsWith('.jsonl')) {
-        transcriptByPid.set(pid, link)
-        return link
-      }
-    }
-  } catch { /* process gone or fds unreadable */ }
-  return null
+  const [rollout] = await openCodexRollouts(pid)
+  if (rollout) transcriptByPid.set(pid, rollout)
+  return rollout ?? null
 }
 
 async function claudeSessionInfo(
@@ -445,14 +474,25 @@ function pruneCpuSamples(livePids: Set<number>): void {
   }
 }
 
-async function scanAgentProcs(): Promise<Array<{ info: ProcInfo; agent: AgentName }>> {
+async function scanAgentProcs(): Promise<{
+  procs: Array<{ info: ProcInfo; agent: AgentName }>
+  codexAppServers: ProcInfo[]
+}> {
   const entries = await readdir('/proc')
   const pids = entries.filter((e) => /^\d+$/.test(e)).map(Number)
   const infos = await Promise.all(pids.map(readProc))
-  return infos.flatMap((info) => {
-    const agent = info && detectAgent(info)
-    return info && agent ? [{ info, agent }] : []
-  })
+  const procs: Array<{ info: ProcInfo; agent: AgentName }> = []
+  const codexAppServers: ProcInfo[] = []
+  for (const info of infos) {
+    if (!info || info.state === 'Z') continue
+    if (isCodexAppServer(info)) {
+      codexAppServers.push(info)
+      continue
+    }
+    const agent = detectAgent(info)
+    if (agent) procs.push({ info, agent })
+  }
+  return { procs, codexAppServers }
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +698,7 @@ export async function listAgentSessions(): Promise<{
   sessions: AgentSession[]
   capabilities: FocusCapabilities
 }> {
-  const [procs, caps] = await Promise.all([scanAgentProcs(), getCapabilities()])
+  const [{ procs, codexAppServers }, caps] = await Promise.all([scanAgentProcs(), getCapabilities()])
   // On Wayland wmctrl only reaches XWayland windows — modern terminals are
   // native Wayland, so don't advertise focus support from wmctrl alone there.
   const canFocusTerminals = caps.hasWindowCalls
@@ -666,13 +706,44 @@ export async function listAgentSessions(): Promise<{
   const isGnome = (process.env.XDG_CURRENT_DESKTOP ?? '').toLowerCase().includes('gnome')
   const canInstallWindowCalls = !caps.hasWindowCalls && isGnome
 
-  const cpuByPid = new Map(procs.map(({ info }) => [info.pid, info.cpuTicks]))
+  const cpuByPid = new Map(
+    [...procs.map(({ info }) => info), ...codexAppServers].map((info) => [info.pid, info.cpuTicks]))
+
+  // The VS Code codex extension runs one app-server per window; each open
+  // conversation holds its rollout file open, whose meta names the workspace.
+  const appServerItems: Array<{
+    session: Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'>
+    rollout: string
+  }> = []
+  for (const info of codexAppServers) {
+    const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.exe))
+    for (const rollout of await openCodexRollouts(info.pid)) {
+      const cwd = await codexRolloutCwd(rollout)
+      if (!cwd) continue
+      appServerItems.push({
+        session: {
+          pid: info.pid,
+          agent: 'codex',
+          kind: 'ide',
+          cwd,
+          tty: null,
+          ide: ideMarker?.ide ?? 'vscode',
+        },
+        rollout,
+      })
+    }
+  }
+
   const base = (await Promise.all(procs
     .map(({ info, agent }) => classify(info, agent))
     // Headless/background sessions have no window to focus — not worth listing.
     .filter((s): s is Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'> =>
       s !== null && s.kind !== 'background')
-    .map(async (s) => ({
+    .map(async (s) => ({ session: s, rollout: undefined as string | undefined }))))
+    .concat(appServerItems)
+
+  const enriched = (await Promise.all(base.map(async ({ session: s, rollout }) => ({
+    session: {
       ...s,
       gitRoot: await findGitRoot(s.cwd),
       busy: sampleBusy(s.pid, cpuByPid.get(s.pid) ?? 0),
@@ -681,21 +752,23 @@ export async function listAgentSessions(): Promise<{
           ? canFocusTerminals || (caps.ideClis.get(ideCliFor(s.ide!) ?? '') ?? false)
         : s.kind === 'terminal' ? canFocusTerminals
         : false,
-    }))))
-    .sort((a, b) => a.cwd.localeCompare(b.cwd) || a.pid - b.pid)
+    },
+    rollout,
+  }))))
+    .sort((a, b) => a.session.cwd.localeCompare(b.session.cwd) || a.session.pid - b.session.pid)
 
   // Sequential: several sessions in one repo compete for the same transcript
   // files, and each claim must be visible to the next resolution.
   const claimedTranscripts = new Set<string>()
   const sessions: AgentSession[] = []
-  for (const s of base) {
+  for (const { session: s, rollout } of enriched) {
     if (s.agent === 'claude') {
       const { title, busy } = await claudeSessionInfo(s, claimedTranscripts)
       // The registry's self-reported status beats the CPU heuristic.
       sessions.push({ ...s, title, busy: busy ?? s.busy })
     } else {
-      const rollout = await resolveCodexRollout(s.pid)
-      sessions.push({ ...s, title: rollout ? await codexRolloutTitle(rollout) : null })
+      const resolved = rollout ?? await resolveCodexRollout(s.pid)
+      sessions.push({ ...s, title: resolved ? await codexRolloutTitle(resolved) : null })
     }
   }
 
@@ -779,14 +852,15 @@ async function prepareTmuxTarget(chainPids: Set<number>): Promise<Set<number>> {
   return clientPids
 }
 
-export async function focusAgentSession(pid: number): Promise<FocusResult> {
+export async function focusAgentSession(pid: number, cwdOverride?: string): Promise<FocusResult> {
   const info = await readProc(pid)
-  const agent = info && detectAgent(info)
+  const agent = info ? (isCodexAppServer(info) ? 'codex' : detectAgent(info)) : null
   if (!info || !agent) {
     return { ok: false, error: `No agent session with pid ${pid} (it may have exited)` }
   }
   const session = classify(info, agent)
   if (!session) return { ok: false, error: `Process ${pid} is not a focusable agent session` }
+  if (cwdOverride) session.cwd = cwdOverride
 
   if (session.kind === 'ide') {
     // Direct window activation first: the IDE is an electron app whose main

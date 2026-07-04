@@ -120,8 +120,8 @@ export function listAgentSessions() {
   return ensureClient().listAgentSessions({})
 }
 
-export function focusAgentSession(pid: number) {
-  return ensureClient().focusAgentSession({ pid })
+export function focusAgentSession(pid: number, cwd?: string) {
+  return ensureClient().focusAgentSession({ pid, cwd })
 }
 
 export function installWindowCalls() {

@@ -381,7 +381,14 @@ export const contract = {
     })),
 
   focusAgentSession: oc
-    .input(z.object({ pid: z.number() }))
+    .input(z.object({
+      pid: z.number(),
+      /**
+       * The session's workspace cwd. Needed when the process's own cwd isn't
+       * the workspace (codex app-server hosts several conversations from $HOME).
+       */
+      cwd: z.string().optional(),
+    }))
     .output(z.object({
       ok: z.boolean(),
       /** How the focus was performed ('ide-cli', 'window-calls', 'wmctrl'). */
