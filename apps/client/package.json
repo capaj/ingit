@@ -16,7 +16,7 @@
     "@react-spring/web": "^10.1.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-grab": "^0.1.47",
+    "react-grab": "^0.1.48",
     "zod": "^4.4.3",
     "zustand": "^5.0.14"
   },
