@@ -18,7 +18,7 @@ jobs:
   build:
     name: build ${{ matrix.id }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - id: linux

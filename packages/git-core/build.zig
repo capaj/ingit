@@ -16,5 +16,6 @@ pub fn build(b: *std.Build) void {
         .root_module = module,
         .linkage = .dynamic,
     });
+    lib.linkLibC();
     b.installArtifact(lib);
 }
