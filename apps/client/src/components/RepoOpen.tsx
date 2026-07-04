@@ -780,6 +780,9 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           flex-wrap: wrap;
           gap: 5px;
           margin-top: 3px;
+          min-width: 0;
+          max-width: 100%;
+          align-self: stretch;
         }
 
         .repo-open-claude-chip {
@@ -790,6 +793,11 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           padding: 2px 7px;
           font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
           cursor: pointer;
+          min-width: 0;
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .repo-open-claude-chip:hover:not(:disabled) {
@@ -1006,13 +1014,13 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
                             className={`repo-open-claude-chip${session.busy ? ' repo-open-claude-chip-busy' : ''}`}
                             disabled={!session.focusable || focusingPid !== null}
                             title={session.focusable
-                              ? `Focus this session's window (pid ${session.pid})`
-                              : `pid ${session.pid} — window focus unavailable for this session`}
+                              ? `Focus this session's window — ${agentSessionKindLabel(session)} (pid ${session.pid})`
+                              : `${agentSessionKindLabel(session)} (pid ${session.pid}) — window focus unavailable for this session`}
                             onClick={() => void focusAgentSession(session)}
                           >
                             {focusingPid === session.pid
                               ? 'focusing…'
-                              : `${session.agent === 'codex' ? 'codex ' : ''}${agentSessionKindLabel(session)}${session.count > 1 ? ` ×${session.count}` : ''}`}
+                              : `${session.title ?? `${session.agent === 'codex' ? 'codex ' : ''}${agentSessionKindLabel(session)}`}${session.count > 1 ? ` ×${session.count}` : ''}`}
                           </button>
                         ))}
                       </span>

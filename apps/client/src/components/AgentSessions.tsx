@@ -69,11 +69,6 @@ export function AgentSessions() {
   const hiddenCount = repoPath !== null && !showAll ? elsewhere.length : 0
 
   const handlePillClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    // Exactly one session in the open repo: focus it directly, no menu needed.
-    if (!open && inThisRepo.length === 1 && inThisRepo[0].focusable) {
-      void handleFocus(inThisRepo[0])
-      return
-    }
     const rect = e.currentTarget.getBoundingClientRect()
     setAnchor({ top: rect.bottom + 4, right: window.innerWidth - rect.right })
     setOpen((v) => !v)
@@ -83,11 +78,7 @@ export function AgentSessions() {
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
         onClick={handlePillClick}
-        title={
-          inThisRepo.length === 1
-            ? 'Focus the agent session running in this repository'
-            : `${sessions.length} agent session${sessions.length === 1 ? '' : 's'} running`
-        }
+        title={`${sessions.length} agent session${sessions.length === 1 ? '' : 's'} running`}
         aria-label="Agent sessions"
         style={{
           display: 'flex',
