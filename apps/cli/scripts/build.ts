@@ -29,7 +29,7 @@ const CLIENT_DIST = join(REPO_ROOT, 'apps/client/dist')
 const GIT_CORE_DIR = join(REPO_ROOT, 'packages/git-core')
 const REPOSITORY = {
   type: 'git',
-  url: 'git+https://github.com/capaj/ingit-vibe.git',
+  url: 'git+https://github.com/capaj/ingit.git',
 }
 const PUBLISH_CONFIG = {
   access: 'public',
