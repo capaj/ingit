@@ -356,10 +356,44 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           box-sizing: border-box;
         }
 
-        .repo-open-shell {
+        .repo-open-stack {
           width: min(1360px, 100%);
-          height: min(760px, 100%);
-          min-height: 520px;
+          max-height: 100%;
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          min-height: 0;
+        }
+
+        .repo-open-agents-card {
+          flex-shrink: 0;
+          max-height: 42%;
+          overflow: auto;
+          overscroll-behavior: contain;
+          background: linear-gradient(180deg, #262a3a 0%, #222430 100%);
+          border: 1px solid #4a5366;
+          border-radius: 8px;
+          box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
+          padding: 14px 16px 16px;
+        }
+
+        .repo-open-agents-title {
+          color: #eef0f6;
+          font-size: 14px;
+          font-weight: 650;
+          margin-bottom: 10px;
+        }
+
+        .repo-open-agents-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(min(760px, 100%), 1fr));
+          gap: 8px;
+        }
+
+        .repo-open-shell {
+          flex: 1;
+          width: 100%;
+          min-height: 380px;
           background: #222430;
           border: 1px solid #343847;
           border-radius: 8px;
@@ -790,14 +824,16 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           border-radius: 4px;
           background: #20232d;
           color: #aeb5c6;
-          padding: 2px 7px;
+          padding: 3px 8px;
           font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
           cursor: pointer;
+          flex: 1 1 80%;
           min-width: 0;
-          max-width: 100%;
+          max-width: 80%;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+          text-align: left;
         }
 
         .repo-open-claude-chip:hover:not(:disabled) {
@@ -866,8 +902,62 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
             border-right: none;
             border-bottom: 1px solid #343847;
           }
+
+          .repo-open-agents-grid {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
+
+      <div className="repo-open-stack">
+      {agentGroups.length > 0 && (
+        <section className="repo-open-agents-card">
+          <div className="repo-open-agents-title">Running agent sessions</div>
+          <div className="repo-open-agents-grid">
+            {agentGroups.map((group) => (
+              <div key={group.cwd} className="repo-open-list-button repo-open-claude-row">
+                <span className="repo-open-list-name repo-open-agent-name">
+                  {[...new Set(group.sessions.map((s) => s.agent))].map((agent) => (
+                    <AgentIcon
+                      key={agent}
+                      agent={agent}
+                      size={15}
+                      busy={group.sessions.some((s) => s.agent === agent && s.busy)}
+                    />
+                  ))}
+                  {getRepoLabel(group.cwd)}
+                </span>
+                <span className="repo-open-list-path">{group.cwd}</span>
+                <span className="repo-open-claude-chips">
+                  {group.sessions.map((session) => (
+                    <button
+                      key={session.pid}
+                      type="button"
+                      className={`repo-open-claude-chip${session.busy ? ' repo-open-claude-chip-busy' : ''}`}
+                      disabled={!session.focusable || focusingPid !== null}
+                      title={session.focusable
+                        ? `Focus this session's window — ${agentSessionKindLabel(session)} (pid ${session.pid})`
+                        : `${agentSessionKindLabel(session)} (pid ${session.pid}) — window focus unavailable for this session`}
+                      onClick={() => void focusAgentSession(session)}
+                    >
+                      {focusingPid === session.pid
+                        ? 'focusing…'
+                        : `${session.title ?? `${session.agent === 'codex' ? 'codex ' : ''}${agentSessionKindLabel(session)}`}${session.count > 1 ? ` ×${session.count}` : ''}`}
+                    </button>
+                  ))}
+                </span>
+                <button
+                  type="button"
+                  className="repo-open-row-action repo-open-claude-open"
+                  onClick={() => onOpen(group.cwd)}
+                >
+                  Open
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="repo-open-shell">
         <div className="repo-open-header">
@@ -988,55 +1078,6 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           <aside className="repo-open-side">
             {error && <p className="repo-open-error">{error}</p>}
 
-            {agentGroups.length > 0 && (
-              <section className="repo-open-section">
-                <div className="repo-open-section-title">Running agent sessions</div>
-                <div className="repo-open-list">
-                  {agentGroups.map((group) => (
-                    <div key={group.cwd} className="repo-open-list-button repo-open-claude-row">
-                      <span className="repo-open-list-name repo-open-agent-name">
-                        {[...new Set(group.sessions.map((s) => s.agent))].map((agent) => (
-                          <AgentIcon
-                            key={agent}
-                            agent={agent}
-                            size={14}
-                            busy={group.sessions.some((s) => s.agent === agent && s.busy)}
-                          />
-                        ))}
-                        {getRepoLabel(group.cwd)}
-                      </span>
-                      <span className="repo-open-list-path">{group.cwd}</span>
-                      <span className="repo-open-claude-chips">
-                        {group.sessions.map((session) => (
-                          <button
-                            key={session.pid}
-                            type="button"
-                            className={`repo-open-claude-chip${session.busy ? ' repo-open-claude-chip-busy' : ''}`}
-                            disabled={!session.focusable || focusingPid !== null}
-                            title={session.focusable
-                              ? `Focus this session's window — ${agentSessionKindLabel(session)} (pid ${session.pid})`
-                              : `${agentSessionKindLabel(session)} (pid ${session.pid}) — window focus unavailable for this session`}
-                            onClick={() => void focusAgentSession(session)}
-                          >
-                            {focusingPid === session.pid
-                              ? 'focusing…'
-                              : `${session.title ?? `${session.agent === 'codex' ? 'codex ' : ''}${agentSessionKindLabel(session)}`}${session.count > 1 ? ` ×${session.count}` : ''}`}
-                          </button>
-                        ))}
-                      </span>
-                      <button
-                        type="button"
-                        className="repo-open-row-action repo-open-claude-open"
-                        onClick={() => onOpen(group.cwd)}
-                      >
-                        Open
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
             {recentRepos.length > 0 && (
               <section className="repo-open-section">
                 <div className="repo-open-section-title">Recent repositories</div>
@@ -1077,6 +1118,7 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
             )}
           </aside>
         </div>
+      </div>
       </div>
     </div>
   )

@@ -172,7 +172,8 @@ function classify(info: ProcInfo, agent: AgentName): Omit<AgentSession, 'focusab
 // closest to the process start time.
 // ---------------------------------------------------------------------------
 
-const TITLE_MAX_CHARS = 80
+// Generous — the UI ellipsizes to the actual available width via CSS.
+const TITLE_MAX_CHARS = 300
 // A transcript is considered "this process's" only if created within this
 // window around process start (resumed sessions fall back to newest-written).
 const TRANSCRIPT_BIRTH_TOLERANCE_MS = 180_000
