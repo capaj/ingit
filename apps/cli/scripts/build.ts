@@ -64,6 +64,17 @@ async function buildClient(): Promise<void> {
   }
 }
 
+async function buildSharedPackages(): Promise<void> {
+  console.log('▶ Building shared packages…')
+  const proc = Bun.spawn(['bun', 'run', 'build:packages'], {
+    cwd: REPO_ROOT,
+    stdout: 'inherit',
+    stderr: 'inherit',
+  })
+  const code = await proc.exited
+  if (code !== 0) throw new Error(`shared package build failed (exit ${code})`)
+}
+
 async function buildTarget(target: Target): Promise<void> {
   const pkgDir = join(RELEASE_DIR, `cli-${target.id}`)
   rmSync(pkgDir, { recursive: true, force: true })
@@ -161,6 +172,7 @@ async function main(): Promise<void> {
   rmSync(RELEASE_DIR, { recursive: true, force: true })
   mkdirSync(RELEASE_DIR, { recursive: true })
 
+  await buildSharedPackages()
   await buildClient()
   for (const target of targets) await buildTarget(target)
   buildLauncher()
