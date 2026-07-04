@@ -27,6 +27,14 @@ const CLI_DIR = resolve(import.meta.dir, '..')
 const RELEASE_DIR = join(CLI_DIR, 'release')
 const CLIENT_DIST = join(REPO_ROOT, 'apps/client/dist')
 const GIT_CORE_DIR = join(REPO_ROOT, 'packages/git-core')
+const REPOSITORY = {
+  type: 'git',
+  url: 'git+https://github.com/capaj/ingit-vibe.git',
+}
+const PUBLISH_CONFIG = {
+  access: 'public',
+  registry: 'https://registry.npmjs.org/',
+}
 
 interface Target {
   /** npm os/cpu identity, e.g. linux-x64 */
@@ -120,10 +128,9 @@ async function buildTarget(target: Target): Promise<void> {
     os: [target.os],
     cpu: [target.cpu],
     license: 'MIT',
+    repository: REPOSITORY,
     files: ['ingit', 'client', target.nativeLib],
-    publishConfig: {
-      access: 'public',
-    },
+    publishConfig: PUBLISH_CONFIG,
   })
 
   console.log(`  ✓ ${pkgDir}`)
@@ -152,9 +159,8 @@ function buildLauncher(): void {
     optionalDependencies,
     license: 'MIT',
     engines: { node: '>=18' },
-    publishConfig: {
-      access: 'public',
-    },
+    repository: REPOSITORY,
+    publishConfig: PUBLISH_CONFIG,
   })
 
   console.log(`  ✓ ${pkgDir}`)

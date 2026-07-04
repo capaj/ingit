@@ -94,15 +94,22 @@ jobs:
     name: publish to npm
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: release
           merge-multiple: true
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
         with:
-          bun-version: ${{ env.BUN_VERSION }}
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Verify package contents
         working-directory: release
@@ -111,15 +118,12 @@ jobs:
 
           for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64 cli; do
             echo "::group::dry-run $dir"
-            (cd "$dir" && bun pm pack --dry-run)
+            (cd "$dir" && npm pack --dry-run)
             echo "::endgroup::"
           done
 
       - name: Publish packages
         working-directory: release
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
@@ -127,13 +131,25 @@ jobs:
           case "$version" in *-*) npm_tag=next;; esac
           echo "Publishing version $version (dist-tag: $npm_tag)"
 
+          publish_dir() {
+            local dir="$1"
+            local pkg
+            pkg="$(node -p "require('./${dir}/package.json').name")"
+            if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+              echo "${pkg}@${version} is already published; skipping"
+              return
+            fi
+
+            (cd "$dir" && npm publish --access public --tag "$npm_tag")
+          }
+
           # Platform packages first; @ingit/cli depends on them via optionalDependencies.
           for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64; do
             echo "::group::publish $dir"
-            (cd "$dir" && bun publish --access public --tag "$npm_tag" --tolerate-republish)
+            publish_dir "$dir"
             echo "::endgroup::"
           done
 
           echo "::group::publish @ingit/cli"
-          (cd cli && bun publish --access public --tag "$npm_tag" --tolerate-republish)
+          publish_dir cli
           echo "::endgroup::"
