@@ -111,7 +111,7 @@ jobs:
 
           for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64 cli; do
             echo "::group::dry-run $dir"
-            (cd "$dir" && bun publish --dry-run)
+            (cd "$dir" && bun pm pack --dry-run)
             echo "::endgroup::"
           done
 
