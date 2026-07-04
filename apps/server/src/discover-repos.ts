@@ -1,6 +1,13 @@
 import { readdir, stat } from 'node:fs/promises'
-import { resolve, join } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
 import { homedir } from 'node:os'
+
+const IGNORED_DIRECTORY_NAMES = new Set([
+  '.git',
+  '.hg',
+  '.svn',
+  'node_modules',
+])
 
 function expandTilde(p: string): string {
   if (p === '~') return homedir()
@@ -15,6 +22,72 @@ async function hasGitDir(dir: string): Promise<boolean> {
     return true
   } catch {
     return false
+  }
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+export interface DirectoryEntry {
+  name: string
+  path: string
+  isGitRepo: boolean
+}
+
+export interface DirectoryListing {
+  path: string
+  parentPath: string | null
+  isGitRepo: boolean
+  entries: DirectoryEntry[]
+  error?: string
+}
+
+export async function listDirectory(folder?: string): Promise<DirectoryListing> {
+  const root = resolve(expandTilde(folder ?? process.cwd()))
+  const parent = dirname(root)
+
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch (err) {
+    return {
+      path: root,
+      parentPath: parent === root ? null : parent,
+      isGitRepo: await hasGitDir(root),
+      entries: [],
+      error: err instanceof Error ? err.message : 'Unable to read directory',
+    }
+  }
+
+  const directories = await Promise.all(entries.map(async (entry) => {
+    if (IGNORED_DIRECTORY_NAMES.has(entry.name)) return null
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) return null
+
+    const path = join(root, entry.name)
+    if (entry.isSymbolicLink() && !(await isDirectory(path))) return null
+
+    return {
+      name: entry.name,
+      path,
+      isGitRepo: await hasGitDir(path),
+    }
+  }))
+
+  return {
+    path: root,
+    parentPath: parent === root ? null : parent,
+    isGitRepo: await hasGitDir(root),
+    entries: directories
+      .filter((entry): entry is DirectoryEntry => entry !== null)
+      .sort((a, b) => {
+        if (a.isGitRepo !== b.isGitRepo) return a.isGitRepo ? -1 : 1
+        return a.name.localeCompare(b.name)
+      }),
   }
 }
 

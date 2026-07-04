@@ -2,7 +2,7 @@
  * Builds the publishable npm artifacts for the `ingit` CLI.
  *
  * Output (under apps/cli/release/):
- *   ingit/                  -> published as `ingit` (tiny node launcher + optional deps)
+ *   cli/                    -> published as `@ingit/cli` (tiny node launcher + optional deps)
  *   cli-linux-x64/          -> published as `@ingit/cli-linux-x64`
  *   cli-linux-arm64/        -> published as `@ingit/cli-linux-arm64`
  *   cli-darwin-x64/         -> published as `@ingit/cli-darwin-x64`
@@ -10,13 +10,14 @@
  *
  * Each platform package contains a self-contained binary (`bun build --compile`,
  * runtime embedded), the built client, and the native git library. The `ingit`
- * launcher picks the matching platform package at runtime via optionalDependencies.
+ * `@ingit/cli` exposes the `ingit` command and picks the matching platform
+ * package at runtime via optionalDependencies.
  *
  * Usage:
  *   bun scripts/build.ts                 # build all targets
  *   bun scripts/build.ts linux-x64       # build a single target (faster local check)
  */
-import { rmSync, mkdirSync, cpSync, existsSync, writeFileSync } from 'node:fs'
+import { chmodSync, rmSync, mkdirSync, cpSync, existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 // Tag-driven in CI (INGIT_VERSION=${GITHUB_REF_NAME#v}); defaults for local builds.
@@ -44,6 +45,10 @@ const TARGETS: Target[] = [
 ]
 
 const ALL_PLATFORM_PKGS = TARGETS.map((t) => `@ingit/cli-${t.id}`)
+
+function writePackageJson(pkgDir: string, pkg: Record<string, unknown>): void {
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
+}
 
 async function buildClient(): Promise<void> {
   console.log('▶ Building client (vite)…')
@@ -97,32 +102,29 @@ async function buildTarget(target: Target): Promise<void> {
     console.warn(`  ! native lib ${target.nativeLib} not found — ${target.id} ships without it`)
   }
 
-  writeFileSync(
-    join(pkgDir, 'package.json'),
-    JSON.stringify(
-      {
-        name: `@ingit/cli-${target.id}`,
-        version: VERSION,
-        description: `ingit prebuilt binary for ${target.id}`,
-        os: [target.os],
-        cpu: [target.cpu],
-        license: 'MIT',
-        files: ['ingit', 'client', target.nativeLib],
-      },
-      null,
-      2,
-    ) + '\n',
-  )
+  writePackageJson(pkgDir, {
+    name: `@ingit/cli-${target.id}`,
+    version: VERSION,
+    description: `ingit prebuilt binary for ${target.id}`,
+    os: [target.os],
+    cpu: [target.cpu],
+    license: 'MIT',
+    files: ['ingit', 'client', target.nativeLib],
+    publishConfig: {
+      access: 'public',
+    },
+  })
 
   console.log(`  ✓ ${pkgDir}`)
 }
 
 function buildLauncher(): void {
-  const pkgDir = join(RELEASE_DIR, 'ingit')
+  const pkgDir = join(RELEASE_DIR, 'cli')
   rmSync(pkgDir, { recursive: true, force: true })
   mkdirSync(join(pkgDir, 'bin'), { recursive: true })
 
   cpSync(join(CLI_DIR, 'bin/ingit.cjs'), join(pkgDir, 'bin/ingit.cjs'))
+  chmodSync(join(pkgDir, 'bin/ingit.cjs'), 0o755)
   if (existsSync(join(CLI_DIR, 'README.md'))) {
     cpSync(join(CLI_DIR, 'README.md'), join(pkgDir, 'README.md'))
   }
@@ -130,23 +132,19 @@ function buildLauncher(): void {
   const optionalDependencies: Record<string, string> = {}
   for (const name of ALL_PLATFORM_PKGS) optionalDependencies[name] = VERSION
 
-  writeFileSync(
-    join(pkgDir, 'package.json'),
-    JSON.stringify(
-      {
-        name: 'ingit',
-        version: VERSION,
-        description: 'Local git history & graph viewer in your browser',
-        bin: { ingit: 'bin/ingit.cjs' },
-        files: ['bin', 'README.md'],
-        optionalDependencies,
-        license: 'MIT',
-        engines: { node: '>=18' },
-      },
-      null,
-      2,
-    ) + '\n',
-  )
+  writePackageJson(pkgDir, {
+    name: '@ingit/cli',
+    version: VERSION,
+    description: 'Local git history & graph viewer in your browser',
+    bin: { ingit: 'bin/ingit.cjs' },
+    files: ['bin', 'README.md'],
+    optionalDependencies,
+    license: 'MIT',
+    engines: { node: '>=18' },
+    publishConfig: {
+      access: 'public',
+    },
+  })
 
   console.log(`  ✓ ${pkgDir}`)
 }
@@ -168,7 +166,7 @@ async function main(): Promise<void> {
   buildLauncher()
 
   console.log(`\n✓ Done. Artifacts in ${RELEASE_DIR}`)
-  console.log('  Publish each platform package, then the `ingit` launcher package.')
+  console.log('  Publish each platform package, then the `@ingit/cli` launcher package.')
 }
 
 main().catch((err) => {

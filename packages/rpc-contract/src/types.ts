@@ -21,6 +21,20 @@ export interface OpenRepoResponse {
 
 export type RecentReposResponse = string[]
 
+export interface DirectoryEntry {
+  name: string
+  path: string
+  isGitRepo: boolean
+}
+
+export interface DirectoryListing {
+  path: string
+  parentPath: string | null
+  isGitRepo: boolean
+  entries: DirectoryEntry[]
+  error?: string
+}
+
 export interface RefSummary {
   name: string
   shortName: string
@@ -248,6 +262,50 @@ export interface StageActionRequest {
   repoId: RepoId
   action: StageActionKind
   paths: string[]
+}
+
+export type AgentSessionKind = 'terminal' | 'ide' | 'background'
+export type AgentName = 'claude' | 'codex'
+
+export interface AgentSession {
+  pid: number
+  /** Which coding agent this session runs. */
+  agent: AgentName
+  kind: AgentSessionKind
+  /** Working directory of the claude process (usually the repo it works in). */
+  cwd: string
+  /** Root of the git repository containing cwd, or null when outside any repo. */
+  gitRoot: string | null
+  /** Controlling terminal (e.g. /dev/pts/12) for terminal sessions. */
+  tty: string | null
+  /** IDE hosting the session ('vscode', 'cursor', ...) for ide sessions. */
+  ide: string | null
+  /** Whether focusAgentSession can bring this session's window to front. */
+  focusable: boolean
+  /**
+   * True when the session looks actively working (inference streaming / tool
+   * running), false when idle, null before enough CPU samples exist.
+   */
+  busy: boolean | null
+  /** Conversation title (what the agent shows in its terminal tab), if known. */
+  title: string | null
+}
+
+export interface FocusCapabilities {
+  displayServer: string
+  canFocusTerminals: boolean
+  canInstallWindowCalls: boolean
+}
+
+export interface AgentSessionsResponse {
+  sessions: AgentSession[]
+  capabilities: FocusCapabilities
+}
+
+export interface FocusAgentSessionResponse {
+  ok: boolean
+  method?: string
+  error?: string
 }
 
 // WebSocket event types

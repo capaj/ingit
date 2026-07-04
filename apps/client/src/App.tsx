@@ -7,6 +7,7 @@ import { ReflogGraph } from './components/ReflogGraph'
 import { CommitDetail } from './components/CommitDetail'
 import { WorkingTreeDetail } from './components/WorkingTreeDetail'
 import { ErrorDialog } from './components/ErrorDialog'
+import { AgentSessions } from './components/AgentSessions'
 
 export function App() {
   const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
@@ -15,7 +16,7 @@ export function App() {
     status, repoPath, recentRepos, discoveredFolder, discoveredRepos, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, commitCIStatus, githubUrl, openError,
     errorDialog, dismissError, showError,
-    openRepoByPath, openFromUrl, selectRef,
+    openRepoByPath, closeRepo, openFromUrl, selectRef,
     navigateTo, checkoutSha, performRefAction,
     showCommitMessages, setShowCommitMessages,
     viewMode, setViewMode,
@@ -177,6 +178,7 @@ export function App() {
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#a6adc8', fontFamily: 'monospace', flex: 1 }}>
             {repoPath}
           </span>
+          <AgentSessions />
           <button
             onClick={handleFetch}
             disabled={fetching}
@@ -199,6 +201,23 @@ export function App() {
             <span style={{ display: 'inline-block', animation: fetching ? 'spin 0.7s linear infinite' : 'none' }}>⟳</span>
             {fetching ? 'Fetching…' : 'Fetch'}
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </button>
+          <button
+            onClick={closeRepo}
+            title="Close repository"
+            aria-label="Close repository"
+            style={{
+              flexShrink: 0,
+              padding: '4px 10px',
+              borderRadius: 4,
+              border: '1px solid #313244',
+              background: 'transparent',
+              color: '#6c7086',
+              fontSize: 11,
+              cursor: 'pointer',
+            }}
+          >
+            Close
           </button>
         </div>
 

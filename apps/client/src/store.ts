@@ -94,6 +94,7 @@ interface OptimisticSnapshot {
 type StoreSetter = (
   partial: Partial<AppState> | ((state: AppState) => Partial<AppState>),
 ) => void
+type StoreGetter = () => AppState
 
 // Apply a history-rewriting prediction (commit action / merge / rebase): show
 // the predicted layout, select + scroll to the predicted new HEAD, and take the
@@ -201,6 +202,10 @@ function setRepoPathInUrl(repoPath: string) {
   window.location.hash = `#/repository?path=${encodeURIComponent(repoPath)}`
 }
 
+function clearRepoPathInUrl() {
+  window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+}
+
 function isSessionError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('No session found')
 }
@@ -292,6 +297,7 @@ interface AppState {
   showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
+  closeRepo: () => void
   loadRecentRepos: () => Promise<void>
   loadDiscoveredRepos: (folder?: string) => Promise<void>
   openFromUrl: () => void
@@ -313,6 +319,69 @@ interface AppState {
   loadReflog: () => Promise<void>
   loadMoreReflog: () => Promise<void>
   recoverBranch: (branchName: string, sha: string) => Promise<void>
+}
+
+async function openRepoByPathImpl(
+  path: string,
+  set: StoreSetter,
+  get: StoreGetter,
+  options: { showOpenError: boolean },
+): Promise<void> {
+  set({ status: 'loading', openError: null })
+  try {
+    const res = await openRepo({ path })
+    setRepoPathInUrl(res.rootPath)
+    // Drop any CI watches/poller left over from a previously open repo.
+    ciWatch.clear()
+    stopCIPolling()
+    set({
+      status: 'ready',
+      repoId: res.repoId,
+      repoPath: res.rootPath,
+      totalCommitCount: res.totalCommitCount,
+      recentRepos: prependRecentRepo(get().recentRepos, res.rootPath),
+      githubUrl: res.githubUrl,
+      commitCIStatus: {},
+      openError: null,
+      selectedRefName: null,
+      mergePreview: null,
+      worktreeChanges: null,
+      worktreeSelected: false,
+      reflog: null,
+      reflogMaxCount: REFLOG_PAGE_SIZE,
+    })
+    if (get().viewMode === 'reflog') void get().loadReflog()
+    void get().loadWorktreeChanges()
+
+    const [refs, hist] = await Promise.all([
+      getRefs(res.repoId),
+      queryHistory(res.repoId, {
+        repoId: res.repoId,
+        scope: { kind: 'all' },
+        anchor: { kind: 'head' },
+        beforeRows: 0,
+        afterRows: INITIAL_ROWS,
+        firstParent: false,
+        topoOrder: true,
+      }),
+    ])
+    set({ refs, historyWindow: hist })
+  } catch (err) {
+    let recentRepos = get().recentRepos
+    try {
+      recentRepos = await getRecentRepos()
+    } catch (historyErr) {
+      console.error('Failed to load recent repositories:', historyErr)
+    }
+
+    set({
+      status: 'no-repo',
+      recentRepos,
+      openError: options.showOpenError
+        ? err instanceof Error ? err.message : 'Failed to open repository'
+        : null,
+    })
+  }
 }
 
 // --- CI status polling -----------------------------------------------------
@@ -574,59 +643,39 @@ export const useAppStore = create<AppState>((set, get) => ({
   dismissError: () => set({ errorDialog: null }),
 
   openRepoByPath: async (path) => {
-    set({ status: 'loading', openError: null })
-    try {
-      const res = await openRepo({ path })
-      setRepoPathInUrl(res.rootPath)
-      // Drop any CI watches/poller left over from a previously open repo.
-      ciWatch.clear()
-      stopCIPolling()
-      set({
-        status: 'ready',
-        repoId: res.repoId,
-        repoPath: res.rootPath,
-        totalCommitCount: res.totalCommitCount,
-        recentRepos: prependRecentRepo(get().recentRepos, res.rootPath),
-        githubUrl: res.githubUrl,
-        commitCIStatus: {},
-        openError: null,
-        selectedRefName: null,
-        mergePreview: null,
-        worktreeChanges: null,
-        worktreeSelected: false,
-        reflog: null,
-        reflogMaxCount: REFLOG_PAGE_SIZE,
-      })
-      if (get().viewMode === 'reflog') void get().loadReflog()
-      void get().loadWorktreeChanges()
+    await openRepoByPathImpl(path, set, get, { showOpenError: true })
+  },
 
-      const [refs, hist] = await Promise.all([
-        getRefs(res.repoId),
-        queryHistory(res.repoId, {
-          repoId: res.repoId,
-          scope: { kind: 'all' },
-          anchor: { kind: 'head' },
-          beforeRows: 0,
-          afterRows: INITIAL_ROWS,
-          firstParent: false,
-          topoOrder: true,
-        }),
-      ])
-      set({ refs, historyWindow: hist })
-    } catch (err) {
-      let recentRepos = get().recentRepos
-      try {
-        recentRepos = await getRecentRepos()
-      } catch (historyErr) {
-        console.error('Failed to load recent repositories:', historyErr)
-      }
-
-      set({
-        status: 'no-repo',
-        recentRepos,
-        openError: err instanceof Error ? err.message : 'Failed to open repository',
-      })
-    }
+  closeRepo: () => {
+    ciWatch.clear()
+    stopCIPolling()
+    clearRepoPathInUrl()
+    set({
+      status: 'no-repo',
+      repoId: null,
+      repoPath: null,
+      totalCommitCount: 0,
+      refs: [],
+      historyWindow: null,
+      selectedSha: null,
+      selectedRefName: null,
+      scrollToSha: null,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      mergePreview: null,
+      githubUrl: null,
+      openError: null,
+      loadingMore: false,
+      commitCIStatus: {},
+      worktreeChanges: null,
+      worktreeSelected: false,
+      pendingMutation: false,
+      reflog: null,
+      reflogLoading: false,
+      reflogMaxCount: REFLOG_PAGE_SIZE,
+      viewMode: 'history',
+    })
   },
 
   loadRecentRepos: async () => {
@@ -651,6 +700,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     void get().loadRecentRepos()
     void get().loadDiscoveredRepos()
     if (path) void get().openRepoByPath(path)
+    else void openRepoByPathImpl('.', set, get, { showOpenError: false })
   },
 
   selectCommit: (sha) => {

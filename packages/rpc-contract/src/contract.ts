@@ -99,6 +99,51 @@ export const ReflogEntry = z.object({
   refNames: z.array(z.string()),
 })
 
+export const DirectoryEntry = z.object({
+  name: z.string(),
+  path: z.string(),
+  isGitRepo: z.boolean(),
+})
+
+export const AgentSessionKind = z.enum(['terminal', 'ide', 'background'])
+export const AgentName = z.enum(['claude', 'codex'])
+
+export const AgentSession = z.object({
+  pid: z.number(),
+  /** Which coding agent this session runs. */
+  agent: AgentName,
+  kind: AgentSessionKind,
+  /** Working directory of the claude process (usually the repo it works in). */
+  cwd: z.string(),
+  /** Root of the git repository containing cwd, or null when outside any repo. */
+  gitRoot: z.string().nullable(),
+  /** Controlling terminal (e.g. /dev/pts/12) for terminal sessions. */
+  tty: z.string().nullable(),
+  /** IDE hosting the session ('vscode', 'cursor', ...) for ide sessions. */
+  ide: z.string().nullable(),
+  /** Whether focusAgentSession can bring this session's window to front. */
+  focusable: z.boolean(),
+  /**
+   * True when the session looks actively working (inference streaming / tool
+   * running), false when idle, null before enough CPU samples exist.
+   */
+  busy: z.boolean().nullable(),
+  /** Conversation title (what the agent shows in its terminal tab), if known. */
+  title: z.string().nullable(),
+})
+
+export const FocusCapabilities = z.object({
+  /** 'x11' | 'wayland' | 'unknown' */
+  displayServer: z.string(),
+  /** True when a terminal-window activation backend is available. */
+  canFocusTerminals: z.boolean(),
+  /**
+   * True when terminal focus is unavailable but installing the "Window Calls"
+   * GNOME Shell extension (via installWindowCalls) would enable it.
+   */
+  canInstallWindowCalls: z.boolean(),
+})
+
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
@@ -124,6 +169,16 @@ export const contract = {
     .output(z.object({
       folder: z.string(),
       repos: z.array(z.string()),
+    })),
+
+  listDirectory: oc
+    .input(z.object({ folder: z.string().optional() }))
+    .output(z.object({
+      path: z.string(),
+      parentPath: z.string().nullable(),
+      isGitRepo: z.boolean(),
+      entries: z.array(DirectoryEntry),
+      error: z.string().optional(),
     })),
 
   getRefs: oc
@@ -316,5 +371,33 @@ export const contract = {
     .output(z.object({
       refName: z.string(),
       entries: z.array(ReflogEntry),
+    })),
+
+  listAgentSessions: oc
+    .input(z.object({}))
+    .output(z.object({
+      sessions: z.array(AgentSession),
+      capabilities: FocusCapabilities,
+    })),
+
+  focusAgentSession: oc
+    .input(z.object({ pid: z.number() }))
+    .output(z.object({
+      ok: z.boolean(),
+      /** How the focus was performed ('ide-cli', 'window-calls', 'wmctrl'). */
+      method: z.string().optional(),
+      error: z.string().optional(),
+    })),
+
+  /**
+   * Prompt the user (via GNOME's native consent dialog) to install the
+   * "Window Calls" shell extension that terminal-window focusing needs on
+   * GNOME Wayland.
+   */
+  installWindowCalls: oc
+    .input(z.object({}))
+    .output(z.object({
+      ok: z.boolean(),
+      error: z.string().optional(),
     })),
 }

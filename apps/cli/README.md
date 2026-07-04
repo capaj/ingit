@@ -5,7 +5,7 @@ Local git history & graph viewer that runs in your browser.
 ## Install
 
 ```sh
-npm install -g ingit
+npm install -g @ingit/cli
 ```
 
 No runtime dependencies — the binary is self-contained (the Bun runtime is

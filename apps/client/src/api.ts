@@ -48,6 +48,10 @@ export function discoverRepos(folder?: string) {
   return ensureClient().discoverRepos({ folder })
 }
 
+export function listDirectory(folder?: string) {
+  return ensureClient().listDirectory({ folder })
+}
+
 export function getRefs(repoId: string) {
   return ensureClient().getRefs({ repoId })
 }
@@ -110,4 +114,16 @@ export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' 
 
 export function getReflog(repoId: string, ref?: string, maxCount?: number) {
   return ensureClient().getReflog({ repoId, ref, maxCount })
+}
+
+export function listAgentSessions() {
+  return ensureClient().listAgentSessions({})
+}
+
+export function focusAgentSession(pid: number) {
+  return ensureClient().focusAgentSession({ pid })
+}
+
+export function installWindowCalls() {
+  return ensureClient().installWindowCalls({})
 }

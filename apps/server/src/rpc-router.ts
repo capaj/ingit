@@ -5,7 +5,8 @@ import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
 import { getMergePreview } from './merge-handler.js'
 import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl } from './ci-status-handler.js'
-import { discoverRepos } from './discover-repos.js'
+import { discoverRepos, listDirectory } from './discover-repos.js'
+import { listAgentSessions, focusAgentSession, installWindowCalls } from './agent-sessions.js'
 
 const sessionManager = new SessionManager()
 
@@ -29,6 +30,10 @@ export const router = os.router({
 
   discoverRepos: os.discoverRepos.handler(async ({ input }) => {
     return discoverRepos(input.folder)
+  }),
+
+  listDirectory: os.listDirectory.handler(async ({ input }) => {
+    return listDirectory(input.folder)
   }),
 
   getRefs: os.getRefs.handler(async ({ input }) => {
@@ -245,6 +250,18 @@ export const router = os.router({
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
     return session.getReflog(input.ref ?? 'HEAD', input.maxCount ?? 300)
+  }),
+
+  listAgentSessions: os.listAgentSessions.handler(async () => {
+    return listAgentSessions()
+  }),
+
+  focusAgentSession: os.focusAgentSession.handler(async ({ input }) => {
+    return focusAgentSession(input.pid)
+  }),
+
+  installWindowCalls: os.installWindowCalls.handler(async () => {
+    return installWindowCalls()
   }),
 })
 
