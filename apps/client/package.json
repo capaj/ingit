@@ -13,18 +13,18 @@
     "@ingit/graph-core": "*",
     "@ingit/rpc-contract": "*",
     "@orpc/client": "^1.14.6",
-    "@react-spring/web": "^10.1.1",
+    "@react-spring/web": "^10.1.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-grab": "^0.1.44",
+    "react-grab": "^0.1.47",
     "zod": "^4.4.3",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
+    "@vitejs/plugin-react": "^6.0.3",
     "typescript": "^6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.1.3"
   }
 }
