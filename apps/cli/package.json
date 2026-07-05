@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "ingit": "bin/ingit.cjs"
+  },
   "scripts": {
     "dev": "bun src/main.ts",
     "release": "bun scripts/build.ts"

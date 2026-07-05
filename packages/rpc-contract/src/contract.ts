@@ -76,6 +76,8 @@ export const WorktreeChanges = z.object({
 
 export const StageActionKind = z.enum(['stage', 'unstage', 'stage-all', 'unstage-all'])
 
+export const WorktreeDiffArea = z.enum(['staged', 'unstaged'])
+
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
 export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create'])
@@ -209,6 +211,34 @@ export const contract = {
       paths: z.array(z.string()),
     }))
     .output(WorktreeChanges),
+
+  getWorktreeFileDiff: oc
+    .input(z.object({
+      repoId: RepoId,
+      path: z.string(),
+      area: WorktreeDiffArea,
+      // Original path for staged renames/copies, so the patch shows the rename.
+      oldPath: z.string().optional(),
+    }))
+    .output(z.object({
+      path: z.string(),
+      area: WorktreeDiffArea,
+      patchText: z.string(),
+      isBinary: z.boolean(),
+    })),
+
+  commit: oc
+    .input(z.object({
+      repoId: RepoId,
+      message: z.string().min(1),
+      // Pass --no-verify to skip pre-commit / commit-msg hooks.
+      noVerify: z.boolean().optional(),
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      headSha: CommitSha,
+      changes: WorktreeChanges,
+    })),
 
   queryHistory: oc
     .input(z.object({

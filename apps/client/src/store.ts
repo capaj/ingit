@@ -11,6 +11,8 @@ import type {
   ReflogResponse,
   WorktreeChangesResponse,
   StageActionKind,
+  WorktreeFile,
+  WorktreeDiffArea,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -30,6 +32,8 @@ import {
   getReflog,
   getWorktreeChanges,
   stageAction,
+  getWorktreeFileDiff,
+  commitStaged,
   isConnectionLostError,
 } from './api'
 import {
@@ -259,6 +263,18 @@ export interface CIStatusEntry {
 
 type CommitPRInfo = Array<{ number: number; title: string; url: string; state: string; mergedAt: string | null }>
 
+/** Loaded (or loading / failed) patch for one worktree file, keyed `${area}:${path}`. */
+export interface WorktreeDiffEntry {
+  loading: boolean
+  patchText?: string
+  isBinary?: boolean
+  error?: string
+}
+
+export function worktreeDiffKey(area: WorktreeDiffArea, path: string): string {
+  return `${area}:${path}`
+}
+
 interface AppState {
   status: AppStatus
   repoId: string | null
@@ -289,6 +305,7 @@ interface AppState {
   showCommitMessages: boolean
   worktreeChanges: WorktreeChangesResponse | null
   worktreeSelected: boolean
+  worktreeFileDiffs: Record<string, WorktreeDiffEntry>
   // True while an optimistic mutation is in flight. Blocks further node actions
   // until the current one is confirmed (or rolled back).
   pendingMutation: boolean
@@ -302,6 +319,9 @@ interface AppState {
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
   runStageAction: (action: StageActionKind, paths: string[]) => Promise<void>
+  loadWorktreeFileDiff: (file: WorktreeFile, area: WorktreeDiffArea) => Promise<void>
+  /** Commit the index. Returns true on success (so the UI can clear the message). */
+  performCommit: (message: string, noVerify: boolean) => Promise<boolean>
   showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
@@ -355,6 +375,7 @@ async function openRepoByPathImpl(
       mergePreview: null,
       worktreeChanges: null,
       worktreeSelected: false,
+      worktreeFileDiffs: {},
       reflog: null,
       reflogMaxCount: REFLOG_PAGE_SIZE,
     })
@@ -490,6 +511,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   commitCIStatus: {},
   worktreeChanges: null,
   worktreeSelected: false,
+  worktreeFileDiffs: {},
   pendingMutation: false,
   graphAnimationSuppressToken: 0,
   showCommitMessages: (() => {
@@ -511,10 +533,97 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!repoId) return
     try {
       const changes = await getWorktreeChanges(repoId)
-      set({ worktreeChanges: changes })
+      // Cached patches may be stale relative to the fresh file list.
+      set({ worktreeChanges: changes, worktreeFileDiffs: {} })
     } catch (err) {
       console.error('Failed to load worktree changes:', err)
     }
+  },
+
+  loadWorktreeFileDiff: async (file, area) => {
+    const { repoId } = get()
+    if (!repoId) return
+    const key = worktreeDiffKey(area, file.path)
+    const existing = get().worktreeFileDiffs[key]
+    if (existing && (existing.loading || existing.patchText !== undefined)) return
+    set((s) => ({ worktreeFileDiffs: { ...s.worktreeFileDiffs, [key]: { loading: true } } }))
+    try {
+      const res = await getWorktreeFileDiff(repoId, file.path, area, file.oldPath)
+      set((s) => ({
+        worktreeFileDiffs: {
+          ...s.worktreeFileDiffs,
+          [key]: { loading: false, patchText: res.patchText, isBinary: res.isBinary },
+        },
+      }))
+    } catch (err) {
+      set((s) => ({
+        worktreeFileDiffs: {
+          ...s.worktreeFileDiffs,
+          [key]: { loading: false, error: err instanceof Error ? err.message : 'Failed to load diff' },
+        },
+      }))
+    }
+  },
+
+  performCommit: async (message, noVerify) => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return false
+    if (get().pendingMutation) return false
+
+    const snapshot = captureSnapshot(get())
+    const rows = snapshot.historyWindow?.rows ?? []
+    // Predict the new tip so the graph animates immediately. Unlike other
+    // rewrites we keep the worktree panel selected — the user may want to
+    // stage and commit more.
+    const predicted = predictAppendOnHead(rows, snapshot.refs, message.split('\n')[0], 'commit')
+    if (predicted) {
+      set({
+        pendingMutation: true,
+        refs: predicted.refs,
+        historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
+      })
+    } else {
+      set({ pendingMutation: true })
+    }
+
+    let result: { ok: boolean; headSha: string; changes: WorktreeChangesResponse }
+    try {
+      result = await withTimeout((async () => {
+        try {
+          return await commitStaged(repoId, message, noVerify)
+        } catch (err) {
+          // A lost session means the server restarted and the old call never
+          // ran, so the retry cannot double-commit.
+          if (isSessionError(err)) {
+            const res = await openRepo({ path: repoPath })
+            repoId = res.repoId
+            set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+            return await commitStaged(repoId, message, noVerify)
+          }
+          throw err
+        }
+      })(), MUTATION_TIMEOUT_MS)
+    } catch (err) {
+      set({ ...snapshot, pendingMutation: false })
+      get().showError('Commit failed', err)
+      return false
+    }
+
+    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    set((s) => ({
+      pendingMutation: false,
+      graphAnimationSuppressToken: predicted
+        ? s.graphAnimationSuppressToken + 1
+        : s.graphAnimationSuppressToken,
+      refs,
+      historyWindow: hist,
+      totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
+      worktreeChanges: result.changes,
+      worktreeFileDiffs: {},
+    }))
+    if (get().viewMode === 'reflog') void get().loadReflog()
+    return true
   },
 
   selectWorktree: () => {
@@ -536,14 +645,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!repoId || !repoPath) return
     try {
       const changes = await stageAction(repoId, action, paths)
-      set({ worktreeChanges: changes })
+      // A file's diff moves between the staged/unstaged areas, so drop the cache.
+      set({ worktreeChanges: changes, worktreeFileDiffs: {} })
     } catch (err) {
       if (isSessionError(err) || isConnectionLostError(err)) {
         const res = await openRepo({ path: repoPath })
         repoId = res.repoId
         set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
         const changes = await stageAction(repoId, action, paths)
-        set({ worktreeChanges: changes })
+        set({ worktreeChanges: changes, worktreeFileDiffs: {} })
       } else {
         get().showError('Staging action failed', err)
       }
@@ -678,6 +788,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitCIStatus: {},
       worktreeChanges: null,
       worktreeSelected: false,
+      worktreeFileDiffs: {},
       pendingMutation: false,
       reflog: null,
       reflogLoading: false,
@@ -1071,6 +1182,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...(changes
           ? {
               worktreeChanges: changes,
+              worktreeFileDiffs: {},
               worktreeSelected: conflictedFileCount(changes) > 0,
             }
           : {}),
@@ -1156,6 +1268,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...(changes
               ? {
                   worktreeChanges: changes,
+                  worktreeFileDiffs: {},
                   worktreeSelected: conflictedFileCount(changes) > 0,
                 }
               : {}),
@@ -1176,6 +1289,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           commitPRs: [],
           mergePreview: null,
           worktreeChanges: changes,
+          worktreeFileDiffs: {},
           worktreeSelected: changes ? conflictedFileCount(changes) > 0 : s.worktreeSelected,
         }
       })

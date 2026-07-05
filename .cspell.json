@@ -3,8 +3,10 @@
         "ingit",
         "lerp",
         "overscan",
+        "pathspec",
         "Reflog",
         "topo",
+        "unstages",
         "Worktree",
         "ziggit"
     ]

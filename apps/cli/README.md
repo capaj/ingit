@@ -12,6 +12,32 @@ No runtime dependencies — the binary is self-contained (the Bun runtime is
 embedded). Prebuilt binaries are provided for linux (x64/arm64) and macOS
 (x64/arm64).
 
+## Local testing from this repo
+
+Build the host binary and register the CLI package with Bun:
+
+```sh
+bun run --filter '@ingit/cli' release linux-x64
+cd apps/cli
+bun link
+```
+
+After that, `ingit` should resolve from `~/.bun/bin`:
+
+```sh
+command -v ingit
+ingit --version
+ingit --help
+```
+
+When CLI code changes, rebuild the binary from the repo root:
+
+```sh
+bun run --filter '@ingit/cli' release linux-x64
+```
+
+You only need to run `bun link` again if the package/link setup changes.
+
 ## Usage
 
 ```sh

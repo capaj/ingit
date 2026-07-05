@@ -69,6 +69,27 @@ export const router = os.router({
     }
   }),
 
+  getWorktreeFileDiff: os.getWorktreeFileDiff.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    return session.getWorktreeFileDiff(input.path, input.area, input.oldPath)
+  }),
+
+  commit: os.commit.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    try {
+      const result = await session.commit(input.message, { noVerify: input.noVerify ?? false })
+      return { ok: true, ...result }
+    } catch (err) {
+      // Plain Errors are masked as "Internal server error" over oRPC; wrap so
+      // the hook output / "nothing to commit" reason reaches the client.
+      throw new ORPCError('BAD_REQUEST', {
+        message: err instanceof Error ? err.message : 'Commit failed',
+      })
+    }
+  }),
+
   queryHistory: os.queryHistory.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')

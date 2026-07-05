@@ -1,6 +1,6 @@
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
-import type { HistoryQuery, StageActionKind } from '@ingit/rpc-contract'
+import type { HistoryQuery, StageActionKind, WorktreeDiffArea } from '@ingit/rpc-contract'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any = null
@@ -66,6 +66,14 @@ export function getWorktreeChanges(repoId: string) {
 
 export function stageAction(repoId: string, action: StageActionKind, paths: string[]) {
   return ensureClient().stageAction({ repoId, action, paths })
+}
+
+export function getWorktreeFileDiff(repoId: string, path: string, area: WorktreeDiffArea, oldPath?: string) {
+  return ensureClient().getWorktreeFileDiff({ repoId, path, area, oldPath })
+}
+
+export function commitStaged(repoId: string, message: string, noVerify: boolean) {
+  return ensureClient().commit({ repoId, message, noVerify })
 }
 
 export function queryHistory(_repoId: string, query: HistoryQuery) {

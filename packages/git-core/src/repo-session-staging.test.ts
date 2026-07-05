@@ -71,3 +71,92 @@ describe('RepoSession staging', () => {
     expect(paths(unstaged.unstaged)).toEqual(['another.txt', 'file.txt'])
   })
 })
+
+describe('RepoSession worktree file diffs', () => {
+  test('unstaged diff of a modified tracked file', async () => {
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nworld\n')
+
+    const diff = await session.getWorktreeFileDiff('file.txt', 'unstaged')
+    expect(diff.isBinary).toBe(false)
+    expect(diff.patchText).toContain('+world')
+    expect(diff.patchText).not.toContain('-hello')
+  })
+
+  test('unstaged diff of an untracked file synthesizes an all-added patch', async () => {
+    await Bun.write(join(repoDir, 'new.txt'), 'fresh\nlines\n')
+
+    const diff = await session.getWorktreeFileDiff('new.txt', 'unstaged')
+    expect(diff.patchText).toContain('+fresh')
+    expect(diff.patchText).toContain('+lines')
+  })
+
+  test('staged diff only shows what is in the index', async () => {
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nstaged\n')
+    await session.stageFiles(['file.txt'])
+    // Further worktree-only edit must not appear in the staged diff.
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nstaged\nunstaged\n')
+
+    const staged = await session.getWorktreeFileDiff('file.txt', 'staged')
+    expect(staged.patchText).toContain('+staged')
+    expect(staged.patchText).not.toContain('+unstaged')
+
+    const unstaged = await session.getWorktreeFileDiff('file.txt', 'unstaged')
+    expect(unstaged.patchText).toContain('+unstaged')
+    expect(unstaged.patchText).not.toContain('+staged')
+  })
+
+  test('binary file is flagged', async () => {
+    await Bun.write(join(repoDir, 'blob.bin'), new Uint8Array([0, 1, 2, 0, 255]))
+
+    const diff = await session.getWorktreeFileDiff('blob.bin', 'unstaged')
+    expect(diff.isBinary).toBe(true)
+  })
+})
+
+describe('RepoSession commit', () => {
+  test('commits the index and returns the new head plus fresh changes', async () => {
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nworld\n')
+    await Bun.write(join(repoDir, 'other.txt'), 'other\n')
+    await session.stageFiles(['file.txt'])
+
+    const before = (await runGit(['rev-parse', 'HEAD'], repoDir)).stdout.trim()
+    const result = await session.commit('add world line')
+
+    expect(result.headSha).not.toBe(before)
+    const subject = (await runGit(['log', '-1', '--format=%s'], repoDir)).stdout.trim()
+    expect(subject).toBe('add world line')
+    // Only the staged file was committed; the untracked one is still pending.
+    expect(result.changes.staged).toEqual([])
+    expect(paths(result.changes.unstaged)).toEqual(['other.txt'])
+  })
+
+  test('fails with the hook output when a pre-commit hook rejects', async () => {
+    const hookPath = join(repoDir, '.git', 'hooks', 'pre-commit')
+    await Bun.write(hookPath, '#!/bin/sh\necho "lint failed" >&2\nexit 1\n')
+    await Bun.$`chmod +x ${hookPath}`.quiet()
+
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nblocked\n')
+    await session.stageFiles(['file.txt'])
+
+    await expect(session.commit('should be blocked')).rejects.toThrow(/lint failed/)
+  })
+
+  test('noVerify skips a failing pre-commit hook', async () => {
+    const hookPath = join(repoDir, '.git', 'hooks', 'pre-commit')
+    await Bun.write(hookPath, '#!/bin/sh\nexit 1\n')
+    await Bun.$`chmod +x ${hookPath}`.quiet()
+
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nskipped hook\n')
+    await session.stageFiles(['file.txt'])
+
+    const result = await session.commit('bypass hooks', { noVerify: true })
+    const subject = (await runGit(['log', '-1', '--format=%s'], repoDir)).stdout.trim()
+    expect(subject).toBe('bypass hooks')
+    expect(result.changes.staged).toEqual([])
+    expect(result.changes.unstaged).toEqual([])
+  })
+
+  test('committing an empty index fails with a readable error', async () => {
+    await expect(session.commit('nothing here')).rejects.toThrow(/nothing|clean/i)
+  })
+})

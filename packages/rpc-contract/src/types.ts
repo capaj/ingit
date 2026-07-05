@@ -262,6 +262,27 @@ export interface WorktreeChangesResponse {
 
 export type StageActionKind = 'stage' | 'unstage' | 'stage-all' | 'unstage-all'
 
+export type WorktreeDiffArea = 'staged' | 'unstaged'
+
+export interface WorktreeFileDiffResponse {
+  path: string
+  area: WorktreeDiffArea
+  patchText: string
+  isBinary: boolean
+}
+
+export interface CommitRequest {
+  repoId: RepoId
+  message: string
+  noVerify?: boolean
+}
+
+export interface CommitResponse {
+  ok: boolean
+  headSha: CommitSha
+  changes: WorktreeChangesResponse
+}
+
 export interface StageActionRequest {
   repoId: RepoId
   action: StageActionKind

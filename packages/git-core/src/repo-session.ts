@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { RefSummary, WorktreeStatusResponse, WorktreeChangesResponse, CommitDetailResponse, ReflogResponse } from '@ingit/rpc-contract'
+import type { RefSummary, WorktreeStatusResponse, WorktreeChangesResponse, CommitDetailResponse, ReflogResponse, WorktreeFileDiffResponse, WorktreeDiffArea } from '@ingit/rpc-contract'
 import { runGit, GitCommandError } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
@@ -188,6 +188,75 @@ export class RepoSession {
     // worktree untouched.
     await runGit(['reset', '--quiet'], this.rootPath)
     return this.getWorktreeChanges()
+  }
+
+  /** Patch for a single worktree file, either its staged or its unstaged half. */
+  async getWorktreeFileDiff(
+    path: string,
+    area: WorktreeDiffArea,
+    oldPath?: string,
+  ): Promise<WorktreeFileDiffResponse> {
+    let patchText: string
+    if (area === 'staged') {
+      // For renames/copies both paths must be in the pathspec or git shows
+      // the rename as an unrelated delete + add.
+      const pathspec = oldPath ? [oldPath, path] : [path]
+      const { stdout } = await runGit(['diff', '--cached', '--', ...pathspec], this.rootPath)
+      patchText = stdout
+    } else {
+      const { stdout: tracked } = await runGit(['ls-files', '--', path], this.rootPath)
+      if (tracked.trim().length > 0) {
+        const { stdout } = await runGit(['diff', '--', path], this.rootPath)
+        patchText = stdout
+      } else {
+        // Untracked file: there is nothing in the index to diff against, so
+        // synthesize an all-added patch. --no-index exits 1 when files differ.
+        const { stdout } = await runGit(
+          ['diff', '--no-index', '--', '/dev/null', path],
+          this.rootPath,
+          { okCodes: [1] },
+        )
+        patchText = stdout
+      }
+    }
+    return {
+      path,
+      area,
+      patchText,
+      isBinary: /^Binary files .* differ$/m.test(patchText),
+    }
+  }
+
+  /**
+   * Commit the index. With `noVerify` the pre-commit and commit-msg hooks are
+   * skipped (git commit --no-verify).
+   */
+  async commit(
+    message: string,
+    opts: { noVerify?: boolean } = {},
+  ): Promise<{ headSha: string; changes: WorktreeChangesResponse }> {
+    const args = ['commit', '-m', message]
+    if (opts.noVerify) args.push('--no-verify')
+    try {
+      // Hooks can legitimately take a while (linters, test suites).
+      await runGit(args, this.rootPath, { timeout: 120_000 })
+    } catch (err) {
+      if (err instanceof GitCommandError) {
+        // Hook failures usually print to stdout, git's own errors to stderr —
+        // surface both so the user sees why the commit was rejected.
+        const detail = [err.stdout, err.stderr]
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0)
+          .join('\n')
+        throw new Error(detail || err.message)
+      }
+      throw err
+    }
+    const [headSha, changes] = await Promise.all([
+      this.getHeadSha(),
+      this.getWorktreeChanges(),
+    ])
+    return { headSha, changes }
   }
 
   async getCommitDetail(sha: string): Promise<CommitDetailResponse> {
