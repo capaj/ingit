@@ -41,6 +41,11 @@ async function headParents(cwd: string): Promise<string[]> {
   return stdout.trim().split(/\s+/).filter(Boolean)
 }
 
+async function headSubject(cwd: string): Promise<string> {
+  const { stdout } = await runGit(['log', '-1', '--pretty=%s'], cwd)
+  return stdout.trim()
+}
+
 async function branchSha(cwd: string, ref: string): Promise<string> {
   const { stdout } = await runGit(['rev-parse', ref], cwd)
   return stdout.trim()
@@ -130,6 +135,40 @@ describe('RepoSession.mergeRef', () => {
       expect(await runGit(['rev-parse', 'origin/dev'], localDir).then((res) => res.stdout.trim())).toBe(latestRemoteSha)
       expect(await headParents(localDir)).toEqual([mainHeadBeforeMerge, latestRemoteSha])
       expect(latestRemoteSha).not.toBe(staleRemoteSha)
+    } finally {
+      session.close()
+    }
+  })
+
+  test('reports MERGE_HEAD and conflicted files after a merge conflict', async () => {
+    const repoDir = await makeTempDir('ingit-merge-conflict-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await runGit(['checkout', '-b', 'dev'], repoDir)
+    await Bun.write(join(repoDir, 'shared.txt'), 'dev\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'dev changes shared'], repoDir)
+    const devSha = await currentHeadSha(repoDir)
+
+    await runGit(['checkout', 'main'], repoDir)
+    await Bun.write(join(repoDir, 'shared.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main changes shared'], repoDir)
+    const mainHeadBeforeMerge = await currentHeadSha(repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.mergeRef('dev')).rejects.toThrow(/CONFLICT|Automatic merge failed/)
+
+      const changes = await session.getWorktreeChanges()
+      expect(changes.headSha).toBe(mainHeadBeforeMerge)
+      expect(changes.mergeHeadShas).toEqual([devSha])
+      expect(changes.unstaged).toContainEqual({ path: 'shared.txt', status: 'U' })
     } finally {
       session.close()
     }
@@ -268,6 +307,44 @@ describe('RepoSession.rebaseRef', () => {
       expect(await branchSha(localDir, 'origin/main')).toBe(latestRemoteSha)
       expect(latestRemoteSha).not.toBe(staleRemoteSha)
       expect(await headParents(localDir)).toEqual([latestRemoteSha])
+    } finally {
+      session.close()
+    }
+  })
+
+  test('reports REBASE_HEAD after a rebase conflict and keeps applied commits on HEAD', async () => {
+    const repoDir = await makeTempDir('ingit-rebase-conflict-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main changes shared'], repoDir)
+    const mainSha = await currentHeadSha(repoDir)
+
+    await runGit(['checkout', '-b', 'feature', 'HEAD~1'], repoDir)
+    await Bun.write(join(repoDir, 'clean.txt'), 'clean\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'feature clean'], repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'feature\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'feature conflicts shared'], repoDir)
+    const conflictSha = await currentHeadSha(repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.rebaseRef('main')).rejects.toThrow(/CONFLICT|could not apply|Resolve all conflicts/)
+
+      const changes = await session.getWorktreeChanges()
+      expect(changes.rebaseHeadSha).toBe(conflictSha)
+      expect(changes.unstaged).toContainEqual({ path: 'shared.txt', status: 'U' })
+      expect(await headSubject(repoDir)).toBe('feature clean')
+      expect(await headParents(repoDir)).toEqual([mainSha])
     } finally {
       session.close()
     }

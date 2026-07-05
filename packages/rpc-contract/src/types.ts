@@ -250,6 +250,10 @@ export interface WorktreeFile {
 export interface WorktreeChangesResponse {
   branch?: string
   headSha: CommitSha
+  /** Commit(s) being merged while Git is in MERGE_HEAD state. */
+  mergeHeadShas?: CommitSha[]
+  /** Commit being replayed while Git is stopped in a conflicted rebase. */
+  rebaseHeadSha?: CommitSha
   /** Files (or file portions) staged in the index. */
   staged: WorktreeFile[]
   /** Unstaged worktree changes, including untracked (`?`) and conflicted (`U`). */
@@ -257,6 +261,27 @@ export interface WorktreeChangesResponse {
 }
 
 export type StageActionKind = 'stage' | 'unstage' | 'stage-all' | 'unstage-all'
+
+export type WorktreeDiffArea = 'staged' | 'unstaged'
+
+export interface WorktreeFileDiffResponse {
+  path: string
+  area: WorktreeDiffArea
+  patchText: string
+  isBinary: boolean
+}
+
+export interface CommitRequest {
+  repoId: RepoId
+  message: string
+  noVerify?: boolean
+}
+
+export interface CommitResponse {
+  ok: boolean
+  headSha: CommitSha
+  changes: WorktreeChangesResponse
+}
 
 export interface StageActionRequest {
   repoId: RepoId

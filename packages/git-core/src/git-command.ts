@@ -3,13 +3,15 @@ import { createAbortError, readStreamText } from './bun-process.js'
 export class GitCommandError extends Error {
   readonly code: number
   readonly stderr: string
+  readonly stdout: string
   readonly args: string[]
 
-  constructor(args: string[], code: number, stderr: string) {
+  constructor(args: string[], code: number, stderr: string, stdout = '') {
     super(`git ${args.join(' ')} exited with code ${code}: ${stderr.trim()}`)
     this.name = 'GitCommandError'
     this.code = code
     this.stderr = stderr
+    this.stdout = stdout
     this.args = args
   }
 }
@@ -23,6 +25,11 @@ export interface GitRunResult {
 export interface GitRunOptions {
   timeout?: number
   signal?: AbortSignal
+  /**
+   * Non-zero exit codes to treat as success (e.g. `git diff --no-index`
+   * exits 1 when the files differ).
+   */
+  okCodes?: number[]
 }
 
 export function runGit(
@@ -73,11 +80,11 @@ async function runGitWithBun(
     }
 
     if (timedOut) {
-      throw new GitCommandError(args, -1, stderr)
+      throw new GitCommandError(args, -1, stderr, stdout)
     }
 
-    if (code !== 0) {
-      throw new GitCommandError(args, code, stderr)
+    if (code !== 0 && !opts.okCodes?.includes(code)) {
+      throw new GitCommandError(args, code, stderr, stdout)
     }
 
     return { stdout, stderr, code }
