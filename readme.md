@@ -28,7 +28,7 @@ ingit --port 9000 --no-open
 From source (needs [bun](https://bun.sh)):
 
 ```sh
-git clone https://github.com/capaj/ingit-vibe
+git clone https://github.com/capaj/ingit
 cd ingit-vibe
 bun install
 bun dev               # server on http://127.0.0.1:8488 + vite dev client
