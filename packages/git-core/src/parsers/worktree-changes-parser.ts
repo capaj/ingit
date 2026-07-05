@@ -83,7 +83,16 @@ export function parseWorktreeChanges(lines: string[]): WorktreeChangesResponse {
 }
 
 export async function readWorktreeChanges(cwd: string): Promise<WorktreeChangesResponse> {
-  const { stdout } = await runGit(['status', '--porcelain=v2', '--branch'], cwd)
+  const [{ stdout }, { stdout: mergeHeadOut }, { stdout: rebaseHeadOut }] = await Promise.all([
+    runGit(['status', '--porcelain=v2', '--branch'], cwd),
+    runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD^{commit}'], cwd, { okCodes: [1] }),
+    runGit(['rev-parse', '-q', '--verify', 'REBASE_HEAD^{commit}'], cwd, { okCodes: [1] }),
+  ])
   const lines = stdout.split('\n').filter((line) => line.length > 0)
-  return parseWorktreeChanges(lines)
+  const changes = parseWorktreeChanges(lines)
+  const mergeHeadShas = mergeHeadOut.split('\n').map((line) => line.trim()).filter(Boolean)
+  if (mergeHeadShas.length > 0) changes.mergeHeadShas = mergeHeadShas
+  const rebaseHeadSha = rebaseHeadOut.trim()
+  if (rebaseHeadSha) changes.rebaseHeadSha = rebaseHeadSha
+  return changes
 }

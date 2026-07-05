@@ -250,6 +250,10 @@ export interface WorktreeFile {
 export interface WorktreeChangesResponse {
   branch?: string
   headSha: CommitSha
+  /** Commit(s) being merged while Git is in MERGE_HEAD state. */
+  mergeHeadShas?: CommitSha[]
+  /** Commit being replayed while Git is stopped in a conflicted rebase. */
+  rebaseHeadSha?: CommitSha
   /** Files (or file portions) staged in the index. */
   staged: WorktreeFile[]
   /** Unstaged worktree changes, including untracked (`?`) and conflicted (`U`). */

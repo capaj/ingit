@@ -74,6 +74,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   })
 }
 
+function isSyntheticCommitSha(sha: string): boolean {
+  return sha.startsWith('optimistic-') || sha.startsWith('preview:')
+}
+
+function conflictedFileCount(changes: WorktreeChangesResponse): number {
+  return new Set(changes.unstaged.filter((file) => file.status === 'U').map((file) => file.path)).size
+}
+
 // The slice of state an optimistic mutation touches, captured before applying
 // the prediction so a failure (or timeout) can restore the original layout.
 interface OptimisticSnapshot {
@@ -593,7 +601,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   fetchCommitCIStatusesIfNeeded: (shas) => {
     const { repoId, commitCIStatus } = get()
     if (!repoId) return
-    const missing = shas.filter((sha) => commitCIStatus[sha] === undefined)
+    const missing = shas.filter((sha) => !isSyntheticCommitSha(sha) && commitCIStatus[sha] === undefined)
     if (missing.length === 0) return
 
     set((s) => {
@@ -1051,7 +1059,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       })(), MUTATION_TIMEOUT_MS)
     } catch (err) {
-      set({ ...snapshot, pendingMutation: false })
+      let changes: WorktreeChangesResponse | null = null
+      try {
+        changes = await getWorktreeChanges(repoId)
+      } catch (changesErr) {
+        console.error('Failed to load worktree after failed merge:', changesErr)
+      }
+      set({
+        ...snapshot,
+        pendingMutation: false,
+        ...(changes
+          ? {
+              worktreeChanges: changes,
+              worktreeSelected: conflictedFileCount(changes) > 0,
+            }
+          : {}),
+      })
       throw err
     }
 
@@ -1105,7 +1128,57 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       })(), MUTATION_TIMEOUT_MS)
     } catch (err) {
-      set({ ...snapshot, pendingMutation: false })
+      let refs: RefSummary[] | null = null
+      let hist: HistoryWindowResponse | null = null
+      let changes: WorktreeChangesResponse | null = null
+      try {
+        [refs, hist, changes] = await Promise.all([
+          getRefs(repoId),
+          queryHistory(repoId, {
+            repoId,
+            scope: { kind: 'all' },
+            anchor: { kind: 'head' },
+            beforeRows: 0,
+            afterRows: INITIAL_ROWS,
+            firstParent: false,
+            topoOrder: true,
+          }),
+          getWorktreeChanges(repoId),
+        ])
+      } catch (reloadErr) {
+        console.error('Failed to load graph after failed rebase:', reloadErr)
+      }
+      set((s) => {
+        if (!refs || !hist) {
+          return {
+            ...snapshot,
+            pendingMutation: false,
+            ...(changes
+              ? {
+                  worktreeChanges: changes,
+                  worktreeSelected: conflictedFileCount(changes) > 0,
+                }
+              : {}),
+          }
+        }
+
+        return {
+          pendingMutation: false,
+          refs,
+          historyWindow: hist,
+          totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+          selectedSha: null,
+          selectedRefName: null,
+          scrollToSha: changes?.headSha ?? null,
+          scrollToKey: changes ? s.scrollToKey + 1 : s.scrollToKey,
+          commitDetail: null,
+          commitDiff: null,
+          commitPRs: [],
+          mergePreview: null,
+          worktreeChanges: changes,
+          worktreeSelected: changes ? conflictedFileCount(changes) > 0 : s.worktreeSelected,
+        }
+      })
       throw err
     }
 

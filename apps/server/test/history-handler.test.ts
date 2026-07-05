@@ -106,4 +106,35 @@ describe('handleHistoryQuery ordering', () => {
       session.close()
     }
   })
+
+  test('includes detached HEAD commits in all-history scope', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'ingit-history-detached-head-'))
+    repoDirs.add(repoDir)
+
+    await runGit(['init', '--initial-branch=main'], repoDir)
+    await runGit(['config', 'user.email', 'test@test.com'], repoDir)
+    await runGit(['config', 'user.name', 'Test'], repoDir)
+
+    await commitFile(repoDir, 'base.txt', 'base\n', 'base', '2026-04-01T10:00:00+00:00')
+    await runGit(['checkout', '--detach', 'HEAD'], repoDir)
+    await commitFile(repoDir, 'detached.txt', 'detached\n', 'detached-head', '2026-04-02T10:00:00+00:00')
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      const history = await handleHistoryQuery(session, {
+        repoId: session.repoId,
+        scope: { kind: 'all' },
+        anchor: { kind: 'head' },
+        beforeRows: 0,
+        afterRows: 10,
+        firstParent: false,
+        topoOrder: true,
+      })
+
+      expect(history.rows.map((row) => row.subject)).toContain('detached-head')
+    } finally {
+      session.close()
+    }
+  })
 })

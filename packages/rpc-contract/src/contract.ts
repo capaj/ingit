@@ -68,6 +68,8 @@ export const WorktreeFile = z.object({
 export const WorktreeChanges = z.object({
   branch: z.string().optional(),
   headSha: CommitSha,
+  mergeHeadShas: z.array(CommitSha).optional(),
+  rebaseHeadSha: CommitSha.optional(),
   staged: z.array(WorktreeFile),
   unstaged: z.array(WorktreeFile),
 })

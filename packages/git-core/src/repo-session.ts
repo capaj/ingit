@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { RefSummary, WorktreeStatusResponse, WorktreeChangesResponse, CommitDetailResponse, ReflogResponse } from '@ingit/rpc-contract'
-import { runGit } from './git-command.js'
+import { runGit, GitCommandError } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
 import { CommitHydrator } from './hydrator.js'
@@ -330,7 +330,22 @@ export class RepoSession {
       await runGit(['fetch', resolved.remoteName, resolved.remoteBranch], this.rootPath)
     }
 
-    const { stdout, stderr } = await runGit(['merge', '--no-ff', '--no-edit', ref], this.rootPath)
+    let stdout: string
+    let stderr: string
+    try {
+      const result = await runGit(['merge', '--no-ff', '--no-edit', ref], this.rootPath)
+      stdout = result.stdout
+      stderr = result.stderr
+    } catch (err) {
+      if (err instanceof GitCommandError) {
+        const detail = [err.stdout, err.stderr]
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0)
+          .join('\n')
+        throw new Error(detail || err.message)
+      }
+      throw err
+    }
     return {
       message: (stdout + stderr).trim(),
       headSha: await this.getHeadSha(),
@@ -359,7 +374,22 @@ export class RepoSession {
       await runGit(['fetch', resolved.remoteName, resolved.remoteBranch], this.rootPath)
     }
 
-    const { stdout, stderr } = await runGit(['rebase', ref], this.rootPath)
+    let stdout: string
+    let stderr: string
+    try {
+      const result = await runGit(['rebase', ref], this.rootPath)
+      stdout = result.stdout
+      stderr = result.stderr
+    } catch (err) {
+      if (err instanceof GitCommandError) {
+        const detail = [err.stdout, err.stderr]
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0)
+          .join('\n')
+        throw new Error(detail || err.message)
+      }
+      throw err
+    }
     return {
       message: (stdout + stderr).trim(),
       headSha: await this.getHeadSha(),

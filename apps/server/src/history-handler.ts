@@ -73,7 +73,7 @@ function buildRevListArgs(query: HistoryQuery, anchorSha: string | null): string
   } else {
     switch (scope.kind) {
       case 'all':
-        args.push('--exclude=refs/stash', '--all')
+        args.push('--exclude=refs/stash', '--all', 'HEAD')
         break
       case 'ref':
         args.push(scope.value ?? (anchorSha ?? 'HEAD'))
