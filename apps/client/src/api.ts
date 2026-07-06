@@ -1,6 +1,6 @@
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
-import type { HistoryQuery, StageActionKind, WorktreeDiffArea } from '@ingit/rpc-contract'
+import type { HistoryQuery, InProgressOperationKind, StageActionKind, WorktreeDiffArea } from '@ingit/rpc-contract'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any = null
@@ -114,6 +114,10 @@ export function mergeRef(repoId: string, refName: string) {
 
 export function rebaseRef(repoId: string, refName: string) {
   return ensureClient().rebaseRef({ repoId, refName })
+}
+
+export function abortOperation(repoId: string, operation: InProgressOperationKind) {
+  return ensureClient().abortOperation({ repoId, operation })
 }
 
 export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag', refName: string, sha: string, force?: boolean) {

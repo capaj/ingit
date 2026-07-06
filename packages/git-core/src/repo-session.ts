@@ -465,6 +465,39 @@ export class RepoSession {
     }
   }
 
+  async abortOperation(operation: 'merge' | 'rebase'): Promise<{ message: string; headSha: string; changes: WorktreeChangesResponse }> {
+    const args = operation === 'merge'
+      ? ['merge', '--abort']
+      : ['rebase', '--abort']
+
+    let stdout: string
+    let stderr: string
+    try {
+      const result = await runGit(args, this.rootPath)
+      stdout = result.stdout
+      stderr = result.stderr
+    } catch (err) {
+      if (err instanceof GitCommandError) {
+        const detail = [err.stdout, err.stderr]
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0)
+          .join('\n')
+        throw new Error(detail || err.message)
+      }
+      throw err
+    }
+
+    const [headSha, changes] = await Promise.all([
+      this.getHeadSha(),
+      this.getWorktreeChanges(),
+    ])
+    return {
+      message: (stdout + stderr).trim() || `Aborted ${operation}`,
+      headSha,
+      changes,
+    }
+  }
+
   async moveBranch(ref: string, sha: string): Promise<{ message: string }> {
     const resolved = await this.resolveRef(ref)
     if (!resolved || resolved.kind !== 'head') {

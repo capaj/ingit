@@ -82,12 +82,14 @@ export function RefActionButton({
   tone,
   size = 'default',
   variant = 'solid',
+  disabled = false,
 }: {
   label: string
   onClick: () => void
   tone: 'neutral' | 'warning' | 'danger'
   size?: 'default' | 'compact'
   variant?: 'solid' | 'ghost'
+  disabled?: boolean
 }) {
   const compact = size === 'compact'
   const ghost = variant === 'ghost'
@@ -96,8 +98,10 @@ export function RefActionButton({
     <button
       onClick={(e) => {
         e.stopPropagation()
+        if (disabled) return
         onClick()
       }}
+      disabled={disabled}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -118,12 +122,14 @@ export function RefActionButton({
         color: tone === 'danger' ? '#f5a6b8' : tone === 'warning' ? '#f9d28b' : ghost ? '#bac2de' : '#cdd6f4',
         fontSize: compact ? 11 : 12,
         fontWeight: 600,
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.62 : 1,
         borderRadius: compact ? 6 : 7,
         fontFamily: 'inherit',
         whiteSpace: 'nowrap',
       }}
       onMouseEnter={(e) => {
+        if (disabled) return
         e.currentTarget.style.background = ghost
           ? 'rgba(49,50,68,0.8)'
           : tone === 'danger'
@@ -133,6 +139,7 @@ export function RefActionButton({
               : '#3a4058'
       }}
       onMouseLeave={(e) => {
+        if (disabled) return
         e.currentTarget.style.background = ghost
           ? 'rgba(24,24,37,0.5)'
           : tone === 'danger'

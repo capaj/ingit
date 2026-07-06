@@ -173,6 +173,44 @@ describe('RepoSession.mergeRef', () => {
       session.close()
     }
   })
+
+  test('aborts a conflicted merge', async () => {
+    const repoDir = await makeTempDir('ingit-merge-abort-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await runGit(['checkout', '-b', 'dev'], repoDir)
+    await Bun.write(join(repoDir, 'shared.txt'), 'dev\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'dev changes shared'], repoDir)
+
+    await runGit(['checkout', 'main'], repoDir)
+    await Bun.write(join(repoDir, 'shared.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main changes shared'], repoDir)
+    const mainHeadBeforeMerge = await currentHeadSha(repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.mergeRef('dev')).rejects.toThrow(/CONFLICT|Automatic merge failed/)
+
+      const result = await session.abortOperation('merge')
+
+      expect(result.headSha).toBe(mainHeadBeforeMerge)
+      expect(result.changes.mergeHeadShas).toBeUndefined()
+      expect(result.changes.rebaseHeadSha).toBeUndefined()
+      expect(result.changes.staged).toEqual([])
+      expect(result.changes.unstaged).toEqual([])
+      expect(await currentHeadSha(repoDir)).toBe(mainHeadBeforeMerge)
+      expect(await Bun.file(join(repoDir, 'shared.txt')).text()).toBe('main\n')
+    } finally {
+      session.close()
+    }
+  })
 })
 
 describe('RepoSession.moveBranch', () => {
@@ -345,6 +383,49 @@ describe('RepoSession.rebaseRef', () => {
       expect(changes.unstaged).toContainEqual({ path: 'shared.txt', status: 'U' })
       expect(await headSubject(repoDir)).toBe('feature clean')
       expect(await headParents(repoDir)).toEqual([mainSha])
+    } finally {
+      session.close()
+    }
+  })
+
+  test('aborts a conflicted rebase', async () => {
+    const repoDir = await makeTempDir('ingit-rebase-abort-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main changes shared'], repoDir)
+
+    await runGit(['checkout', '-b', 'feature', 'HEAD~1'], repoDir)
+    await Bun.write(join(repoDir, 'clean.txt'), 'clean\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'feature clean'], repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'feature\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'feature conflicts shared'], repoDir)
+    const featureHeadBeforeRebase = await currentHeadSha(repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.rebaseRef('main')).rejects.toThrow(/CONFLICT|could not apply|Resolve all conflicts/)
+
+      const result = await session.abortOperation('rebase')
+
+      expect(result.headSha).toBe(featureHeadBeforeRebase)
+      expect(result.changes.mergeHeadShas).toBeUndefined()
+      expect(result.changes.rebaseHeadSha).toBeUndefined()
+      expect(result.changes.staged).toEqual([])
+      expect(result.changes.unstaged).toEqual([])
+      expect(await currentBranch(repoDir)).toBe('feature')
+      expect(await currentHeadSha(repoDir)).toBe(featureHeadBeforeRebase)
+      expect(await headSubject(repoDir)).toBe('feature conflicts shared')
+      expect(await Bun.file(join(repoDir, 'shared.txt')).text()).toBe('feature\n')
     } finally {
       session.close()
     }

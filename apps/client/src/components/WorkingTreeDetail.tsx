@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { highlightText } from '@speed-highlight/core'
 import type { ShjLanguage } from '@speed-highlight/core'
-import type { WorktreeFile, WorktreeDiffArea } from '@ingit/rpc-contract'
+import type { InProgressOperationKind, WorktreeFile, WorktreeDiffArea } from '@ingit/rpc-contract'
 import { useAppStore, worktreeDiffKey } from '../store'
 import type { WorktreeDiffEntry } from '../store'
 import { RefActionButton } from './graph-canvas/ActionButtons'
@@ -450,6 +450,48 @@ function CommitBox({ stagedCount }: { stagedCount: number }) {
   )
 }
 
+function OperationBanner({
+  operation,
+  conflictedCount,
+}: {
+  operation: InProgressOperationKind
+  conflictedCount: number
+}) {
+  const abortInProgressOperation = useAppStore((s) => s.abortInProgressOperation)
+  const pendingMutation = useAppStore((s) => s.pendingMutation)
+  const label = operation === 'rebase' ? 'Rebase' : 'Merge'
+  const title = conflictedCount > 0 ? `${label} conflict` : `${label} in progress`
+  const detail = conflictedCount > 0
+    ? `${conflictedCount} conflicted file${conflictedCount === 1 ? '' : 's'}`
+    : 'Git is waiting for this operation to finish.'
+
+  return (
+    <div
+      style={{
+        border: '1px solid #8b3a4a',
+        background: '#5c243033',
+        borderRadius: 7,
+        padding: '10px 10px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+      }}
+    >
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ color: '#f5a6b8', fontSize: 13, fontWeight: 700 }}>{title}</span>
+        <span style={{ color: '#a6adc8', fontSize: 11 }}>{detail}</span>
+      </div>
+      <RefActionButton
+        label={pendingMutation ? 'Aborting…' : `Abort ${label}`}
+        tone="danger"
+        onClick={() => void abortInProgressOperation(operation)}
+        disabled={pendingMutation}
+      />
+    </div>
+  )
+}
+
 export function WorkingTreeDetail() {
   const changes = useAppStore((s) => s.worktreeChanges)
   const runStageAction = useAppStore((s) => s.runStageAction)
@@ -457,6 +499,15 @@ export function WorkingTreeDetail() {
   const staged = changes?.staged ?? []
   const unstaged = changes?.unstaged ?? []
   const total = staged.length + unstaged.length
+  const operation: InProgressOperationKind | null = changes?.mergeHeadShas?.length
+    ? 'merge'
+    : changes?.rebaseHeadSha
+      ? 'rebase'
+      : null
+  const conflictedCount = useMemo(
+    () => new Set(unstaged.filter((file) => file.status === 'U').map((file) => file.path)).size,
+    [unstaged],
+  )
 
   return (
     <div
@@ -484,6 +535,7 @@ export function WorkingTreeDetail() {
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {operation && <OperationBanner operation={operation} conflictedCount={conflictedCount} />}
         {total === 0 ? (
           <div style={{ color: '#45475a', fontSize: 13, textAlign: 'center', marginTop: 28 }}>
             Working tree clean

@@ -13,6 +13,7 @@ import type {
   StageActionKind,
   WorktreeFile,
   WorktreeDiffArea,
+  InProgressOperationKind,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -28,6 +29,7 @@ import {
   getMergePreview as fetchMergePreview,
   mergeRef as mergeRefApi,
   rebaseRef as rebaseRefApi,
+  abortOperation as abortOperationApi,
   refAction,
   getReflog,
   getWorktreeChanges,
@@ -84,6 +86,10 @@ function isSyntheticCommitSha(sha: string): boolean {
 
 function conflictedFileCount(changes: WorktreeChangesResponse): number {
   return new Set(changes.unstaged.filter((file) => file.status === 'U').map((file) => file.path)).size
+}
+
+function worktreeFileCount(changes: WorktreeChangesResponse): number {
+  return changes.staged.length + changes.unstaged.length
 }
 
 // The slice of state an optimistic mutation touches, captured before applying
@@ -179,6 +185,22 @@ function fetchRefsAndHistory(repoId: string): Promise<[RefSummary[], HistoryWind
       firstParent: false,
       topoOrder: true,
     }),
+  ])
+}
+
+function fetchRepositoryState(repoId: string): Promise<[RefSummary[], HistoryWindowResponse, WorktreeChangesResponse]> {
+  return Promise.all([
+    getRefs(repoId),
+    queryHistory(repoId, {
+      repoId,
+      scope: { kind: 'all' },
+      anchor: { kind: 'head' },
+      beforeRows: 0,
+      afterRows: INITIAL_ROWS,
+      firstParent: false,
+      topoOrder: true,
+    }),
+    getWorktreeChanges(repoId),
   ])
 }
 
@@ -316,6 +338,7 @@ interface AppState {
 
   // Actions
   setShowCommitMessages: (value: boolean) => void
+  reloadFromServer: () => Promise<void>
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
   runStageAction: (action: StageActionKind, paths: string[]) => Promise<void>
@@ -340,6 +363,7 @@ interface AppState {
   performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
   performMergeRef: (refName: string) => Promise<void>
   performRebaseRef: (refName: string) => Promise<void>
+  abortInProgressOperation: (operation: InProgressOperationKind) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
   fetchCommitCIStatusesIfNeeded: (shas: string[]) => void
   watchCommitCIStatus: (sha: string) => void
@@ -528,13 +552,66 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ showCommitMessages: value })
   },
 
+  reloadFromServer: async () => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+    if (get().pendingMutation) return
+
+    try {
+      let refs: RefSummary[]
+      let hist: HistoryWindowResponse
+      let changes: WorktreeChangesResponse
+      try {
+        [refs, hist, changes] = await fetchRepositoryState(repoId)
+      } catch (err) {
+        if (isSessionError(err) || isConnectionLostError(err)) {
+          const res = await openRepo({ path: repoPath })
+          repoId = res.repoId
+          set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+          const fresh = await fetchRepositoryState(repoId)
+          refs = fresh[0]
+          hist = fresh[1]
+          changes = fresh[2]
+        } else {
+          throw err
+        }
+      }
+
+      set((s) => ({
+        refs,
+        historyWindow: hist,
+        totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+        mergePreview: null,
+        worktreeChanges: changes,
+        worktreeFileDiffs: {},
+        worktreeSelected: conflictedFileCount(changes) > 0
+          ? true
+          : worktreeFileCount(changes) > 0
+            ? s.worktreeSelected
+            : false,
+      }))
+      if (get().viewMode === 'reflog') void get().loadReflog()
+    } catch (err) {
+      console.error('Failed to reload repository state:', err)
+    }
+  },
+
   loadWorktreeChanges: async () => {
     const { repoId } = get()
     if (!repoId) return
     try {
       const changes = await getWorktreeChanges(repoId)
       // Cached patches may be stale relative to the fresh file list.
-      set({ worktreeChanges: changes, worktreeFileDiffs: {} })
+      set((s) => ({
+        worktreeChanges: changes,
+        worktreeFileDiffs: {},
+        worktreeSelected: conflictedFileCount(changes) > 0
+          ? true
+          : worktreeFileCount(changes) > 0
+            ? s.worktreeSelected
+            : false,
+      }))
     } catch (err) {
       console.error('Failed to load worktree changes:', err)
     }
@@ -1337,6 +1414,55 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     loadSelectedCommitExtras(repoId, nextSha)
     void get().loadWorktreeChanges()
+  },
+
+  abortInProgressOperation: async (operation) => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+    if (get().pendingMutation) return
+
+    set({ pendingMutation: true })
+    try {
+      let result: { ok: boolean; message: string; headSha: string; changes: WorktreeChangesResponse }
+      try {
+        result = await abortOperationApi(repoId, operation)
+      } catch (err) {
+        if (isSessionError(err)) {
+          const res = await openRepo({ path: repoPath })
+          repoId = res.repoId
+          set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+          result = await abortOperationApi(repoId, operation)
+        } else {
+          throw err
+        }
+      }
+
+      const [refs, hist] = await fetchRefsAndHistory(repoId)
+      const nextSha = result.headSha
+      set((s) => ({
+        pendingMutation: false,
+        refs,
+        historyWindow: hist,
+        totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+        selectedSha: nextSha,
+        selectedRefName: null,
+        scrollToSha: nextSha,
+        scrollToKey: s.scrollToKey + 1,
+        commitDetail: null,
+        commitDiff: null,
+        commitPRs: [],
+        mergePreview: null,
+        worktreeChanges: result.changes,
+        worktreeFileDiffs: {},
+        worktreeSelected: worktreeFileCount(result.changes) > 0,
+      }))
+      loadSelectedCommitExtras(repoId, nextSha)
+      if (get().viewMode === 'reflog') void get().loadReflog()
+    } catch (err) {
+      set({ pendingMutation: false })
+      get().showError(`Abort ${operation} failed`, err)
+    }
   },
 
   checkoutSha: async (sha) => {

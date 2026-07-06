@@ -80,6 +80,7 @@ export const WorktreeDiffArea = z.enum(['staged', 'unstaged'])
 
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
+export const InProgressOperationKind = z.enum(['merge', 'rebase'])
 export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create', 'create-tag'])
 
 export const ReflogEntryKind = z.enum([
@@ -377,6 +378,18 @@ export const contract = {
       ok: z.boolean(),
       message: z.string(),
       headSha: CommitSha,
+    })),
+
+  abortOperation: oc
+    .input(z.object({
+      repoId: RepoId,
+      operation: InProgressOperationKind,
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      message: z.string(),
+      headSha: CommitSha,
+      changes: WorktreeChanges,
     })),
 
   refAction: oc

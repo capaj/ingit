@@ -194,6 +194,20 @@ export interface RebaseRefResponse {
   headSha: CommitSha
 }
 
+export type InProgressOperationKind = 'merge' | 'rebase'
+
+export interface AbortOperationRequest {
+  repoId: RepoId
+  operation: InProgressOperationKind
+}
+
+export interface AbortOperationResponse {
+  ok: boolean
+  message: string
+  headSha: CommitSha
+  changes: WorktreeChangesResponse
+}
+
 export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag'
 
 export type ReflogEntryKind =

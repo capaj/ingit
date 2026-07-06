@@ -21,6 +21,7 @@ export function App() {
     showCommitMessages, setShowCommitMessages,
     viewMode, setViewMode,
     worktreeSelected,
+    reloadFromServer,
   } = useAppStore()
 
   const handleFetch = async () => {
@@ -37,6 +38,37 @@ export function App() {
   const selectedCIRuns = selectedCIStatus?.runs ?? []
 
   useEffect(() => { openFromUrl() }, [openFromUrl])
+
+  useEffect(() => {
+    let awayAt: number | null = document.visibilityState === 'hidden' ? Date.now() : null
+
+    const markAway = () => {
+      awayAt = Date.now()
+    }
+
+    const reloadIfAwayLongEnough = () => {
+      if (document.visibilityState === 'hidden') return
+      if (awayAt !== null && Date.now() - awayAt > 30_000) {
+        void reloadFromServer()
+      }
+      awayAt = null
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') markAway()
+      else reloadIfAwayLongEnough()
+    }
+
+    window.addEventListener('blur', markAway)
+    window.addEventListener('focus', reloadIfAwayLongEnough)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('blur', markAway)
+      window.removeEventListener('focus', reloadIfAwayLongEnough)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [reloadFromServer])
 
   // Find branch name for selected commit by tracing first-parent from branch tips
   const selectedBranchName = useMemo(() => {

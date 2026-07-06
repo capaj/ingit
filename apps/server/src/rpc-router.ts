@@ -213,6 +213,13 @@ export const router = os.router({
     return { ok: true, ...result }
   }),
 
+  abortOperation: os.abortOperation.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    const result = await session.abortOperation(input.operation)
+    return { ok: true, ...result }
+  }),
+
   refAction: os.refAction.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
