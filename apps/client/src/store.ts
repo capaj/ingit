@@ -62,6 +62,11 @@ const MAX_RECENT_REPOS = 12
 // hasn't confirmed within this window we treat it as a failure and roll the
 // graph back to where it started (per product intent: a timeout is a failure).
 const MUTATION_TIMEOUT_MS = 30_000
+const SERVER_COMMIT_TIMEOUT_MS = 120_000
+// The server lets `git commit` hooks run for 120s, then still returns the
+// resulting HEAD and worktree state. Keep the client wait slightly longer so a
+// successful long-running hook is not reported as a failed optimistic mutation.
+const COMMIT_MUTATION_TIMEOUT_MS = SERVER_COMMIT_TIMEOUT_MS + 10_000
 
 class MutationTimeoutError extends Error {
   constructor() {
@@ -696,7 +701,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
           throw err
         }
-      })(), MUTATION_TIMEOUT_MS)
+      })(), COMMIT_MUTATION_TIMEOUT_MS)
     } catch (err) {
       set({ ...snapshot, pendingMutation: false })
       get().showError('Commit failed', err)
