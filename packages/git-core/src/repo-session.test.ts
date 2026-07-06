@@ -407,3 +407,38 @@ describe('RepoSession commit actions', () => {
     }
   })
 })
+
+describe('RepoSession.push', () => {
+  test('pushes a local tag to origin', async () => {
+    const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-push-tag-remote-'))
+    const localDir = await mkdtemp(join(tmpdir(), 'ingit-push-tag-local-'))
+
+    try {
+      await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+      await runGit(['init', '--initial-branch=main'], localDir)
+      await runGit(['config', 'user.email', 'test@test.com'], localDir)
+      await runGit(['config', 'user.name', 'Test'], localDir)
+
+      await Bun.write(join(localDir, 'file.txt'), 'tagged\n')
+      await runGit(['add', '.'], localDir)
+      await runGit(['commit', '-m', 'tagged commit'], localDir)
+      await runGit(['remote', 'add', 'origin', remoteDir], localDir)
+      await runGit(['push', '-u', 'origin', 'main'], localDir)
+      const taggedSha = await currentHeadSha(localDir)
+
+      const pushSession = await RepoSession.open(localDir)
+      try {
+        await pushSession.createTag('v-test', taggedSha)
+        await pushSession.push('v-test')
+      } finally {
+        pushSession.close()
+      }
+
+      const { stdout } = await runGit(['rev-parse', 'refs/tags/v-test^{commit}'], remoteDir)
+      expect(stdout.trim()).toBe(taggedSha)
+    } finally {
+      await rm(remoteDir, { recursive: true, force: true })
+      await rm(localDir, { recursive: true, force: true })
+    }
+  })
+})

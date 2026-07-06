@@ -77,6 +77,11 @@ Use ungit! It's great. ingit exists because I wanted: a faster graph on huge rep
 
 Models used: mostly codex with GPT-5.5, some with opus 4.8 
 
+## Supported Platforms
+
+- Linux (primary target, agent detection reads `/proc`)
+- macOS 
+
 ## License
 
 MIT

@@ -533,9 +533,11 @@ export class RepoSession {
     // `--force-with-lease` overwrites a rewritten branch (e.g. right after a
     // rebase) but still refuses if the remote moved in a way we haven't fetched,
     // so it won't clobber someone else's commits.
+    const resolved = await this.resolveRef(ref)
+    const pushRef = resolved?.kind === 'tag' ? `refs/tags/${ref}` : ref
     const args = force
-      ? ['push', '--force-with-lease', remote, ref]
-      : ['push', remote, ref]
+      ? ['push', '--force-with-lease', remote, pushRef]
+      : ['push', remote, pushRef]
     const { stdout, stderr } = await runGit(args, this.rootPath)
     return (stdout + stderr).trim()
   }
@@ -548,6 +550,13 @@ export class RepoSession {
     const { stdout, stderr } = await runGit(['branch', name, sha], this.rootPath)
     return {
       message: (stdout + stderr).trim() || `Created branch ${name} at ${sha.slice(0, 8)}`,
+    }
+  }
+
+  async createTag(name: string, sha: string): Promise<{ message: string }> {
+    const { stdout, stderr } = await runGit(['tag', name, sha], this.rootPath)
+    return {
+      message: (stdout + stderr).trim() || `Created tag ${name} at ${sha.slice(0, 8)}`,
     }
   }
 

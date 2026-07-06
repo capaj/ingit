@@ -1062,6 +1062,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     // A push is what triggers CI on the remote, so poll the pushed tip until
     // its check-runs appear and settle.
     if (action === 'push') get().watchCommitCIStatus(sha)
+    if (action === 'create' || action === 'create-tag') {
+      set((s) => ({
+        pendingMutation: false,
+        graphAnimationSuppressToken: predicted
+          ? s.graphAnimationSuppressToken + 1
+          : s.graphAnimationSuppressToken,
+        refs,
+        historyWindow: hist,
+        selectedRefName: refName,
+        selectedSha: sha,
+        scrollToSha: null,
+        commitDetail: null,
+        commitDiff: null,
+        commitPRs: [],
+        mergePreview: null,
+      }))
+      loadSelectedCommitExtras(repoId, sha)
+      return
+    }
     set((s) => ({
       pendingMutation: false,
       graphAnimationSuppressToken: predicted

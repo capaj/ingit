@@ -263,6 +263,11 @@ export const router = os.router({
         message = result.message
         break
       }
+      case 'create-tag': {
+        const result = await session.createTag(input.refName, input.sha)
+        message = result.message
+        break
+      }
     }
     return { ok: true, message }
   }),

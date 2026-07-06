@@ -194,7 +194,7 @@ export interface RebaseRefResponse {
   headSha: CommitSha
 }
 
-export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create'
+export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag'
 
 export type ReflogEntryKind =
   | 'commit' | 'amend' | 'checkout' | 'reset' | 'rebase' | 'merge'

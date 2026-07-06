@@ -80,7 +80,7 @@ export const WorktreeDiffArea = z.enum(['staged', 'unstaged'])
 
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
-export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create'])
+export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create', 'create-tag'])
 
 export const ReflogEntryKind = z.enum([
   'commit', 'amend', 'checkout', 'reset', 'rebase', 'merge',

@@ -116,7 +116,7 @@ export function rebaseRef(repoId: string, refName: string) {
   return ensureClient().rebaseRef({ repoId, refName })
 }
 
-export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create', refName: string, sha: string, force?: boolean) {
+export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag', refName: string, sha: string, force?: boolean) {
   return ensureClient().refAction({ repoId, action, refName, sha, force })
 }
 

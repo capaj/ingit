@@ -4,6 +4,7 @@ import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
+import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -20,6 +21,8 @@ const NODE_FILL = '#11111b'
 const REF_PILL_HEIGHT = 20
 const COMMIT_ACTION_HEIGHT = 30
 const DEFAULT_REF_ACTION_HEIGHT = 28
+const ADD_REF_BUTTON_SIZE = 24
+const ADD_REF_MENU_WIDTH = 112
 const GAUGE_RADIUS = NODE_RADIUS - 5
 const GAUGE_BACKGROUND_FILL = '#1e1e2e'
 const GAUGE_TRACK_STROKE = '#45475a'
@@ -101,10 +104,66 @@ interface VisibleRefAction {
   force?: boolean
 }
 
+type CreateRefKind = 'branch' | 'tag'
+
+interface CreateRefDialogState {
+  kind: CreateRefKind
+  targetSha: string
+}
+
+interface ConfirmDialogState {
+  title: string
+  message: string
+  confirmLabel: string
+  onConfirm: () => void
+}
+
+interface ParsedVersionTag {
+  major: number
+  minor: number
+  patch: number
+  hasVPrefix: boolean
+}
+
 // The server reports a non-fast-forward push rejection as an oRPC CONFLICT error
 // (plain Errors are masked as "Internal server error" over the wire).
 function isNonFastForwardPushError(err: unknown): boolean {
   return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'CONFLICT'
+}
+
+function parseVersionTag(name: string): ParsedVersionTag | null {
+  const match = /^(v?)(\d+)\.(\d+)\.(\d+)$/.exec(name)
+  if (!match) return null
+  return {
+    hasVPrefix: match[1] === 'v',
+    major: Number(match[2]),
+    minor: Number(match[3]),
+    patch: Number(match[4]),
+  }
+}
+
+function compareVersionTags(left: ParsedVersionTag, right: ParsedVersionTag): number {
+  return left.major - right.major
+    || left.minor - right.minor
+    || left.patch - right.patch
+    || Number(left.hasVPrefix) - Number(right.hasVPrefix)
+}
+
+function nextVersionTagName(refs: RefSummary[]): string {
+  let latest: ParsedVersionTag | null = null
+
+  for (const ref of refs) {
+    if (ref.kind !== 'tag') continue
+    const parsed = parseVersionTag(ref.shortName)
+    if (!parsed) continue
+    if (!latest || compareVersionTags(parsed, latest) > 0) {
+      latest = parsed
+    }
+  }
+
+  if (!latest) return ''
+  const prefix = latest.hasVPrefix ? 'v' : ''
+  return `${prefix}${latest.major}.${latest.minor}.${latest.patch + 1}`
 }
 
 interface RefPlacement {
@@ -1149,6 +1208,7 @@ export function GraphCanvas() {
   const lastObservedScrollTopRef = useRef(0)
   const graphAnimationStartFrameRef = useRef<number | null>(null)
   const scrollTopFrameRef = useRef<number | null>(null)
+  const addRefHoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingScrollTopRef = useRef(0)
   const [zoom, setZoom] = useState(1)
   const [scrollTop, setScrollTop] = useState(0)
@@ -1156,6 +1216,10 @@ export function GraphCanvas() {
   const [graphAnimation, setGraphAnimation] = useState<GraphAnimationSnapshot | null>(null)
   const graphAnimationRef = useRef<GraphAnimationSnapshot | null>(null)
   const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
+  const [hoveredAddRefSha, setHoveredAddRefSha] = useState<string | null>(null)
+  const [openAddRefSha, setOpenAddRefSha] = useState<string | null>(null)
+  const [createRefDialog, setCreateRefDialog] = useState<CreateRefDialogState | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const [{ graphProgress }, graphProgressApi] = useSpring(() => ({
     graphProgress: 1,
     config: GRAPH_SPRING_CONFIG,
@@ -1195,6 +1259,11 @@ export function GraphCanvas() {
     const current = refs.find((ref) => ref.isCurrent)
     return current?.shortName ?? null
   }, [refs])
+
+  const defaultNextTagName = useMemo(
+    () => nextVersionTagName(refs),
+    [refs],
+  )
 
   // The working-tree / in-progress operation node floats one row above HEAD,
   // in HEAD's lane. Merge conflicts also draw a dashed second-parent edge.
@@ -1329,9 +1398,33 @@ export function GraphCanvas() {
     })
   }, [graphProgressApi])
 
+  const clearAddRefHoverTimer = useCallback(() => {
+    if (addRefHoverTimeoutRef.current === null) return
+    clearTimeout(addRefHoverTimeoutRef.current)
+    addRefHoverTimeoutRef.current = null
+  }, [])
+
+  const showAddRefControls = useCallback((sha: string) => {
+    clearAddRefHoverTimer()
+    setHoveredAddRefSha(sha)
+  }, [clearAddRefHoverTimer])
+
+  const scheduleHideAddRefControls = useCallback((sha: string) => {
+    clearAddRefHoverTimer()
+    addRefHoverTimeoutRef.current = setTimeout(() => {
+      setHoveredAddRefSha((current) => current === sha ? null : current)
+      addRefHoverTimeoutRef.current = null
+    }, 120)
+  }, [clearAddRefHoverTimer])
+
   useEffect(() => {
     setMergePreviewVisible(false)
+    setOpenAddRefSha(null)
   }, [selectedRefName])
+
+  useEffect(() => () => {
+    clearAddRefHoverTimer()
+  }, [clearAddRefHoverTimer])
 
   useEffect(() => {
     if (!layout || !histWindow) {
@@ -1848,7 +1941,9 @@ export function GraphCanvas() {
       ]
     }
 
-    return []
+    return [
+      { action: 'push' as const, label: 'Push', tone: 'neutral' as const },
+    ]
   }, [selectedRef, canPushSelectedRef, canResetSelectedRef])
 
   const movableBranchRefName = useMemo(() => {
@@ -1962,14 +2057,44 @@ export function GraphCanvas() {
   const handleMoveBranch = useCallback((targetSha: string) => {
     if (!movableBranchRefName) return
     if (pendingMutation) return
-    const confirmed = window.confirm(`Move branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}?`)
-    if (!confirmed) return
-
-    setMergePreviewVisible(false)
-    performRefAction('move', movableBranchRefName, targetSha).catch((err) => {
-      showError('Move failed', err)
+    setConfirmDialog({
+      title: 'Move branch',
+      message: `Move branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}?`,
+      confirmLabel: 'Move',
+      onConfirm: () => {
+        setMergePreviewVisible(false)
+        performRefAction('move', movableBranchRefName, targetSha).catch((err) => {
+          showError('Move failed', err)
+        })
+      },
     })
   }, [movableBranchRefName, performRefAction, showError, pendingMutation])
+
+  const handleCreateRef = useCallback((kind: CreateRefKind, targetSha: string) => {
+    if (pendingMutation) return
+    setMergePreviewVisible(false)
+    setOpenAddRefSha(null)
+    setHoveredAddRefSha(null)
+    setCreateRefDialog({ kind, targetSha })
+  }, [pendingMutation])
+
+  const handleCreateRefSubmit = useCallback((name: string) => {
+    if (!createRefDialog) return
+
+    const { kind, targetSha } = createRefDialog
+    setCreateRefDialog(null)
+    performRefAction(kind === 'branch' ? 'create' : 'create-tag', name, targetSha).catch((err) => {
+      showError(`Create ${kind} failed`, err)
+    })
+  }, [createRefDialog, performRefAction, showError])
+
+  const closeCreateRefDialog = useCallback(() => setCreateRefDialog(null), [])
+
+  const createRefNameLabel = createRefDialog?.kind === 'branch' ? 'Branch name' : 'Tag name'
+  const createRefTitle = createRefDialog
+    ? `Create ${createRefDialog.kind} at ${createRefDialog.targetSha.slice(0, 8)}`
+    : 'Create ref'
+  const createRefInitialName = createRefDialog?.kind === 'tag' ? defaultNextTagName : ''
 
   const handleMergeHoverStart = useCallback(() => {
     if (!selectedRefName) return
@@ -2016,14 +2141,16 @@ export function GraphCanvas() {
     if (!selectedCurrentBranchRef) return
     if (pendingMutation) return
 
-    const confirmed = window.confirm(
-      `Rebase ${selectedCurrentBranchRef.shortName} onto ${targetRefName}? This rewrites the current branch history.`,
-    )
-    if (!confirmed) return
-
-    setMergePreviewVisible(false)
-    performRebaseRef(targetRefName).catch((err) => {
-      showError('Rebase failed', err)
+    setConfirmDialog({
+      title: 'Rebase branch',
+      message: `Rebase ${selectedCurrentBranchRef.shortName} onto ${targetRefName}? This rewrites the current branch history.`,
+      confirmLabel: 'Rebase',
+      onConfirm: () => {
+        setMergePreviewVisible(false)
+        performRebaseRef(targetRefName).catch((err) => {
+          showError('Rebase failed', err)
+        })
+      },
     })
   }, [selectedCurrentBranchRef, performRebaseRef, showError, pendingMutation])
 
@@ -2218,13 +2345,29 @@ export function GraphCanvas() {
     if (pendingMutation) return
 
     const shortSha = selectedNode.row.sha.slice(0, 8)
-    const confirmed = action === 'uncommit'
-      ? window.confirm(`Uncommit ${shortSha}? This will move HEAD to its parent and keep the changes in your working tree.`)
-      : window.confirm(`${action === 'cherry-pick' ? 'Cherry-pick' : 'Revert'} commit ${shortSha} on the current branch?`)
-    if (!confirmed) return
+    const title = action === 'cherry-pick'
+      ? 'Cherry pick commit'
+      : action === 'uncommit'
+        ? 'Uncommit'
+        : 'Revert commit'
+    const message = action === 'uncommit'
+      ? `Uncommit ${shortSha}? This will move HEAD to its parent and keep the changes in your working tree.`
+      : `${action === 'cherry-pick' ? 'Cherry-pick' : 'Revert'} commit ${shortSha} on the current branch?`
+    const confirmLabel = action === 'cherry-pick'
+      ? 'Cherry pick'
+      : action === 'uncommit'
+        ? 'Uncommit'
+        : 'Revert'
 
-    performCommitAction(action, selectedNode.row.sha).catch((err) => {
-      showError(`${action} failed`, err)
+    setConfirmDialog({
+      title,
+      message,
+      confirmLabel,
+      onConfirm: () => {
+        performCommitAction(action, selectedNode.row.sha).catch((err) => {
+          showError(`${action} failed`, err)
+        })
+      },
     })
   }, [selectedNode, performCommitAction, showError, pendingMutation])
   const isGraphAnimating = graphAnimation !== null
@@ -2263,9 +2406,34 @@ export function GraphCanvas() {
       style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e', touchAction: 'pan-x pan-y' }}
       onClick={() => {
         setMergePreviewVisible(false)
+        setOpenAddRefSha(null)
+        setHoveredAddRefSha(null)
+        clearAddRefHoverTimer()
         clearGraphRefSelection()
       }}
     >
+      <NativeTextInputDialog
+        open={!!createRefDialog}
+        title={createRefTitle}
+        label={createRefNameLabel}
+        initialValue={createRefInitialName}
+        confirmLabel="Create"
+        onSubmit={handleCreateRefSubmit}
+        onClose={closeCreateRefDialog}
+      />
+      <NativeConfirmDialog
+        open={!!confirmDialog}
+        title={confirmDialog?.title ?? ''}
+        message={confirmDialog?.message ?? ''}
+        confirmLabel={confirmDialog?.confirmLabel ?? 'Confirm'}
+        onConfirm={() => {
+          const run = confirmDialog?.onConfirm
+          setConfirmDialog(null)
+          run?.()
+        }}
+        onClose={() => setConfirmDialog(null)}
+      />
+
       {/* Sticky branch lane labels at top of viewport */}
       <div style={{
         position: 'sticky',
@@ -2603,6 +2771,8 @@ export function GraphCanvas() {
               <animated.g
                 key={row.sha}
                 onClick={node.interactive ? (e) => { e.stopPropagation(); selectCommit(row.sha) } : undefined}
+                onPointerEnter={node.interactive ? () => showAddRefControls(row.sha) : undefined}
+                onPointerLeave={node.interactive ? () => scheduleHideAddRefControls(row.sha) : undefined}
                 opacity={nodeOpacity}
                 style={{ cursor: node.interactive ? 'pointer' : 'default', pointerEvents: node.interactive ? 'auto' : 'none' }}
               >
@@ -2795,6 +2965,8 @@ export function GraphCanvas() {
             <animated.div
               key={refItem.key}
               onClick={(e) => handleRefSelect(e, placement.refName)}
+              onPointerEnter={() => showAddRefControls(placement.nodeSha)}
+              onPointerLeave={() => scheduleHideAddRefControls(placement.nodeSha)}
               style={{
                 position: 'absolute',
                 left: 0,
@@ -2839,15 +3011,20 @@ export function GraphCanvas() {
           const rowRefActions = showsSelectedRef ? selectedRefActions : []
           const rowShowsMerge = !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
           const rowShowsMove = !!movableBranchRefName && node.row.sha !== selectedRef?.targetSha
+          const rowShowsAddRef = !pendingMutation
+            && !isGraphAnimating
+            && (hoveredAddRefSha === node.row.sha || openAddRefSha === node.row.sha)
           const rowRebaseTargetRef = selectedCurrentBranchRef && node.row.sha !== selectedCurrentBranchRef.targetSha
             ? pickBestRef(node.row.refNames.filter((refName) => refName !== selectedCurrentBranchRef.shortName))
             : null
 
-          if (nodeActions.length === 0 && rowRefActions.length === 0 && !rowShowsMerge && !rowShowsMove && !rowRebaseTargetRef) return null
+          if (nodeActions.length === 0 && rowRefActions.length === 0 && !rowShowsMerge && !rowShowsMove && !rowShowsAddRef && !rowRebaseTargetRef) return null
 
           return (
             <div
               key={`${node.row.sha}-actions`}
+              onPointerEnter={() => showAddRefControls(node.row.sha)}
+              onPointerLeave={() => scheduleHideAddRefControls(node.row.sha)}
               style={{
                 position: 'absolute',
                 left: px,
@@ -2859,6 +3036,100 @@ export function GraphCanvas() {
                 zIndex: 20,
               }}
             >
+              {rowShowsAddRef && (
+                <div style={{
+                  position: 'relative',
+                  top: verticalOffsetForHeight(ADD_REF_BUTTON_SIZE),
+                  zIndex: 8,
+                }}>
+                  <button
+                    type="button"
+                    title="Create branch or tag"
+                    aria-label="Create branch or tag"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setMergePreviewVisible(false)
+                      setOpenAddRefSha((current) => current === node.row.sha ? null : node.row.sha)
+                      setHoveredAddRefSha(node.row.sha)
+                    }}
+                    style={{
+                      width: ADD_REF_BUTTON_SIZE,
+                      height: ADD_REF_BUTTON_SIZE,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      borderRadius: 6,
+                      border: '1px solid #4a4f68',
+                      background: '#2f3348',
+                      color: '#cdd6f4',
+                      fontSize: 21,
+                      fontWeight: 600,
+                      lineHeight: 1,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      boxShadow: '0 8px 20px rgba(0,0,0,0.28)',
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = '#3a4058' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = '#2f3348' }}
+                  >
+                    +
+                  </button>
+                  {openAddRefSha === node.row.sha && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        top: ADD_REF_BUTTON_SIZE + 6,
+                        width: ADD_REF_MENU_WIDTH,
+                        padding: 5,
+                        borderRadius: 7,
+                        border: '1px solid #4a4f68',
+                        background: '#181825',
+                        boxShadow: '0 14px 30px rgba(0,0,0,0.42)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 4,
+                      }}
+                    >
+                      {(['branch', 'tag'] as const).map((kind) => (
+                        <button
+                          key={kind}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleCreateRef(kind, node.row.sha)
+                          }}
+                          style={{
+                            height: 28,
+                            padding: '0 9px',
+                            borderRadius: 5,
+                            border: '1px solid transparent',
+                            background: 'transparent',
+                            color: '#cdd6f4',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            fontFamily: 'inherit',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = '#313244'
+                            e.currentTarget.style.borderColor = '#45475a'
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = 'transparent'
+                            e.currentTarget.style.borderColor = 'transparent'
+                          }}
+                        >
+                          {kind === 'branch' ? 'Branch' : 'Tag'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {rowRefActions.length > 0 && (
                 <div style={{
                   display: 'flex',

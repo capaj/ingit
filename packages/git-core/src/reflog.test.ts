@@ -130,3 +130,13 @@ describe('RepoSession.createBranch', () => {
     expect(recovered!.refNames).toContain('recovered-work')
   })
 })
+
+describe('RepoSession.createTag', () => {
+  test('creates a lightweight tag at a commit', async () => {
+    const result = await session.createTag('recovered-tag', keptSha)
+    expect(result.message).toBeTruthy()
+
+    const { stdout } = await runGit(['rev-parse', 'refs/tags/recovered-tag^{commit}'], repoDir)
+    expect(stdout.trim()).toBe(keptSha)
+  })
+})

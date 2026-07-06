@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import type { ReflogEntry, ReflogEntryKind } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
+import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
 // ---------------------------------------------------------------------------
 // Layout — mirrors GraphCanvas visuals on a HEAD-movement timeline
@@ -51,6 +52,18 @@ const KIND_EXPLANATIONS: Partial<Record<ReflogEntryKind, string>> = {
   'reset': 'reset moved HEAD away — commits only on the old position may be unreachable',
   'rebase': 'rebase rewrote history — the original commits live on only in the reflog',
   'amend': 'amend replaced the previous commit — the original version is only in the reflog',
+}
+
+interface RecoverDialogState {
+  entry: ReflogEntry
+  defaultName: string
+}
+
+interface ConfirmDialogState {
+  title: string
+  message: string
+  confirmLabel: string
+  onConfirm: () => void
 }
 
 // Same cubic bezier as GraphCanvas edges
@@ -123,6 +136,8 @@ export function ReflogGraph() {
   const showError = useAppStore((state) => state.showError)
 
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+  const [recoverDialog, setRecoverDialog] = useState<RecoverDialogState | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
 
   // Entries shift when the reflog reloads after an action — drop the selection
   useEffect(() => {
@@ -160,26 +175,39 @@ export function ReflogGraph() {
   }, [entries])
 
   const handleRecover = (entry: ReflogEntry) => {
-    const defaultName = `recovered-${entry.sha.slice(0, 7)}`
-    const name = window.prompt('Branch name for the recovered commit:', defaultName)
-    if (!name) return
-    recoverBranch(name.trim(), entry.sha).catch((err) => showError('Recover failed', err))
+    setRecoverDialog({
+      entry,
+      defaultName: `recovered-${entry.sha.slice(0, 7)}`,
+    })
   }
 
   const handleCheckout = (entry: ReflogEntry) => {
-    const confirmed = window.confirm(
-      `Checkout ${entry.sha.slice(0, 8)}? This detaches HEAD at that state.`,
-    )
-    if (!confirmed) return
-    checkoutSha(entry.sha).catch((err) => showError('Checkout failed', err))
+    setConfirmDialog({
+      title: 'Checkout commit',
+      message: `Checkout ${entry.sha.slice(0, 8)}? This detaches HEAD at that state.`,
+      confirmLabel: 'Checkout',
+      onConfirm: () => {
+        checkoutSha(entry.sha).catch((err) => showError('Checkout failed', err))
+      },
+    })
   }
 
   const handleCherryPick = (entry: ReflogEntry) => {
-    const confirmed = window.confirm(
-      `Cherry-pick ${entry.sha.slice(0, 8)} onto the current branch?`,
-    )
-    if (!confirmed) return
-    performCommitAction('cherry-pick', entry.sha).catch((err) => showError('Cherry-pick failed', err))
+    setConfirmDialog({
+      title: 'Cherry pick commit',
+      message: `Cherry-pick ${entry.sha.slice(0, 8)} onto the current branch?`,
+      confirmLabel: 'Cherry pick',
+      onConfirm: () => {
+        performCommitAction('cherry-pick', entry.sha).catch((err) => showError('Cherry-pick failed', err))
+      },
+    })
+  }
+
+  const submitRecoverBranch = (branchName: string) => {
+    if (!recoverDialog) return
+    const { entry } = recoverDialog
+    setRecoverDialog(null)
+    recoverBranch(branchName, entry.sha).catch((err) => showError('Recover failed', err))
   }
 
   const handleCopySha = (entry: ReflogEntry) => {
@@ -207,6 +235,28 @@ export function ReflogGraph() {
       style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e' }}
       onClick={() => setSelectedIndex(null)}
     >
+      <NativeTextInputDialog
+        open={!!recoverDialog}
+        title={recoverDialog ? `Create branch at ${recoverDialog.entry.sha.slice(0, 8)}` : 'Create branch'}
+        label="Branch name"
+        initialValue={recoverDialog?.defaultName ?? ''}
+        confirmLabel="Create"
+        onSubmit={submitRecoverBranch}
+        onClose={() => setRecoverDialog(null)}
+      />
+      <NativeConfirmDialog
+        open={!!confirmDialog}
+        title={confirmDialog?.title ?? ''}
+        message={confirmDialog?.message ?? ''}
+        confirmLabel={confirmDialog?.confirmLabel ?? 'Confirm'}
+        onConfirm={() => {
+          const run = confirmDialog?.onConfirm
+          setConfirmDialog(null)
+          run?.()
+        }}
+        onClose={() => setConfirmDialog(null)}
+      />
+
       {lostShas.size > 0 && (
         <div style={{
           position: 'sticky',
