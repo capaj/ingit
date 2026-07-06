@@ -225,6 +225,22 @@ function loadSelectedCommitExtras(repoId: string, sha: string) {
   useAppStore.getState().fetchCommitCIStatusesIfNeeded([sha])
 }
 
+function fetchVisibleTipSha(refs: RefSummary[]): string | null {
+  const current = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+  if (!current) return null
+
+  if (current.upstream) {
+    const upstream = refs.find((ref) => ref.kind === 'remote' && ref.name === current.upstream)
+    if (upstream) return upstream.peeledSha ?? upstream.targetSha
+  }
+
+  return current.peeledSha ?? current.targetSha
+}
+
+function historyContainsSha(hist: HistoryWindowResponse, sha: string): boolean {
+  return hist.rows.some((row) => row.sha === sha)
+}
+
 function getRepoPathFromUrl(): string | null {
   const hash = window.location.hash
   if (!hash.startsWith('#/repository')) return null
@@ -1116,6 +1132,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     // animation only when we already animated to a prediction.
     const [refs, hist] = await fetchRefsAndHistory(repoId)
     void get().loadWorktreeChanges()
+    if (action === 'fetch') {
+      const targetSha = fetchVisibleTipSha(refs)
+      const visibleTargetSha = targetSha && historyContainsSha(hist, targetSha) ? targetSha : null
+      set((s) => ({
+        pendingMutation: false,
+        refs,
+        historyWindow: hist,
+        totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+        selectedSha: visibleTargetSha ?? s.selectedSha,
+        selectedRefName: null,
+        scrollToSha: visibleTargetSha ?? s.scrollToSha,
+        scrollToKey: visibleTargetSha ? s.scrollToKey + 1 : s.scrollToKey,
+        commitDetail: visibleTargetSha ? null : s.commitDetail,
+        commitDiff: visibleTargetSha ? null : s.commitDiff,
+        commitPRs: visibleTargetSha ? [] : s.commitPRs,
+        mergePreview: null,
+      }))
+      if (visibleTargetSha) loadSelectedCommitExtras(repoId, visibleTargetSha)
+      if (get().viewMode === 'reflog') void get().loadReflog()
+      return
+    }
     if (action === 'move') {
       set((s) => ({
         pendingMutation: false,

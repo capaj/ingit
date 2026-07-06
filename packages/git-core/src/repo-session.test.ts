@@ -275,6 +275,115 @@ describe('RepoSession.checkout', () => {
   })
 })
 
+describe('RepoSession.fetch', () => {
+  test('fetches remotes and fast-forwards the current tracking branch', async () => {
+    const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-remote-'))
+    const seedDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-seed-'))
+    const upstreamDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-upstream-'))
+    const localDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-local-'))
+
+    try {
+      await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+
+      await runGit(['init', '--initial-branch=main'], seedDir)
+      await runGit(['config', 'user.email', 'test@test.com'], seedDir)
+      await runGit(['config', 'user.name', 'Test'], seedDir)
+      await Bun.write(join(seedDir, 'base.txt'), 'base\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'base'], seedDir)
+      await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+      await runGit(['push', '-u', 'origin', 'main'], seedDir)
+
+      await runGit(['clone', remoteDir, localDir], tmpdir())
+      await runGit(['config', 'user.email', 'test@test.com'], localDir)
+      await runGit(['config', 'user.name', 'Test'], localDir)
+      const oldLocalSha = await currentHeadSha(localDir)
+
+      await runGit(['clone', remoteDir, upstreamDir], tmpdir())
+      await runGit(['config', 'user.email', 'test@test.com'], upstreamDir)
+      await runGit(['config', 'user.name', 'Test'], upstreamDir)
+      await Bun.write(join(upstreamDir, 'remote.txt'), 'remote\n')
+      await runGit(['add', '.'], upstreamDir)
+      await runGit(['commit', '-m', 'remote update'], upstreamDir)
+      await runGit(['push', 'origin', 'main'], upstreamDir)
+      const remoteSha = await currentHeadSha(upstreamDir)
+
+      const fetchSession = await RepoSession.open(localDir)
+      try {
+        const result = await fetchSession.fetch()
+
+        expect(result.fastForwarded).toBe(true)
+        expect(result.headSha).toBe(remoteSha)
+        expect(await currentHeadSha(localDir)).toBe(remoteSha)
+        expect((await runGit(['rev-parse', 'origin/main'], localDir)).stdout.trim()).toBe(remoteSha)
+        expect(remoteSha).not.toBe(oldLocalSha)
+      } finally {
+        fetchSession.close()
+      }
+    } finally {
+      await rm(remoteDir, { recursive: true, force: true })
+      await rm(seedDir, { recursive: true, force: true })
+      await rm(upstreamDir, { recursive: true, force: true })
+      await rm(localDir, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps fetched remote refs when the current branch cannot fast-forward', async () => {
+    const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-diverged-remote-'))
+    const seedDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-diverged-seed-'))
+    const upstreamDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-diverged-upstream-'))
+    const localDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-diverged-local-'))
+
+    try {
+      await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+
+      await runGit(['init', '--initial-branch=main'], seedDir)
+      await runGit(['config', 'user.email', 'test@test.com'], seedDir)
+      await runGit(['config', 'user.name', 'Test'], seedDir)
+      await Bun.write(join(seedDir, 'base.txt'), 'base\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'base'], seedDir)
+      await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+      await runGit(['push', '-u', 'origin', 'main'], seedDir)
+
+      await runGit(['clone', remoteDir, localDir], tmpdir())
+      await runGit(['config', 'user.email', 'test@test.com'], localDir)
+      await runGit(['config', 'user.name', 'Test'], localDir)
+      await Bun.write(join(localDir, 'local.txt'), 'local\n')
+      await runGit(['add', '.'], localDir)
+      await runGit(['commit', '-m', 'local update'], localDir)
+      const localSha = await currentHeadSha(localDir)
+
+      await runGit(['clone', remoteDir, upstreamDir], tmpdir())
+      await runGit(['config', 'user.email', 'test@test.com'], upstreamDir)
+      await runGit(['config', 'user.name', 'Test'], upstreamDir)
+      await Bun.write(join(upstreamDir, 'remote.txt'), 'remote\n')
+      await runGit(['add', '.'], upstreamDir)
+      await runGit(['commit', '-m', 'remote update'], upstreamDir)
+      await runGit(['push', 'origin', 'main'], upstreamDir)
+      const remoteSha = await currentHeadSha(upstreamDir)
+
+      const fetchSession = await RepoSession.open(localDir)
+      try {
+        const result = await fetchSession.fetch()
+
+        expect(result.fastForwarded).toBe(false)
+        expect(result.headSha).toBe(localSha)
+        expect(result.message).toContain('Fast-forward skipped')
+        expect(await currentHeadSha(localDir)).toBe(localSha)
+        expect((await runGit(['rev-parse', 'origin/main'], localDir)).stdout.trim()).toBe(remoteSha)
+      } finally {
+        fetchSession.close()
+      }
+    } finally {
+      await rm(remoteDir, { recursive: true, force: true })
+      await rm(seedDir, { recursive: true, force: true })
+      await rm(upstreamDir, { recursive: true, force: true })
+      await rm(localDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('RepoSession.streamTopologyWithMeta', () => {
   test('reports additions and deletions separately', async () => {
     const metaRepoDir = await mkdtemp(join(tmpdir(), 'ingit-meta-test-'))

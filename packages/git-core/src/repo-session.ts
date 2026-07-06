@@ -538,6 +538,18 @@ export class RepoSession {
     return suffixMatches.length === 1 ? suffixMatches[0] : null
   }
 
+  private async getCurrentUpstreamRef(): Promise<string | null> {
+    try {
+      const { stdout } = await runGit(
+        ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
+        this.rootPath,
+      )
+      return stdout.trim() || null
+    } catch {
+      return null
+    }
+  }
+
   async resetBranch(ref: string): Promise<{ message: string; headSha: string }> {
     const refs = await this.getRefs()
     const localRef = refs.find((item) => item.kind === 'head' && item.shortName === ref)
@@ -575,8 +587,39 @@ export class RepoSession {
     return (stdout + stderr).trim()
   }
 
-  fetch(): void {
-    this.ziggit.fetch()
+  async fetch(): Promise<{ message: string; headSha: string; fastForwarded: boolean }> {
+    const headBefore = await this.getHeadSha()
+    const messages: string[] = []
+
+    const fetchResult = await runGit(['fetch', '--all', '--prune'], this.rootPath, { timeout: 120_000 })
+    const fetchMessage = (fetchResult.stdout + fetchResult.stderr).trim()
+    if (fetchMessage) messages.push(fetchMessage)
+
+    const upstream = await this.getCurrentUpstreamRef()
+    if (!upstream) {
+      return {
+        message: messages.join('\n') || 'Fetched remotes',
+        headSha: await this.getHeadSha(),
+        fastForwarded: false,
+      }
+    }
+
+    try {
+      const mergeResult = await runGit(['merge', '--ff-only', upstream], this.rootPath)
+      const mergeMessage = (mergeResult.stdout + mergeResult.stderr).trim()
+      if (mergeMessage) messages.push(mergeMessage)
+    } catch (err) {
+      if (!(err instanceof GitCommandError)) throw err
+      const detail = (err.stdout + err.stderr).trim()
+      messages.push(detail ? `Fast-forward skipped: ${detail}` : `Fast-forward skipped for ${upstream}`)
+    }
+
+    const headSha = await this.getHeadSha()
+    return {
+      message: messages.join('\n') || 'Fetched remotes',
+      headSha,
+      fastForwarded: headSha !== headBefore,
+    }
   }
 
   async createBranch(name: string, sha: string): Promise<{ message: string }> {

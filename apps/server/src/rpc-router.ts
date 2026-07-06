@@ -246,7 +246,7 @@ export const router = os.router({
         }
         break
       case 'fetch':
-        await session.fetch()
+        message = (await session.fetch()).message
         break
       case 'delete':
         if (input.refName.includes('/')) {
