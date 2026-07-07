@@ -1,5 +1,14 @@
 import { randomBytes } from 'node:crypto'
-import type { RefSummary, WorktreeStatusResponse, WorktreeChangesResponse, CommitDetailResponse, ReflogResponse, WorktreeFileDiffResponse, WorktreeDiffArea } from '@ingit/rpc-contract'
+import type {
+  RefSummary,
+  WorktreeStatusResponse,
+  WorktreeChangesResponse,
+  CommitDetailResponse,
+  ReflogResponse,
+  WorktreeFileDiffResponse,
+  WorktreeDiffArea,
+  CommitFileDiffResponse,
+} from '@ingit/rpc-contract'
 import { runGit, GitCommandError } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
@@ -283,6 +292,25 @@ export class RepoSession {
     return parseCommitDiff(this.rootPath, sha)
   }
 
+  /** Patch for a single file as changed by a commit. */
+  async getCommitFileDiff(
+    sha: string,
+    path: string,
+    oldPath?: string,
+  ): Promise<CommitFileDiffResponse> {
+    const pathspec = oldPath ? [oldPath, path] : [path]
+    const { stdout: patchText } = await runGit(
+      ['diff-tree', '-r', '--root', '--no-commit-id', '-M', '-C', '-p', sha, '--', ...pathspec],
+      this.rootPath,
+    )
+    return {
+      sha,
+      path,
+      patchText,
+      isBinary: /^Binary files .* differ$/m.test(patchText),
+    }
+  }
+
   private async getHeadSha(): Promise<string> {
     const { stdout } = await runGit(['rev-parse', 'HEAD'], this.rootPath)
     return stdout.trim()
@@ -493,6 +521,41 @@ export class RepoSession {
     ])
     return {
       message: (stdout + stderr).trim() || `Aborted ${operation}`,
+      headSha,
+      changes,
+    }
+  }
+
+  async continueOperation(operation: 'merge' | 'rebase'): Promise<{ message: string; headSha: string; changes: WorktreeChangesResponse }> {
+    const args = operation === 'merge'
+      ? ['merge', '--continue']
+      : ['rebase', '--continue']
+
+    let stdout: string
+    let stderr: string
+    try {
+      // Both commands open an editor to confirm the commit message; force a
+      // no-op editor so the server-side git never blocks waiting for one.
+      const result = await runGit(args, this.rootPath, { env: { GIT_EDITOR: 'true' } })
+      stdout = result.stdout
+      stderr = result.stderr
+    } catch (err) {
+      if (err instanceof GitCommandError) {
+        const detail = [err.stdout, err.stderr]
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0)
+          .join('\n')
+        throw new Error(detail || err.message)
+      }
+      throw err
+    }
+
+    const [headSha, changes] = await Promise.all([
+      this.getHeadSha(),
+      this.getWorktreeChanges(),
+    ])
+    return {
+      message: (stdout + stderr).trim() || `Continued ${operation}`,
       headSha,
       changes,
     }

@@ -297,6 +297,20 @@ export const contract = {
       patchText: z.string().optional(),
     })),
 
+  getCommitFileDiff: oc
+    .input(z.object({
+      repoId: RepoId,
+      sha: CommitSha,
+      path: z.string(),
+      oldPath: z.string().optional(),
+    }))
+    .output(z.object({
+      sha: CommitSha,
+      path: z.string(),
+      patchText: z.string(),
+      isBinary: z.boolean(),
+    })),
+
   getCommitPRs: oc
     .input(z.object({ repoId: RepoId, sha: CommitSha }))
     .output(z.array(z.object({
@@ -381,6 +395,18 @@ export const contract = {
     })),
 
   abortOperation: oc
+    .input(z.object({
+      repoId: RepoId,
+      operation: InProgressOperationKind,
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      message: z.string(),
+      headSha: CommitSha,
+      changes: WorktreeChanges,
+    })),
+
+  continueOperation: oc
     .input(z.object({
       repoId: RepoId,
       operation: InProgressOperationKind,

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { WorktreeChangesResponse, WorktreeFile, WorktreeFileStatus } from '@ingit/rpc-contract'
 import { runGit } from '../git-command.js'
 
@@ -83,16 +85,24 @@ export function parseWorktreeChanges(lines: string[]): WorktreeChangesResponse {
 }
 
 export async function readWorktreeChanges(cwd: string): Promise<WorktreeChangesResponse> {
-  const [{ stdout }, { stdout: mergeHeadOut }, { stdout: rebaseHeadOut }] = await Promise.all([
+  const [{ stdout }, { stdout: mergeHeadOut }, { stdout: rebaseHeadOut }, { stdout: rebaseDirsOut }] = await Promise.all([
     runGit(['status', '--porcelain=v2', '--branch'], cwd),
     runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD^{commit}'], cwd, { okCodes: [1] }),
     runGit(['rev-parse', '-q', '--verify', 'REBASE_HEAD^{commit}'], cwd, { okCodes: [1] }),
+    runGit(['rev-parse', '--git-path', 'rebase-merge', '--git-path', 'rebase-apply'], cwd),
   ])
   const lines = stdout.split('\n').filter((line) => line.length > 0)
   const changes = parseWorktreeChanges(lines)
   const mergeHeadShas = mergeHeadOut.split('\n').map((line) => line.trim()).filter(Boolean)
   if (mergeHeadShas.length > 0) changes.mergeHeadShas = mergeHeadShas
+  // REBASE_HEAD lingers after a rebase finishes, so it alone doesn't mean a
+  // rebase is in progress — one of the rebase state dirs must exist too.
+  const rebaseInProgress = rebaseDirsOut
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .some((dir) => existsSync(resolve(cwd, dir)))
   const rebaseHeadSha = rebaseHeadOut.trim()
-  if (rebaseHeadSha) changes.rebaseHeadSha = rebaseHeadSha
+  if (rebaseInProgress && rebaseHeadSha) changes.rebaseHeadSha = rebaseHeadSha
   return changes
 }

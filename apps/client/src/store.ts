@@ -6,6 +6,7 @@ import type {
   CommitDiffResponse,
   CommitActionKind,
   CommitRow,
+  ChangedPath,
   MergePreviewResponse,
   RefActionKind,
   ReflogResponse,
@@ -30,11 +31,13 @@ import {
   mergeRef as mergeRefApi,
   rebaseRef as rebaseRefApi,
   abortOperation as abortOperationApi,
+  continueOperation as continueOperationApi,
   refAction,
   getReflog,
   getWorktreeChanges,
   stageAction,
   getWorktreeFileDiff,
+  getCommitFileDiff,
   commitStaged,
   isConnectionLostError,
 } from './api'
@@ -112,6 +115,7 @@ interface OptimisticSnapshot {
   commitDetail: CommitDetailResponse | null
   commitDiff: CommitDiffResponse | null
   commitPRs: CommitPRInfo
+  commitFileDiffs: Record<string, CommitFileDiffEntry>
 }
 
 type StoreSetter = (
@@ -143,6 +147,7 @@ function applyOptimisticRewrite(
     commitDetail: null,
     commitDiff: null,
     commitPRs: [],
+    commitFileDiffs: {},
     mergePreview: null,
   }))
 }
@@ -159,6 +164,7 @@ function captureSnapshot(s: AppState): OptimisticSnapshot {
     commitDetail: s.commitDetail,
     commitDiff: s.commitDiff,
     commitPRs: s.commitPRs,
+    commitFileDiffs: s.commitFileDiffs,
   }
 }
 
@@ -314,8 +320,14 @@ export interface WorktreeDiffEntry {
   error?: string
 }
 
+export type CommitFileDiffEntry = WorktreeDiffEntry
+
 export function worktreeDiffKey(area: WorktreeDiffArea, path: string): string {
   return `${area}:${path}`
+}
+
+export function commitFileDiffKey(sha: string, path: string): string {
+  return `${sha}:${path}`
 }
 
 interface AppState {
@@ -349,6 +361,7 @@ interface AppState {
   worktreeChanges: WorktreeChangesResponse | null
   worktreeSelected: boolean
   worktreeFileDiffs: Record<string, WorktreeDiffEntry>
+  commitFileDiffs: Record<string, CommitFileDiffEntry>
   // True while an optimistic mutation is in flight. Blocks further node actions
   // until the current one is confirmed (or rolled back).
   pendingMutation: boolean
@@ -364,6 +377,7 @@ interface AppState {
   selectWorktree: () => void
   runStageAction: (action: StageActionKind, paths: string[]) => Promise<void>
   loadWorktreeFileDiff: (file: WorktreeFile, area: WorktreeDiffArea) => Promise<void>
+  loadCommitFileDiff: (sha: string, file: ChangedPath) => Promise<void>
   /** Commit the index. Returns true on success (so the UI can clear the message). */
   performCommit: (message: string, noVerify: boolean) => Promise<boolean>
   showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
@@ -385,6 +399,7 @@ interface AppState {
   performMergeRef: (refName: string) => Promise<void>
   performRebaseRef: (refName: string) => Promise<void>
   abortInProgressOperation: (operation: InProgressOperationKind) => Promise<void>
+  continueInProgressOperation: (operation: InProgressOperationKind) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>
   fetchCommitCIStatusesIfNeeded: (shas: string[]) => void
   watchCommitCIStatus: (sha: string) => void
@@ -421,6 +436,7 @@ async function openRepoByPathImpl(
       worktreeChanges: null,
       worktreeSelected: false,
       worktreeFileDiffs: {},
+      commitFileDiffs: {},
       reflog: null,
       reflogMaxCount: REFLOG_PAGE_SIZE,
     })
@@ -557,6 +573,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   worktreeChanges: null,
   worktreeSelected: false,
   worktreeFileDiffs: {},
+  commitFileDiffs: {},
   pendingMutation: false,
   graphAnimationSuppressToken: 0,
   showCommitMessages: (() => {
@@ -663,6 +680,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  loadCommitFileDiff: async (sha, file) => {
+    const { repoId } = get()
+    if (!repoId) return
+    const key = commitFileDiffKey(sha, file.path)
+    const existing = get().commitFileDiffs[key]
+    if (existing && (existing.loading || existing.patchText !== undefined)) return
+    set((s) => ({ commitFileDiffs: { ...s.commitFileDiffs, [key]: { loading: true } } }))
+    try {
+      const res = await getCommitFileDiff(repoId, sha, file.path, file.oldPath)
+      set((s) => ({
+        commitFileDiffs: {
+          ...s.commitFileDiffs,
+          [key]: { loading: false, patchText: res.patchText, isBinary: res.isBinary },
+        },
+      }))
+    } catch (err) {
+      set((s) => ({
+        commitFileDiffs: {
+          ...s.commitFileDiffs,
+          [key]: { loading: false, error: err instanceof Error ? err.message : 'Failed to load diff' },
+        },
+      }))
+    }
+  },
+
   performCommit: async (message, noVerify) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
@@ -733,6 +775,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitDiff: null,
       commitPRs: [],
       mergePreview: null,
+      commitFileDiffs: {},
     })
     void get().loadWorktreeChanges()
   },
@@ -887,6 +930,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       worktreeChanges: null,
       worktreeSelected: false,
       worktreeFileDiffs: {},
+      commitFileDiffs: {},
       pendingMutation: false,
       reflog: null,
       reflogLoading: false,
@@ -921,7 +965,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   selectCommit: (sha) => {
-    set({ selectedSha: sha, worktreeSelected: false, scrollToSha: null, scrollToKey: get().scrollToKey, commitDetail: null, commitDiff: null, commitPRs: [] })
+    set({
+      selectedSha: sha,
+      worktreeSelected: false,
+      scrollToSha: null,
+      scrollToKey: get().scrollToKey,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      commitFileDiffs: {},
+    })
     const { repoId, githubUrl } = get()
     if (!repoId) return
     get().fetchCommitCIStatusesIfNeeded([sha])
@@ -955,6 +1008,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitDetail: null,
       commitDiff: null,
       commitPRs: [],
+      commitFileDiffs: {},
       mergePreview: null,
     })
     if (!repoId) return
@@ -974,6 +1028,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitDetail: null,
       commitDiff: null,
       commitPRs: [],
+      commitFileDiffs: {},
       mergePreview: null,
     })
   },
@@ -994,7 +1049,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { historyWindow, repoId } = get()
     const loaded = historyWindow?.rows.some(r => r.sha === sha)
     if (loaded) {
-      set((s) => ({ selectedSha: sha, scrollToSha: sha, scrollToKey: s.scrollToKey + 1, commitDetail: null, commitDiff: null }))
+      set((s) => ({
+        selectedSha: sha,
+        scrollToSha: sha,
+        scrollToKey: s.scrollToKey + 1,
+        commitDetail: null,
+        commitDiff: null,
+        commitFileDiffs: {},
+      }))
     } else if (repoId) {
       // Load enough history from --all to include the target SHA.
       // We progressively increase the window until we find it.
@@ -1020,6 +1082,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             scrollToKey: found ? s.scrollToKey + 1 : s.scrollToKey,
             commitDetail: null,
             commitDiff: null,
+            commitFileDiffs: {},
           }))
           if (!found && !result.hasMoreAfter) break // no more history
         } catch (err) {
@@ -1104,6 +1167,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               commitDetail: null,
               commitDiff: null,
               commitPRs: [],
+              commitFileDiffs: {},
             }
           : { selectedRefName: null }),
       })
@@ -1152,6 +1216,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         commitDetail: visibleTargetSha ? null : s.commitDetail,
         commitDiff: visibleTargetSha ? null : s.commitDiff,
         commitPRs: visibleTargetSha ? [] : s.commitPRs,
+        commitFileDiffs: visibleTargetSha ? {} : s.commitFileDiffs,
         mergePreview: null,
       }))
       if (visibleTargetSha) loadSelectedCommitExtras(repoId, visibleTargetSha)
@@ -1172,6 +1237,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         commitDetail: null,
         commitDiff: null,
         commitPRs: [],
+        commitFileDiffs: {},
         mergePreview: null,
       }))
       loadSelectedCommitExtras(repoId, sha)
@@ -1195,6 +1261,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         commitDetail: null,
         commitDiff: null,
         commitPRs: [],
+        commitFileDiffs: {},
         mergePreview: null,
       }))
       loadSelectedCommitExtras(repoId, sha)
@@ -1274,6 +1341,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitDetail: null,
       commitDiff: null,
       commitPRs: [],
+      commitFileDiffs: {},
       mergePreview: null,
     }))
 
@@ -1345,6 +1413,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitDetail: null,
       commitDiff: null,
       commitPRs: [],
+      commitFileDiffs: {},
       mergePreview: null,
     }))
 
@@ -1425,6 +1494,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           commitDetail: null,
           commitDiff: null,
           commitPRs: [],
+          commitFileDiffs: {},
           mergePreview: null,
           worktreeChanges: changes,
           worktreeFileDiffs: {},
@@ -1451,6 +1521,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitDetail: null,
       commitDiff: null,
       commitPRs: [],
+      commitFileDiffs: {},
       mergePreview: null,
     }))
 
@@ -1494,6 +1565,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         commitDetail: null,
         commitDiff: null,
         commitPRs: [],
+        commitFileDiffs: {},
         mergePreview: null,
         worktreeChanges: result.changes,
         worktreeFileDiffs: {},
@@ -1504,6 +1576,94 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (err) {
       set({ pendingMutation: false })
       get().showError(`Abort ${operation} failed`, err)
+    }
+  },
+
+  continueInProgressOperation: async (operation) => {
+    const { repoPath } = get()
+    let repoId = get().repoId as string
+    if (!repoId || !repoPath) return
+    if (get().pendingMutation) return
+
+    set({ pendingMutation: true })
+    try {
+      let result: { ok: boolean; message: string; headSha: string; changes: WorktreeChangesResponse }
+      try {
+        result = await continueOperationApi(repoId, operation)
+      } catch (err) {
+        if (isSessionError(err)) {
+          const res = await openRepo({ path: repoPath })
+          repoId = res.repoId
+          set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
+          result = await continueOperationApi(repoId, operation)
+        } else {
+          throw err
+        }
+      }
+
+      const [refs, hist] = await fetchRefsAndHistory(repoId)
+      const nextSha = result.headSha
+      set((s) => ({
+        pendingMutation: false,
+        refs,
+        historyWindow: hist,
+        totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+        selectedSha: nextSha,
+        selectedRefName: null,
+        scrollToSha: nextSha,
+        scrollToKey: s.scrollToKey + 1,
+        commitDetail: null,
+        commitDiff: null,
+        commitPRs: [],
+        commitFileDiffs: {},
+        mergePreview: null,
+        worktreeChanges: result.changes,
+        worktreeFileDiffs: {},
+        worktreeSelected: worktreeFileCount(result.changes) > 0,
+      }))
+      loadSelectedCommitExtras(repoId, nextSha)
+      if (get().viewMode === 'reflog') void get().loadReflog()
+    } catch (err) {
+      // The continue may have advanced the operation before failing (e.g.
+      // stopped on the next conflicted commit), so refresh state either way.
+      let refs: RefSummary[] | null = null
+      let hist: HistoryWindowResponse | null = null
+      let changes: WorktreeChangesResponse | null = null
+      try {
+        [refs, hist, changes] = await Promise.all([
+          getRefs(repoId),
+          queryHistory(repoId, {
+            repoId,
+            scope: { kind: 'all' },
+            anchor: { kind: 'head' },
+            beforeRows: 0,
+            afterRows: INITIAL_ROWS,
+            firstParent: false,
+            topoOrder: true,
+          }),
+          getWorktreeChanges(repoId),
+        ])
+      } catch (reloadErr) {
+        console.error('Failed to reload state after failed continue:', reloadErr)
+      }
+      set((s) => ({
+        pendingMutation: false,
+        ...(refs && hist
+          ? {
+              refs,
+              historyWindow: hist,
+              totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+            }
+          : {}),
+        ...(changes
+          ? {
+              worktreeChanges: changes,
+              worktreeFileDiffs: {},
+              worktreeSelected: conflictedFileCount(changes) > 0 || s.worktreeSelected,
+            }
+          : {}),
+      }))
+      get().showError(`Continue ${operation} failed`, err)
     }
   },
 

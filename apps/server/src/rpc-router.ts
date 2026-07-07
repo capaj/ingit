@@ -19,6 +19,19 @@ function isNonFastForwardRejection(stderr: string): boolean {
   return /\bnon-fast-forward\b|\[rejected\]|\bfetch first\b|tip of your current branch is behind/i.test(stderr)
 }
 
+/**
+ * Re-throw a git mutation failure as a typed oRPC error. Plain Errors are
+ * masked as "Internal server error" over oRPC, which hides the actual git
+ * output (conflict details, hints) from the client.
+ */
+function rethrowWithDetail(err: unknown): never {
+  if (err instanceof ORPCError) throw err
+  if (err instanceof Error) {
+    throw new ORPCError('CONFLICT', { message: err.message })
+  }
+  throw err
+}
+
 export const router = os.router({
   openRepo: os.openRepo.handler(async ({ input }) => {
     return sessionManager.openRepo(input.path)
@@ -109,6 +122,12 @@ export const router = os.router({
     return { sha: input.sha, ...diff }
   }),
 
+  getCommitFileDiff: os.getCommitFileDiff.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    return session.getCommitFileDiff(input.sha, input.path, input.oldPath)
+  }),
+
   getCommitPRs: os.getCommitPRs.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
@@ -184,11 +203,12 @@ export const router = os.router({
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
 
-    const result = input.action === 'cherry-pick'
-      ? await session.cherryPick(input.sha)
+    const result = await (input.action === 'cherry-pick'
+      ? session.cherryPick(input.sha)
       : input.action === 'uncommit'
-        ? await session.uncommit(input.sha)
-        : await session.revert(input.sha)
+        ? session.uncommit(input.sha)
+        : session.revert(input.sha)
+    ).catch(rethrowWithDetail)
 
     return { ok: true, ...result }
   }),
@@ -202,21 +222,28 @@ export const router = os.router({
   mergeRef: os.mergeRef.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
-    const result = await session.mergeRef(input.refName)
+    const result = await session.mergeRef(input.refName).catch(rethrowWithDetail)
     return { ok: true, ...result }
   }),
 
   rebaseRef: os.rebaseRef.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
-    const result = await session.rebaseRef(input.refName)
+    const result = await session.rebaseRef(input.refName).catch(rethrowWithDetail)
     return { ok: true, ...result }
   }),
 
   abortOperation: os.abortOperation.handler(async ({ input }) => {
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
-    const result = await session.abortOperation(input.operation)
+    const result = await session.abortOperation(input.operation).catch(rethrowWithDetail)
+    return { ok: true, ...result }
+  }),
+
+  continueOperation: os.continueOperation.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    const result = await session.continueOperation(input.operation).catch(rethrowWithDetail)
     return { ok: true, ...result }
   }),
 

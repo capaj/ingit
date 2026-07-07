@@ -30,6 +30,11 @@ export interface GitRunOptions {
    * exits 1 when the files differ).
    */
   okCodes?: number[]
+  /**
+   * Extra environment variables layered over the server's own (e.g.
+   * `GIT_EDITOR=true` so `rebase --continue` never opens an editor).
+   */
+  env?: Record<string, string>
 }
 
 export function runGit(
@@ -58,6 +63,7 @@ async function runGitWithBun(
     stderr: 'pipe',
     signal,
     killSignal: 'SIGTERM',
+    ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
   })
 
   let timedOut = false

@@ -88,6 +88,10 @@ export function getCommitDiff(repoId: string, sha: string) {
   return ensureClient().getCommitDiff({ repoId, sha })
 }
 
+export function getCommitFileDiff(repoId: string, sha: string, path: string, oldPath?: string) {
+  return ensureClient().getCommitFileDiff({ repoId, sha, path, oldPath })
+}
+
 export function getCommitPRs(repoId: string, sha: string) {
   return ensureClient().getCommitPRs({ repoId, sha })
 }
@@ -118,6 +122,10 @@ export function rebaseRef(repoId: string, refName: string) {
 
 export function abortOperation(repoId: string, operation: InProgressOperationKind) {
   return ensureClient().abortOperation({ repoId, operation })
+}
+
+export function continueOperation(repoId: string, operation: InProgressOperationKind) {
+  return ensureClient().continueOperation({ repoId, operation })
 }
 
 export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag', refName: string, sha: string, force?: boolean) {

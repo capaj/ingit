@@ -86,13 +86,41 @@ export function RefActionButton({
 }: {
   label: string
   onClick: () => void
-  tone: 'neutral' | 'warning' | 'danger'
+  tone: 'neutral' | 'warning' | 'danger' | 'success'
   size?: 'default' | 'compact'
   variant?: 'solid' | 'ghost'
   disabled?: boolean
 }) {
   const compact = size === 'compact'
   const ghost = variant === 'ghost'
+  const solidBg = tone === 'danger'
+    ? '#5c2430'
+    : tone === 'warning'
+      ? '#7a4e11'
+      : tone === 'success'
+        ? '#2c4231'
+        : '#2f3348'
+  const solidHoverBg = tone === 'danger'
+    ? '#6a2b39'
+    : tone === 'warning'
+      ? '#8a5a16'
+      : tone === 'success'
+        ? '#37523d'
+        : '#3a4058'
+  const solidBorder = tone === 'danger'
+    ? '#8b3a4a'
+    : tone === 'warning'
+      ? '#d19128'
+      : tone === 'success'
+        ? '#588a5c'
+        : '#4a4f68'
+  const textColor = tone === 'danger'
+    ? '#f5a6b8'
+    : tone === 'warning'
+      ? '#f9d28b'
+      : tone === 'success'
+        ? '#a6e3a1'
+        : ghost ? '#bac2de' : '#cdd6f4'
 
   return (
     <button
@@ -109,17 +137,9 @@ export function RefActionButton({
         minWidth: compact ? 72 : 84,
         height: compact ? 20 : 28,
         padding: compact ? '0 8px' : '0 10px',
-        background: ghost
-          ? 'rgba(24,24,37,0.5)'
-          : tone === 'danger'
-            ? '#5c2430'
-            : tone === 'warning'
-              ? '#7a4e11'
-              : '#2f3348',
-        border: ghost
-          ? '1px solid transparent'
-          : `1px solid ${tone === 'danger' ? '#8b3a4a' : tone === 'warning' ? '#d19128' : '#4a4f68'}`,
-        color: tone === 'danger' ? '#f5a6b8' : tone === 'warning' ? '#f9d28b' : ghost ? '#bac2de' : '#cdd6f4',
+        background: ghost ? 'rgba(24,24,37,0.5)' : solidBg,
+        border: ghost ? '1px solid transparent' : `1px solid ${solidBorder}`,
+        color: textColor,
         fontSize: compact ? 11 : 12,
         fontWeight: 600,
         cursor: disabled ? 'default' : 'pointer',
@@ -130,23 +150,11 @@ export function RefActionButton({
       }}
       onMouseEnter={(e) => {
         if (disabled) return
-        e.currentTarget.style.background = ghost
-          ? 'rgba(49,50,68,0.8)'
-          : tone === 'danger'
-            ? '#6a2b39'
-            : tone === 'warning'
-              ? '#8a5a16'
-              : '#3a4058'
+        e.currentTarget.style.background = ghost ? 'rgba(49,50,68,0.8)' : solidHoverBg
       }}
       onMouseLeave={(e) => {
         if (disabled) return
-        e.currentTarget.style.background = ghost
-          ? 'rgba(24,24,37,0.5)'
-          : tone === 'danger'
-            ? '#5c2430'
-            : tone === 'warning'
-              ? '#7a4e11'
-              : '#2f3348'
+        e.currentTarget.style.background = ghost ? 'rgba(24,24,37,0.5)' : solidBg
       }}
     >
       {label}

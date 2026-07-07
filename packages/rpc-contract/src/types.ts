@@ -143,6 +143,20 @@ export interface CommitDiffResponse {
   patchText?: string
 }
 
+export interface CommitFileDiffRequest {
+  repoId: RepoId
+  sha: CommitSha
+  path: string
+  oldPath?: string
+}
+
+export interface CommitFileDiffResponse {
+  sha: CommitSha
+  path: string
+  patchText: string
+  isBinary: boolean
+}
+
 export type CommitActionKind = 'cherry-pick' | 'revert' | 'uncommit'
 
 export interface CommitActionRequest {
@@ -202,6 +216,18 @@ export interface AbortOperationRequest {
 }
 
 export interface AbortOperationResponse {
+  ok: boolean
+  message: string
+  headSha: CommitSha
+  changes: WorktreeChangesResponse
+}
+
+export interface ContinueOperationRequest {
+  repoId: RepoId
+  operation: InProgressOperationKind
+}
+
+export interface ContinueOperationResponse {
   ok: boolean
   message: string
   headSha: CommitSha

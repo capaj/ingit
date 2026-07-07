@@ -434,6 +434,76 @@ describe('RepoSession.streamTopologyWithMeta', () => {
   })
 })
 
+describe('RepoSession commit file diffs', () => {
+  test('loads a patch for one file changed by a commit', async () => {
+    const diffRepoDir = await mkdtemp(join(tmpdir(), 'ingit-commit-diff-'))
+
+    try {
+      await runGit(['init', '--initial-branch=main'], diffRepoDir)
+      await runGit(['config', 'user.email', 'test@test.com'], diffRepoDir)
+      await runGit(['config', 'user.name', 'Test'], diffRepoDir)
+
+      await Bun.write(join(diffRepoDir, 'file.txt'), 'one\n')
+      await runGit(['add', '.'], diffRepoDir)
+      await runGit(['commit', '-m', 'initial'], diffRepoDir)
+
+      await Bun.write(join(diffRepoDir, 'file.txt'), 'one\ntwo\n')
+      await runGit(['add', '.'], diffRepoDir)
+      await runGit(['commit', '-m', 'update file'], diffRepoDir)
+      const sha = await currentHeadSha(diffRepoDir)
+
+      const diffSession = await RepoSession.open(diffRepoDir)
+      try {
+        const fileDiff = await diffSession.getCommitFileDiff(sha, 'file.txt')
+
+        expect(fileDiff.sha).toBe(sha)
+        expect(fileDiff.path).toBe('file.txt')
+        expect(fileDiff.isBinary).toBe(false)
+        expect(fileDiff.patchText).toContain('diff --git a/file.txt b/file.txt')
+        expect(fileDiff.patchText).toContain('+two')
+      } finally {
+        diffSession.close()
+      }
+    } finally {
+      await rm(diffRepoDir, { recursive: true, force: true })
+    }
+  })
+
+  test('preserves rename headers when loading a renamed file patch', async () => {
+    const renameRepoDir = await mkdtemp(join(tmpdir(), 'ingit-commit-rename-diff-'))
+
+    try {
+      await runGit(['init', '--initial-branch=main'], renameRepoDir)
+      await runGit(['config', 'user.email', 'test@test.com'], renameRepoDir)
+      await runGit(['config', 'user.name', 'Test'], renameRepoDir)
+
+      await Bun.write(join(renameRepoDir, 'old-name.txt'), 'same\n')
+      await runGit(['add', '.'], renameRepoDir)
+      await runGit(['commit', '-m', 'initial'], renameRepoDir)
+
+      await runGit(['mv', 'old-name.txt', 'new-name.txt'], renameRepoDir)
+      await runGit(['commit', '-m', 'rename file'], renameRepoDir)
+      const sha = await currentHeadSha(renameRepoDir)
+
+      const renameSession = await RepoSession.open(renameRepoDir)
+      try {
+        const diff = await renameSession.getCommitDiff(sha)
+        const changedPath = diff.changedPaths.find((entry) => entry.status === 'R')
+
+        expect(changedPath).toEqual({ path: 'new-name.txt', oldPath: 'old-name.txt', status: 'R' })
+        const fileDiff = await renameSession.getCommitFileDiff(sha, changedPath!.path, changedPath!.oldPath)
+
+        expect(fileDiff.patchText).toContain('rename from old-name.txt')
+        expect(fileDiff.patchText).toContain('rename to new-name.txt')
+      } finally {
+        renameSession.close()
+      }
+    } finally {
+      await rm(renameRepoDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('RepoSession commit actions', () => {
   test('uncommits the current head commit and keeps the change in the working tree', async () => {
     const fixture = await createActionFixture()

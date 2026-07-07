@@ -1,5 +1,7 @@
-import type { CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import type { CommitDetailResponse, CommitDiffResponse, ChangedPath } from '@ingit/rpc-contract'
+import { commitFileDiffKey, useAppStore } from '../store'
+import { DiffView } from './DiffView'
 
 interface PRInfo {
   number: number
@@ -327,7 +329,7 @@ export function CommitDetail({ commit, diff, branchName, prs, ciState, ciRuns, g
               </span>
             </div>
             {diff.changedPaths.map((cp, i) => (
-              <FileRow key={i} cp={cp} />
+              <FileRow key={`${cp.status}:${cp.oldPath ?? ''}:${cp.path}:${i}`} sha={commit.sha} cp={cp} />
             ))}
           </>
         ) : diff ? (
@@ -373,54 +375,84 @@ function MetaRow({
   )
 }
 
-function FileRow({ cp }: { cp: ChangedPath }) {
+function FileRow({ sha, cp }: { sha: string; cp: ChangedPath }) {
+  const [expanded, setExpanded] = useState(false)
+  const loadCommitFileDiff = useAppStore((s) => s.loadCommitFileDiff)
+  const diffEntry = useAppStore((s) => s.commitFileDiffs[commitFileDiffKey(sha, cp.path)])
   const color = STATUS_COLOR[cp.status] ?? '#cdd6f4'
   const label = STATUS_LABEL[cp.status] ?? cp.status
   const displayPath = cp.oldPath ? `${cp.oldPath} → ${cp.path}` : cp.path
+  const toggle = () => {
+    const next = !expanded
+    setExpanded(next)
+    if (next) void loadCommitFileDiff(sha, cp)
+  }
+
+  useEffect(() => {
+    if (expanded && !diffEntry) void loadCommitFileDiff(sha, cp)
+  }, [expanded, diffEntry, sha, cp, loadCommitFileDiff])
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '5px 16px',
-        fontSize: 12,
-        color: '#cdd6f4',
-        borderBottom: '1px solid #1e1e2e',
-      }}
-    >
-      <span
+    <div>
+      <div
         style={{
-          flexShrink: 0,
-          width: 18,
-          height: 18,
-          borderRadius: 3,
-          background: color + '33',
-          color,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 10,
-          fontWeight: 700,
-        }}
-      >
-        {label}
-      </span>
-      <span
-        style={{
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          fontFamily: 'monospace',
+          gap: 8,
+          padding: '5px 16px',
           fontSize: 12,
-          color: '#a6adc8',
+          color: '#cdd6f4',
+          borderBottom: '1px solid #1e1e2e',
+          cursor: 'pointer',
         }}
-        title={displayPath}
+        onClick={toggle}
+        onMouseEnter={(e) => { e.currentTarget.style.background = '#1e1e2e' }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
       >
-        {displayPath}
-      </span>
+        <span
+          style={{
+            flexShrink: 0,
+            width: 10,
+            fontSize: 9,
+            color: '#6c7086',
+            userSelect: 'none',
+          }}
+        >
+          {expanded ? '▼' : '▶'}
+        </span>
+        <span
+          style={{
+            flexShrink: 0,
+            width: 18,
+            height: 18,
+            borderRadius: 3,
+            background: color + '33',
+            color,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 10,
+            fontWeight: 700,
+          }}
+        >
+          {label}
+        </span>
+        <span
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontFamily: 'monospace',
+            fontSize: 12,
+            color: '#a6adc8',
+          }}
+          title={displayPath}
+        >
+          {displayPath}
+        </span>
+      </div>
+      {expanded && diffEntry && <DiffView entry={diffEntry} path={cp.path} />}
     </div>
   )
 }

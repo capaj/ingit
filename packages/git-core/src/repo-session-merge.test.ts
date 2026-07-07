@@ -431,6 +431,93 @@ describe('RepoSession.rebaseRef', () => {
     }
   })
 
+  test('continues a conflicted rebase after the conflict is resolved and staged', async () => {
+    const repoDir = await makeTempDir('ingit-rebase-continue-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main changes shared'], repoDir)
+    const mainSha = await currentHeadSha(repoDir)
+
+    await runGit(['checkout', '-b', 'feature', 'HEAD~1'], repoDir)
+    await Bun.write(join(repoDir, 'shared.txt'), 'feature\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'feature conflicts shared'], repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.rebaseRef('main')).rejects.toThrow(/CONFLICT|could not apply|Resolve all conflicts/)
+
+      // Continuing with the conflict still unresolved must fail loudly.
+      await expect(session.continueOperation('rebase')).rejects.toThrow(/unmerged|conflict|resolve/i)
+
+      await Bun.write(join(repoDir, 'shared.txt'), 'resolved\n')
+      await runGit(['add', 'shared.txt'], repoDir)
+
+      const result = await session.continueOperation('rebase')
+
+      expect(await currentBranch(repoDir)).toBe('feature')
+      expect(result.headSha).toBe(await currentHeadSha(repoDir))
+      expect(result.changes.rebaseHeadSha).toBeUndefined()
+      expect(result.changes.mergeHeadShas).toBeUndefined()
+      expect(result.changes.staged).toEqual([])
+      expect(result.changes.unstaged).toEqual([])
+      expect(await headSubject(repoDir)).toBe('feature conflicts shared')
+      expect(await headParents(repoDir)).toEqual([mainSha])
+      expect(await Bun.file(join(repoDir, 'shared.txt')).text()).toBe('resolved\n')
+    } finally {
+      session.close()
+    }
+  })
+
+  test('continues a conflicted merge after the conflict is resolved and staged', async () => {
+    const repoDir = await makeTempDir('ingit-merge-continue-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'shared.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await runGit(['checkout', '-b', 'dev'], repoDir)
+    await Bun.write(join(repoDir, 'shared.txt'), 'dev\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'dev changes shared'], repoDir)
+    const devSha = await currentHeadSha(repoDir)
+
+    await runGit(['checkout', 'main'], repoDir)
+    await Bun.write(join(repoDir, 'shared.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main changes shared'], repoDir)
+    const mainSha = await currentHeadSha(repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      await expect(session.mergeRef('dev')).rejects.toThrow(/CONFLICT|Automatic merge failed/)
+
+      await Bun.write(join(repoDir, 'shared.txt'), 'resolved\n')
+      await runGit(['add', 'shared.txt'], repoDir)
+
+      const result = await session.continueOperation('merge')
+
+      expect(await currentBranch(repoDir)).toBe('main')
+      expect(result.headSha).toBe(await currentHeadSha(repoDir))
+      expect(result.changes.mergeHeadShas).toBeUndefined()
+      expect(result.changes.staged).toEqual([])
+      expect(result.changes.unstaged).toEqual([])
+      expect(await headParents(repoDir)).toEqual([mainSha, devSha])
+      expect(await Bun.file(join(repoDir, 'shared.txt')).text()).toBe('resolved\n')
+    } finally {
+      session.close()
+    }
+  })
+
   test('rejects rebasing onto the current branch', async () => {
     const repoDir = await makeTempDir('ingit-rebase-current-')
     await initRepo(repoDir)
