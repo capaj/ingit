@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">ingit icon, light</title>
+  <desc id="desc">A light ingit Git graph node with a vertical line and split green and pink status fill.</desc>
+  <rect width="128" height="128" fill="#f6f7fb"/>
+  <rect width="22" height="128" fill="#eef1f8"/>
+  <rect x="22" width="12" height="128" fill="#e3e7f2"/>
+
+  <path d="M64 0V128" fill="none" stroke="#7c84d9" stroke-width="7" stroke-linecap="round"/>
+
+  <circle cx="64" cy="69" r="32" fill="#cfd5e8" opacity=".55"/>
+  <circle cx="64" cy="69" r="28" fill="#f6f7fb" stroke="#6f78da" stroke-width="5"/>
+
+  <circle cx="64" cy="69" r="17" fill="#f6f7fb"/>
+  <path d="M47 69a17 17 0 0 0 17 17V69Z" fill="#2fb170"/>
+  <path d="M64 69v17a17 17 0 0 0 17-17Z" fill="#d968a6"/>
+  <circle cx="64" cy="69" r="17" fill="none" stroke="#a6adbf" stroke-width="4"/>
+  <path d="M47 69h34" fill="none" stroke="#f6f7fb" stroke-width="3" stroke-linecap="round"/>
+  <path d="M64 52V86" fill="none" stroke="#a6adbf" stroke-width="4" stroke-linecap="round"/>
+</svg>

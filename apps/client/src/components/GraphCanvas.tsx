@@ -3036,6 +3036,89 @@ export function GraphCanvas() {
                 zIndex: 20,
               }}
             >
+              {rowRefActions.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  position: 'relative',
+                  top: verticalOffsetForHeight(DEFAULT_REF_ACTION_HEIGHT),
+                  zIndex: 7,
+                }}>
+                  {rowRefActions.map((refAction) => (
+                    <RefActionButton
+                      key={refAction.action}
+                      label={refAction.label}
+                      tone={refAction.tone}
+                      onClick={() => handleRefActionClick(refAction.action, refAction.force)}
+                    />
+                  ))}
+                </div>
+              )}
+              {nodeActions.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  position: 'relative',
+                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
+                  zIndex: 7,
+                }}>
+                  {nodeActions.map((commitAction) => (
+                    <CommitActionButton
+                      key={commitAction.action}
+                      label={commitAction.label}
+                      tone={commitAction.tone}
+                      onClick={() => handleCommitAction(commitAction.action)}
+                    />
+                  ))}
+                </div>
+              )}
+              {rowShowsMove && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 7 }}>
+                  <RefActionButton
+                    label="Move"
+                    tone="neutral"
+                    size="compact"
+                    variant="ghost"
+                    onClick={() => handleMoveBranch(node.row.sha)}
+                  />
+                </div>
+              )}
+              {rowRebaseTargetRef && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  position: 'relative',
+                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
+                  zIndex: 7,
+                }}>
+                  <CommitActionButton
+                    label="Rebase"
+                    tone="success"
+                    onClick={() => handleRebaseClick(rowRebaseTargetRef)}
+                  />
+                </div>
+              )}
+              {rowShowsMerge && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  position: 'relative',
+                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
+                  zIndex: 7,
+                }}>
+                  <CommitActionButton
+                    label="Merge"
+                    tone="merge"
+                    onClick={handleMergeClick}
+                    onMouseEnter={handleMergeHoverStart}
+                    onMouseLeave={handleMergeHoverEnd}
+                  />
+                </div>
+              )}
               {rowShowsAddRef && (
                 <div style={{
                   position: 'relative',
@@ -3080,7 +3163,7 @@ export function GraphCanvas() {
                       onClick={(e) => e.stopPropagation()}
                       style={{
                         position: 'absolute',
-                        left: 0,
+                        right: 0,
                         top: ADD_REF_BUTTON_SIZE + 6,
                         width: ADD_REF_MENU_WIDTH,
                         padding: 5,
@@ -3128,89 +3211,6 @@ export function GraphCanvas() {
                       ))}
                     </div>
                   )}
-                </div>
-              )}
-              {rowRefActions.length > 0 && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  position: 'relative',
-                  top: verticalOffsetForHeight(DEFAULT_REF_ACTION_HEIGHT),
-                  zIndex: 7,
-                }}>
-                  {rowRefActions.map((refAction) => (
-                    <RefActionButton
-                      key={refAction.action}
-                      label={refAction.label}
-                      tone={refAction.tone}
-                      onClick={() => handleRefActionClick(refAction.action, refAction.force)}
-                    />
-                  ))}
-                </div>
-              )}
-              {nodeActions.length > 0 && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  position: 'relative',
-                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
-                  zIndex: 7,
-                }}>
-                  {nodeActions.map((commitAction) => (
-                    <CommitActionButton
-                      key={commitAction.action}
-                      label={commitAction.label}
-                      tone={commitAction.tone}
-                      onClick={() => handleCommitAction(commitAction.action)}
-                    />
-                  ))}
-                </div>
-              )}
-              {rowShowsMove && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 7 }}>
-                  <RefActionButton
-                    label="← Move"
-                    tone="neutral"
-                    size="compact"
-                    variant="ghost"
-                    onClick={() => handleMoveBranch(node.row.sha)}
-                  />
-                </div>
-              )}
-              {rowRebaseTargetRef && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  position: 'relative',
-                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
-                  zIndex: 7,
-                }}>
-                  <CommitActionButton
-                    label="Rebase"
-                    tone="success"
-                    onClick={() => handleRebaseClick(rowRebaseTargetRef)}
-                  />
-                </div>
-              )}
-              {rowShowsMerge && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  position: 'relative',
-                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
-                  zIndex: 7,
-                }}>
-                  <CommitActionButton
-                    label="Merge"
-                    tone="merge"
-                    onClick={handleMergeClick}
-                    onMouseEnter={handleMergeHoverStart}
-                    onMouseLeave={handleMergeHoverEnd}
-                  />
                 </div>
               )}
             </div>

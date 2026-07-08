@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" color="#1e1e2e" role="img" aria-labelledby="title desc">
+  <title id="title">ingit icon mark, dark</title>
+  <desc id="desc">A single-color dark ingit Git graph node mark with transparent cutouts.</desc>
+  <defs>
+    <mask id="mark-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+      <rect width="128" height="128" fill="#000"/>
+      <path d="M64 0V128" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+      <circle cx="64" cy="69" r="28" fill="none" stroke="#fff" stroke-width="7"/>
+      <path d="M47 69a17 17 0 0 0 17 17V69Z" fill="#fff"/>
+      <path d="M64 69v17a17 17 0 0 0 17-17Z" fill="#fff"/>
+      <circle cx="64" cy="69" r="17" fill="none" stroke="#fff" stroke-width="4"/>
+      <path d="M47 69h34" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+      <path d="M64 52V86" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <rect width="128" height="128" fill="currentColor" mask="url(#mark-mask)"/>
+</svg>
