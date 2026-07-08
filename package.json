@@ -16,6 +16,6 @@
     "bump": "bunx npm-check-updates -u --workspaces --root && bun install"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
