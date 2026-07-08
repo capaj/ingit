@@ -153,6 +153,36 @@ function ActionIcon({ name, size = 14 }: { name: ActionIconName; size?: number }
   )
 }
 
+function LoadingSpinner({ size = 13 }: { size?: number }) {
+  return (
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      style={{ flex: '0 0 auto' }}
+    >
+      <path
+        d="M12 3a9 9 0 0 1 9 9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2.4}
+        strokeLinecap="round"
+      >
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0 12 12"
+          to="360 12 12"
+          dur="0.8s"
+          repeatCount="indefinite"
+        />
+      </path>
+    </svg>
+  )
+}
+
 export function CommitActionButton({
   label,
   onClick,
@@ -241,6 +271,7 @@ export function RefActionButton({
   size = 'default',
   variant = 'solid',
   disabled = false,
+  loading = false,
 }: {
   label: string
   onClick: () => void
@@ -248,9 +279,11 @@ export function RefActionButton({
   size?: 'default' | 'compact'
   variant?: 'solid' | 'ghost'
   disabled?: boolean
+  loading?: boolean
 }) {
   const compact = size === 'compact'
   const ghost = variant === 'ghost'
+  const isInactive = disabled || loading
   const solidBg = tone === 'danger'
     ? '#5c2430'
     : tone === 'warning'
@@ -284,10 +317,11 @@ export function RefActionButton({
     <button
       onClick={(e) => {
         e.stopPropagation()
-        if (disabled) return
+        if (isInactive) return
         onClick()
       }}
-      disabled={disabled}
+      disabled={isInactive}
+      aria-busy={loading || undefined}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -300,8 +334,8 @@ export function RefActionButton({
         color: textColor,
         fontSize: 10,
         fontWeight: 600,
-        cursor: disabled ? 'default' : 'pointer',
-        opacity: disabled ? 0.62 : 1,
+        cursor: isInactive ? 'default' : 'pointer',
+        opacity: disabled && !loading ? 0.62 : 1,
         borderRadius: compact ? 6 : 7,
         fontFamily: 'inherit',
         whiteSpace: 'nowrap',
@@ -309,15 +343,17 @@ export function RefActionButton({
         lineHeight: 1,
       }}
       onMouseEnter={(e) => {
-        if (disabled) return
+        if (isInactive) return
         e.currentTarget.style.background = ghost ? 'rgba(49,50,68,0.8)' : solidHoverBg
       }}
       onMouseLeave={(e) => {
-        if (disabled) return
+        if (isInactive) return
         e.currentTarget.style.background = ghost ? 'rgba(24,24,37,0.5)' : solidBg
       }}
     >
-      <ActionIcon name={iconForLabel(label)} size={compact ? 12 : 13} />
+      {loading
+        ? <LoadingSpinner size={compact ? 12 : 13} />
+        : <ActionIcon name={iconForLabel(label)} size={compact ? 12 : 13} />}
       <span>{label}</span>
     </button>
   )

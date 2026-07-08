@@ -104,6 +104,20 @@ interface VisibleRefAction {
   force?: boolean
 }
 
+interface PendingRefAction extends VisibleRefAction {
+  refName: string
+  sha: string
+  force: boolean
+}
+
+function samePendingRefAction(a: PendingRefAction | null, b: PendingRefAction) {
+  return !!a
+    && a.action === b.action
+    && a.refName === b.refName
+    && a.sha === b.sha
+    && a.force === b.force
+}
+
 type CreateRefKind = 'branch' | 'tag'
 
 interface CreateRefDialogState {
@@ -1200,6 +1214,7 @@ export function GraphCanvas() {
   const worktreeChanges = useAppStore((state) => state.worktreeChanges)
   const worktreeSelected = useAppStore((state) => state.worktreeSelected)
   const selectWorktree = useAppStore((state) => state.selectWorktree)
+  const [pendingRefAction, setPendingRefAction] = useState<PendingRefAction | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeLabelsLayerRef = useRef<HTMLDivElement>(null)
@@ -2032,27 +2047,48 @@ export function GraphCanvas() {
     selectGraphRef(refName)
   }, [selectGraphRef])
 
-  const handleRefActionClick = useCallback((action: VisibleRefAction['action'], force = false) => {
+  const runRefAction = useCallback((pendingAction: PendingRefAction) => {
+    setPendingRefAction(pendingAction)
+    return performRefAction(pendingAction.action, pendingAction.refName, pendingAction.sha, pendingAction.force)
+      .finally(() => {
+        setPendingRefAction((current) => samePendingRefAction(current, pendingAction) ? null : current)
+      })
+  }, [performRefAction])
+
+  const handleRefActionClick = useCallback((refAction: VisibleRefAction) => {
     if (!selectedRefName || !selectedRef) return
     if (pendingMutation) return
     setMergePreviewVisible(false)
     const sha = selectedRef.targetSha
     const refName = selectedRefName
-    performRefAction(action, refName, sha, force).catch((err) => {
-      if (action === 'push' && !force && isNonFastForwardPushError(err)) {
+    const pendingAction: PendingRefAction = {
+      ...refAction,
+      refName,
+      sha,
+      force: !!refAction.force,
+    }
+    runRefAction(pendingAction).catch((err) => {
+      if (refAction.action === 'push' && !refAction.force && isNonFastForwardPushError(err)) {
         // Remote rejected the push because our branch isn't a fast-forward
         // (diverged / rewritten history). Offer to force-push instead.
         showError('Push rejected', err, {
           label: 'Force push',
           run: () => {
-            performRefAction('push', refName, sha, true).catch((e) => showError('Force push failed', e))
+            runRefAction({
+              action: 'push',
+              label: 'Force push',
+              tone: 'warning',
+              force: true,
+              refName,
+              sha,
+            }).catch((e) => showError('Force push failed', e))
           },
         })
       } else {
-        showError(`${action} failed`, err)
+        showError(`${refAction.action} failed`, err)
       }
     })
-  }, [selectedRefName, selectedRef, performRefAction, showError, pendingMutation])
+  }, [selectedRefName, selectedRef, runRefAction, showError, pendingMutation])
 
   const handleMoveBranch = useCallback((targetSha: string) => {
     if (!movableBranchRefName) return
@@ -3006,19 +3042,28 @@ export function GraphCanvas() {
           const refRowWidth = rowRefWidths.get(node.row.sha) ?? 0
           const px = node.x + NODE_RADIUS + 8 + refRowWidth + (refRowWidth > 0 ? 8 : 0)
           const py = node.y - 10
-          const nodeActions = node.row.sha === selectedSha ? visibleCommitActions : []
+          const refActionInFlight = pendingRefAction !== null
+          const nodeActions = !refActionInFlight && node.row.sha === selectedSha ? visibleCommitActions : []
           const showsSelectedRef = !!selectedRefName && node.row.refNames.includes(selectedRefName)
           const rowRefActions = showsSelectedRef ? selectedRefActions : []
-          const rowShowsMerge = !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
-          const rowShowsMove = !!movableBranchRefName && node.row.sha !== selectedRef?.targetSha
+          const pendingRowRefAction = refActionInFlight && showsSelectedRef && pendingRefAction
+            ? rowRefActions.find((refAction) => refAction.action === pendingRefAction.action)
+              ?? pendingRefAction
+            : null
+          const visibleRowRefActions = refActionInFlight
+            ? (pendingRowRefAction ? [pendingRowRefAction] : [])
+            : rowRefActions
+          const rowShowsMerge = !refActionInFlight && !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
+          const rowShowsMove = !refActionInFlight && !!movableBranchRefName && node.row.sha !== selectedRef?.targetSha
           const rowShowsAddRef = !pendingMutation
+            && !refActionInFlight
             && !isGraphAnimating
             && (hoveredAddRefSha === node.row.sha || openAddRefSha === node.row.sha)
-          const rowRebaseTargetRef = selectedCurrentBranchRef && node.row.sha !== selectedCurrentBranchRef.targetSha
+          const rowRebaseTargetRef = !refActionInFlight && selectedCurrentBranchRef && node.row.sha !== selectedCurrentBranchRef.targetSha
             ? pickBestRef(node.row.refNames.filter((refName) => refName !== selectedCurrentBranchRef.shortName))
             : null
 
-          if (nodeActions.length === 0 && rowRefActions.length === 0 && !rowShowsMerge && !rowShowsMove && !rowShowsAddRef && !rowRebaseTargetRef) return null
+          if (nodeActions.length === 0 && visibleRowRefActions.length === 0 && !rowShowsMerge && !rowShowsMove && !rowShowsAddRef && !rowRebaseTargetRef) return null
 
           return (
             <div
@@ -3036,7 +3081,7 @@ export function GraphCanvas() {
                 zIndex: 20,
               }}
             >
-              {rowRefActions.length > 0 && (
+              {visibleRowRefActions.length > 0 && (
                 <div style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -3045,12 +3090,13 @@ export function GraphCanvas() {
                   top: verticalOffsetForHeight(DEFAULT_REF_ACTION_HEIGHT),
                   zIndex: 7,
                 }}>
-                  {rowRefActions.map((refAction) => (
+                  {visibleRowRefActions.map((refAction) => (
                     <RefActionButton
                       key={refAction.action}
                       label={refAction.label}
                       tone={refAction.tone}
-                      onClick={() => handleRefActionClick(refAction.action, refAction.force)}
+                      loading={!!pendingRowRefAction && refAction.action === pendingRowRefAction.action}
+                      onClick={() => handleRefActionClick(refAction)}
                     />
                   ))}
                 </div>
