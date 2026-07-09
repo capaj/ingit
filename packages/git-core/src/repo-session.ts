@@ -460,10 +460,6 @@ export class RepoSession {
       throw new Error('Cannot rebase with detached HEAD')
     }
 
-    if (resolved.kind === 'head' && resolved.refName === status.branch) {
-      throw new Error('Cannot rebase onto the current branch')
-    }
-
     if (resolved.kind === 'remote') {
       if (!resolved.remoteName || !resolved.remoteBranch) {
         throw new Error(`Cannot fetch remote ref ${ref}`)

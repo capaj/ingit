@@ -2173,22 +2173,35 @@ export function GraphCanvas() {
     })
   }, [selectedRefName, performMergeRef, takeOverMergeViewport, showError, pendingMutation])
 
+  const runRebase = useCallback((targetRefName: string) => {
+    setMergePreviewVisible(false)
+    performRebaseRef(targetRefName).catch((err) => {
+      showError('Rebase failed', err)
+    })
+  }, [performRebaseRef, showError])
+
   const handleRebaseClick = useCallback((targetRefName: string) => {
     if (!selectedCurrentBranchRef) return
     if (pendingMutation) return
+
+    const trackingRemoteRef = findTrackingRemoteRef(selectedCurrentBranchRef, refs)
+    if (
+      targetRefName === selectedCurrentBranchRef.shortName
+      || targetRefName === selectedCurrentBranchRef.name
+      || targetRefName === trackingRemoteRef?.shortName
+      || targetRefName === trackingRemoteRef?.name
+    ) {
+      runRebase(targetRefName)
+      return
+    }
 
     setConfirmDialog({
       title: 'Rebase branch',
       message: `Rebase ${selectedCurrentBranchRef.shortName} onto ${targetRefName}? This rewrites the current branch history.`,
       confirmLabel: 'Rebase',
-      onConfirm: () => {
-        setMergePreviewVisible(false)
-        performRebaseRef(targetRefName).catch((err) => {
-          showError('Rebase failed', err)
-        })
-      },
+      onConfirm: () => runRebase(targetRefName),
     })
-  }, [selectedCurrentBranchRef, performRebaseRef, showError, pendingMutation])
+  }, [selectedCurrentBranchRef, refs, runRebase, pendingMutation])
 
   // Sticky lane labels: show a branch name when its tip is above the viewport
   // AND the topmost visible commit on that lane belongs to that branch

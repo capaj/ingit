@@ -518,18 +518,23 @@ describe('RepoSession.rebaseRef', () => {
     }
   })
 
-  test('rejects rebasing onto the current branch', async () => {
+  test('rebases onto the current branch as a no-op', async () => {
     const repoDir = await makeTempDir('ingit-rebase-current-')
     await initRepo(repoDir)
 
     await Bun.write(join(repoDir, 'base.txt'), 'base\n')
     await runGit(['add', '.'], repoDir)
     await runGit(['commit', '-m', 'base'], repoDir)
+    const headBeforeRebase = await currentHeadSha(repoDir)
 
     const session = await RepoSession.open(repoDir)
 
     try {
-      await expect(session.rebaseRef('main')).rejects.toThrow('current branch')
+      const result = await session.rebaseRef('main')
+
+      expect(await currentBranch(repoDir)).toBe('main')
+      expect(result.headSha).toBe(headBeforeRebase)
+      expect(await currentHeadSha(repoDir)).toBe(headBeforeRebase)
     } finally {
       session.close()
     }
