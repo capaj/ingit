@@ -91,6 +91,11 @@ interface LayoutNode {
   idx: number
 }
 
+interface EdgePoint {
+  x: number
+  y: number
+}
+
 interface VisibleCommitAction {
   action: CommitActionKind
   label: string
@@ -194,6 +199,8 @@ interface RefPlacement {
 interface VisibleEdgeItem {
   key: string
   path: string
+  plan: EdgeRoutePlan
+  bundleOffset: number
   x1: number
   y1: number
   x2: number
@@ -229,6 +236,10 @@ interface GraphAnimationSnapshot {
 interface RenderedEdgeItem {
   key: string
   path: string
+  fromPlan: EdgeRoutePlan
+  toPlan: EdgeRoutePlan
+  fromBundleOffset: number
+  toBundleOffset: number
   stroke: string
   fromStrokeWidth: number
   toStrokeWidth: number
@@ -308,7 +319,7 @@ function findTrackingRemoteRef(localRef: RefSummary, refs: RefSummary[]) {
 type EdgeRoutePlan =
   | { mode: 'straight' }
   | { mode: 'curve' }
-  | { mode: 'adjacent-hook'; laneA: number; laneB: number }
+  | { mode: 'adjacent-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
   | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
   | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
 
@@ -466,8 +477,8 @@ function countRowsMatching(
 }
 
 function buildOuterRailPath(
-  from: LayoutNode,
-  to: LayoutNode,
+  from: EdgePoint,
+  to: EdgePoint,
   outerRailX: number,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
@@ -488,8 +499,8 @@ function buildOuterRailPath(
 }
 
 function buildAdjacentHookPath(
-  from: LayoutNode,
-  to: LayoutNode,
+  from: EdgePoint,
+  to: EdgePoint,
   trackX: number,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
@@ -509,8 +520,8 @@ function buildAdjacentHookPath(
 }
 
 function buildInsideRailPath(
-  from: LayoutNode,
-  to: LayoutNode,
+  from: EdgePoint,
+  to: EdgePoint,
   sourceRailX: number,
   targetRailX: number,
   crossoverY: number,
@@ -534,13 +545,13 @@ function buildInsideRailPath(
   )
 }
 
-function buildStraightEdgePath(from: LayoutNode, to: LayoutNode) {
+function buildStraightEdgePath(from: EdgePoint, to: EdgePoint) {
   const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
   const end = pointOnCircleToward(to.x, to.y, from.x, from.y, NODE_RADIUS - 1)
   return `M${start.x},${start.y}L${end.x},${end.y}`
 }
 
-function buildCurvedEdgePath(from: LayoutNode, to: LayoutNode) {
+function buildCurvedEdgePath(from: EdgePoint, to: EdgePoint) {
   const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
   const end = pointOnCircleToward(to.x, to.y, from.x, from.y, NODE_RADIUS - 1)
   return edgePath(start.x, start.y, end.x, end.y)
@@ -551,6 +562,7 @@ function planEdgeRoute(
   to: LayoutNode,
   edgeKey: string,
   occupiedLanes: number[],
+  opts: { adjacentTrack?: 'from' | 'to' } = {},
 ): EdgeRoutePlan {
   const laneDelta = Math.abs(from.row.lane - to.row.lane)
   const rowDelta = Math.abs(to.idx - from.idx)
@@ -564,6 +576,7 @@ function planEdgeRoute(
       mode: 'adjacent-hook',
       laneA: Math.min(from.row.lane, to.row.lane),
       laneB: Math.max(from.row.lane, to.row.lane),
+      track: opts.adjacentTrack ?? 'from',
     }
   }
 
@@ -647,15 +660,15 @@ function edgeBundleKey(plan: EdgeRoutePlan): string | null {
     case 'inside-rail':
       return `${plan.mode}:${plan.minLane}:${plan.maxLane}`
     case 'adjacent-hook':
-      return `${plan.mode}:${plan.laneA}:${plan.laneB}`
+      return `${plan.mode}:${plan.laneA}:${plan.laneB}:${plan.track}`
     default:
       return null
   }
 }
 
 function routedEdgePath(
-  from: LayoutNode,
-  to: LayoutNode,
+  from: EdgePoint,
+  to: EdgePoint,
   plan: EdgeRoutePlan,
   bundleOffset: number,
 ): string {
@@ -665,7 +678,7 @@ function routedEdgePath(
     case 'curve':
       return buildCurvedEdgePath(from, to)
     case 'adjacent-hook':
-      return buildAdjacentHookPath(from, to, from.x + bundleOffset)
+      return buildAdjacentHookPath(from, to, (plan.track === 'to' ? to.x : from.x) + bundleOffset)
     case 'inside-rail':
       return buildInsideRailPath(
         from,
@@ -677,6 +690,48 @@ function routedEdgePath(
     case 'outer-rail':
       return buildOuterRailPath(from, to, plan.outerRailX + bundleOffset)
   }
+}
+
+function lerpEdgeRoutePlan(fromPlan: EdgeRoutePlan, toPlan: EdgeRoutePlan, progress: number): EdgeRoutePlan {
+  if (fromPlan.mode !== toPlan.mode) return progress < 0.5 ? fromPlan : toPlan
+
+  switch (toPlan.mode) {
+    case 'straight':
+    case 'curve':
+      return toPlan
+    case 'adjacent-hook':
+      return toPlan
+    case 'inside-rail': {
+      const fromInside = fromPlan as Extract<EdgeRoutePlan, { mode: 'inside-rail' }>
+      return {
+        ...toPlan,
+        sourceRailX: lerp(fromInside.sourceRailX, toPlan.sourceRailX, progress),
+        targetRailX: lerp(fromInside.targetRailX, toPlan.targetRailX, progress),
+        crossoverY: lerp(fromInside.crossoverY, toPlan.crossoverY, progress),
+      }
+    }
+    case 'outer-rail': {
+      const fromOuter = fromPlan as Extract<EdgeRoutePlan, { mode: 'outer-rail' }>
+      return {
+        ...toPlan,
+        outerRailX: lerp(fromOuter.outerRailX, toPlan.outerRailX, progress),
+      }
+    }
+  }
+}
+
+function buildAnimatedRoutedEdgePath(edge: RenderedEdgeItem, progress: number) {
+  const fromNode = {
+    x: lerp(edge.fromX1, edge.toX1, progress),
+    y: lerp(edge.fromY1, edge.toY1, progress),
+  }
+  const toNode = {
+    x: lerp(edge.fromX2, edge.toX2, progress),
+    y: lerp(edge.fromY2, edge.toY2, progress),
+  }
+  const plan = lerpEdgeRoutePlan(edge.fromPlan, edge.toPlan, progress)
+  const bundleOffset = lerp(edge.fromBundleOffset, edge.toBundleOffset, progress)
+  return routedEdgePath(fromNode, toNode, plan, bundleOffset)
 }
 
 function computeLocScaleMax(rows: CommitRow[]) {
@@ -941,12 +996,6 @@ function buildRefPlacements(
   return { placements, rowWidths }
 }
 
-function buildAnimatedEdgePath(x1: number, y1: number, x2: number, y2: number) {
-  const start = pointOnCircleToward(x1, y1, x2, y2, NODE_RADIUS - 1)
-  const end = pointOnCircleToward(x2, y2, x1, y1, NODE_RADIUS - 1)
-  return edgePath(start.x, start.y, end.x, end.y)
-}
-
 function lerp(from: number, toValue: number, progress: number) {
   return from + (toValue - from) * progress
 }
@@ -1090,7 +1139,9 @@ function buildEdgeRoutingData(visibleEdges: VisibleEdge[], occupiedLanes: number
   const bundleGroups = new Map<string, Array<{ key: string; topIdx: number; bottomIdx: number; innerLane?: number }>>()
 
   for (const edge of visibleEdges) {
-    const plan = planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes)
+    const plan = planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes, {
+      adjacentTrack: edge.isMerge ? 'to' : 'from',
+    })
     plans.set(edge.key, plan)
 
     const bundleKey = edgeBundleKey(plan)
@@ -1147,17 +1198,18 @@ function buildVisibleEdgeItems(
 ) {
   return visibleEdges.map<VisibleEdgeItem>((edge) => {
     const isCurrentBranchEdge = currentBranchEdgeKeys.has(edge.key)
+    const plan = edgeRouting.plans.get(edge.key) ?? planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes, {
+      adjacentTrack: edge.isMerge ? 'to' : 'from',
+    })
+    const bundleOffset = edgeRouting.bundleOffsets.get(edge.key) ?? 0
     // An edge takes the color of the branch line it travels along: the child for
     // a normal edge, the merged-in parent for a merge edge.
     const colorNode = edge.isMerge ? edge.to : edge.from
     return {
       key: edge.key,
-      path: routedEdgePath(
-        edge.from,
-        edge.to,
-        edgeRouting.plans.get(edge.key) ?? planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes),
-        edgeRouting.bundleOffsets.get(edge.key) ?? 0,
-      ),
+      path: routedEdgePath(edge.from, edge.to, plan, bundleOffset),
+      plan,
+      bundleOffset,
       x1: edge.from.x,
       y1: edge.from.y,
       x2: edge.to.x,
@@ -1341,7 +1393,7 @@ export function GraphCanvas() {
       ? routedEdgePath(
           pendingNode,
           sourceNode,
-          planEdgeRoute(pendingNode, sourceNode, `${pendingNode.row.sha}-${sourceNode.row.sha}`, occupied),
+          planEdgeRoute(pendingNode, sourceNode, `${pendingNode.row.sha}-${sourceNode.row.sha}`, occupied, { adjacentTrack: 'to' }),
           0,
         )
       : null
@@ -1776,6 +1828,10 @@ export function GraphCanvas() {
           item: {
             key,
             path: toEdge?.path ?? fromEdge?.path ?? '',
+            fromPlan: fromEdge?.plan ?? toEdge?.plan ?? { mode: 'curve' },
+            toPlan: toEdge?.plan ?? fromEdge?.plan ?? { mode: 'curve' },
+            fromBundleOffset: fromEdge?.bundleOffset ?? toEdge?.bundleOffset ?? 0,
+            toBundleOffset: toEdge?.bundleOffset ?? fromEdge?.bundleOffset ?? 0,
             stroke: toEdge?.stroke ?? fromEdge?.stroke ?? '#cdd6f4',
             fromStrokeWidth: fromEdge?.strokeWidth ?? displayEdge.strokeWidth,
             toStrokeWidth: toEdge?.strokeWidth ?? displayEdge.strokeWidth,
@@ -1857,6 +1913,10 @@ export function GraphCanvas() {
     () => graphAnimationRenderData?.edges ?? visibleEdgeItems.map((edge) => ({
       key: edge.key,
       path: edge.path,
+      fromPlan: edge.plan,
+      toPlan: edge.plan,
+      fromBundleOffset: edge.bundleOffset,
+      toBundleOffset: edge.bundleOffset,
       stroke: edge.stroke,
       fromStrokeWidth: edge.strokeWidth,
       toStrokeWidth: edge.strokeWidth,
@@ -2014,7 +2074,7 @@ export function GraphCanvas() {
     const targetKey = `${previewNode.row.sha}-${targetNode.row.sha}`
     const sourceKey = `${previewNode.row.sha}-${sourceNode.row.sha}`
     const targetPlan = planEdgeRoute(previewNode, targetNode, targetKey, occupiedLanes)
-    const sourcePlan = planEdgeRoute(previewNode, sourceNode, sourceKey, occupiedLanes)
+    const sourcePlan = planEdgeRoute(previewNode, sourceNode, sourceKey, occupiedLanes, { adjacentTrack: 'to' })
 
     return {
       previewNode,
@@ -2717,12 +2777,7 @@ export function GraphCanvas() {
               d={isGraphAnimating
                 ? to(graphProgress, (progress) => {
                     if (progress >= 0.999) return edge.path
-                    return buildAnimatedEdgePath(
-                      lerp(edge.fromX1, edge.toX1, progress),
-                      lerp(edge.fromY1, edge.toY1, progress),
-                      lerp(edge.fromX2, edge.toX2, progress),
-                      lerp(edge.fromY2, edge.toY2, progress),
-                    )
+                    return buildAnimatedRoutedEdgePath(edge, progress)
                   })
                 : edge.path}
               stroke={edge.stroke}
