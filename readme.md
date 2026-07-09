@@ -21,7 +21,15 @@ Yes, vibecoded: this codebase is written entirely by AI coding agents, steered b
 
 ## Install & run
 
-Prebuilt standalone binary (embeds the bun runtime — no node/bun needed):
+Requires [Node.js](https://nodejs.org/) 18+ and `git`. Install the CLI from npm:
+
+```sh
+npm install --global @ingit/cli
+```
+
+The npm package installs a small launcher and a prebuilt, self-contained ingit
+binary for Linux or macOS (x64/arm64). Bun is embedded in the binary and does
+not need to be installed separately.
 
 ```sh
 ingit                 # open the repo in the current directory

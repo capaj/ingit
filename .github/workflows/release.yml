@@ -116,6 +116,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # actions/upload-artifact does not preserve file modes.
+          chmod +x cli-linux-x64/ingit cli-linux-arm64/ingit
+          chmod +x cli-darwin-x64/ingit cli-darwin-arm64/ingit
+          chmod +x cli/bin/ingit.cjs
+
           for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64 cli; do
             echo "::group::dry-run $dir"
             (cd "$dir" && npm pack --dry-run)
