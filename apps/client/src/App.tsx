@@ -8,6 +8,23 @@ import { CommitDetail } from './components/CommitDetail'
 import { WorkingTreeDetail } from './components/WorkingTreeDetail'
 import { ErrorDialog } from './components/ErrorDialog'
 import { AgentSessions } from './components/AgentSessions'
+import type { WorktreeChangesResponse } from '@ingit/rpc-contract'
+
+const DEFAULT_TITLE = 'ingit'
+
+function pathBaseName(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, '')
+  const parts = normalized.split(/[\\/]+/)
+  return parts.at(-1) || path
+}
+
+function uncommittedFileCount(changes: WorktreeChangesResponse | null): number {
+  if (!changes) return 0
+  const paths = new Set<string>()
+  for (const file of changes.staged) paths.add(file.path)
+  for (const file of changes.unstaged) paths.add(file.path)
+  return paths.size
+}
 
 export function App() {
   const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
@@ -21,6 +38,7 @@ export function App() {
     showCommitMessages, setShowCommitMessages,
     viewMode, setViewMode,
     worktreeSelected,
+    worktreeChanges,
     reloadFromServer,
   } = useAppStore()
 
@@ -38,6 +56,15 @@ export function App() {
   const selectedCIRuns = selectedCIStatus?.runs ?? []
 
   useEffect(() => { openFromUrl() }, [openFromUrl])
+
+  useEffect(() => {
+    if (status !== 'ready' || !repoPath) {
+      document.title = DEFAULT_TITLE
+      return
+    }
+
+    document.title = `${pathBaseName(repoPath)} (${uncommittedFileCount(worktreeChanges)})`
+  }, [status, repoPath, worktreeChanges])
 
   useEffect(() => {
     let awayAt: number | null = document.visibilityState === 'hidden' ? Date.now() : null
