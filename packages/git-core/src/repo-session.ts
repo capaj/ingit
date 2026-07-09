@@ -238,13 +238,16 @@ export class RepoSession {
 
   /**
    * Commit the index. With `noVerify` the pre-commit and commit-msg hooks are
-   * skipped (git commit --no-verify).
+   * skipped (git commit --no-verify). With `amend` the staged changes and
+   * message replace the previous commit (git commit --amend) rather than
+   * creating a new one.
    */
   async commit(
     message: string,
-    opts: { noVerify?: boolean } = {},
+    opts: { noVerify?: boolean; amend?: boolean } = {},
   ): Promise<{ headSha: string; changes: WorktreeChangesResponse }> {
     const args = ['commit', '-m', message]
+    if (opts.amend) args.push('--amend')
     if (opts.noVerify) args.push('--no-verify')
     try {
       // Hooks can legitimately take a while (linters, test suites).

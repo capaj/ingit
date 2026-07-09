@@ -4,6 +4,30 @@ A fast, animated git GUI that runs in your browser — a **vibecoded alternative
 
 Yes, vibecoded: this codebase is written entirely by AI coding agents, steered by a human with strong opinions about how a git client should feel. If that offends you, ungit is lovely and hand-crafted. If you're curious what an agent-built tool looks like when it's used daily by its author, read on.
 
+## See it in action
+
+Click any preview to watch the full recording.
+
+| Switch branches | Preview and merge |
+| :---: | :---: |
+| [![Switching from main to the payments branch](./video-showcase/01-switch-branches.jpg)](./video-showcase/01-switch-branches.mp4?raw=1) | [![Previewing and merging the payments branch](./video-showcase/02-merge-preview.jpg)](./video-showcase/02-merge-preview.mp4?raw=1) |
+| [Watch branch switching](./video-showcase/01-switch-branches.mp4?raw=1) | [Watch merge preview](./video-showcase/02-merge-preview.mp4?raw=1) |
+
+| Rebase onto main | Cherry-pick a commit |
+| :---: | :---: |
+| [![Rebasing the refactor branch onto main](./video-showcase/03-rebase-branch.jpg)](./video-showcase/03-rebase-branch.mp4?raw=1) | [![Cherry-picking a commit from another branch](./video-showcase/04-cherry-pick.jpg)](./video-showcase/04-cherry-pick.mp4?raw=1) |
+| [Watch rebase](./video-showcase/03-rebase-branch.mp4?raw=1) | [Watch cherry-pick](./video-showcase/04-cherry-pick.mp4?raw=1) |
+
+| Recover with Time Machine | Create a branch |
+| :---: | :---: |
+| [![Recovering a lost commit with Time Machine](./video-showcase/05-time-machine-recover.jpg)](./video-showcase/05-time-machine-recover.mp4?raw=1) | [![Creating a branch from an existing commit](./video-showcase/06-create-branch.jpg)](./video-showcase/06-create-branch.mp4?raw=1) |
+| [Watch Time Machine recovery](./video-showcase/05-time-machine-recover.mp4?raw=1) | [Watch branch creation](./video-showcase/06-create-branch.mp4?raw=1) |
+
+| Move a branch |
+| :---: |
+| [![Moving a branch label to another commit](./video-showcase/07-move-branch.jpg)](./video-showcase/07-move-branch.mp4?raw=1) |
+| [Watch branch moving](./video-showcase/07-move-branch.mp4?raw=1) |
+
 ## What it does
 
 - **Commit graph** — smooth, virtualized history graph with lanes, edges, and ref labels. Loads thousand-commit windows and paginates on scroll.

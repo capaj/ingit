@@ -234,6 +234,8 @@ export const contract = {
       message: z.string().min(1),
       // Pass --no-verify to skip pre-commit / commit-msg hooks.
       noVerify: z.boolean().optional(),
+      // Replace the previous commit (git commit --amend) instead of adding one.
+      amend: z.boolean().optional(),
     }))
     .output(z.object({
       ok: z.boolean(),

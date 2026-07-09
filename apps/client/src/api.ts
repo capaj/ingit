@@ -72,8 +72,8 @@ export function getWorktreeFileDiff(repoId: string, path: string, area: Worktree
   return ensureClient().getWorktreeFileDiff({ repoId, path, area, oldPath })
 }
 
-export function commitStaged(repoId: string, message: string, noVerify: boolean) {
-  return ensureClient().commit({ repoId, message, noVerify })
+export function commitStaged(repoId: string, message: string, noVerify: boolean, amend: boolean) {
+  return ensureClient().commit({ repoId, message, noVerify, amend })
 }
 
 export function queryHistory(_repoId: string, query: HistoryQuery) {

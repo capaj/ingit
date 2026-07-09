@@ -1,0 +1,25 @@
+{
+  "name": "@ingit/video",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "assets": "bun run scripts/prepare-assets.ts",
+    "studio": "bun run assets && remotion studio src/index.ts",
+    "still": "bun run assets && remotion still src/index.ts IngitPromo out/ingit-promo-preview.png --frame=390",
+    "render": "bun run assets && remotion render src/index.ts IngitPromo out/ingit-promo-vertical.mp4 --codec=h264 --crf=17 --pixel-format=yuv420p --audio-codec=aac"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.487",
+    "@remotion/media": "4.0.487",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "4.0.487",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^7.0.2"
+  }
+}

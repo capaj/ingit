@@ -92,7 +92,10 @@ export const router = os.router({
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
     try {
-      const result = await session.commit(input.message, { noVerify: input.noVerify ?? false })
+      const result = await session.commit(input.message, {
+        noVerify: input.noVerify ?? false,
+        amend: input.amend ?? false,
+      })
       return { ok: true, ...result }
     } catch (err) {
       // Plain Errors are masked as "Internal server error" over oRPC; wrap so

@@ -265,6 +265,41 @@ export function predictAppendOnHead(
 }
 
 /**
+ * Amend HEAD: replace the current tip with a new commit sharing its parents but
+ * a fresh SHA and message. Staged changes fold in on reconcile; the graph only
+ * needs HEAD (and its branch) re-pointed without gaining a row. If another ref
+ * still pins the old tip it stays behind as a sibling; otherwise it is replaced.
+ */
+export function predictAmendHead(
+  rows: CommitRow[],
+  refs: RefSummary[],
+  subject: string,
+): OptimisticGraph | null {
+  const current = currentBranchRef(refs)
+  if (!current) return null
+  const headSha = current.targetSha
+  const target = rows.find((r) => r.sha === headSha)
+  if (!target) return null
+
+  const newSha = mintPlaceholderSha('amend')
+  const newEntry: SynthEntry = {
+    sha: newSha,
+    parentShas: target.parentShas,
+    meta: { ...metaOf(target), subject },
+  }
+
+  const pinnedElsewhere = refs.some(
+    (ref) => ref !== current && ref.shortName !== current.shortName && refTipSha(ref) === headSha,
+  )
+  const ordered = pinnedElsewhere
+    ? [newEntry, ...baseEntries(rows)]
+    : baseEntries(rows).map((e) => (e.sha === headSha ? newEntry : e))
+
+  const nextRefs = withRefTarget(refs, current.shortName, newSha)
+  return { rows: assembleRows(ordered, nextRefs, newSha), refs: nextRefs, headSha: newSha }
+}
+
+/**
  * Merge `sourceRefName` into the current branch. Fast-forwards when HEAD is an
  * ancestor of the source; otherwise mints a placeholder merge commit with the
  * two tips as parents.

@@ -46,6 +46,7 @@ import {
   predictMoveRef,
   predictUncommit,
   predictAppendOnHead,
+  predictAmendHead,
   predictMerge,
   predictRebase,
   type OptimisticGraph,
@@ -124,24 +125,38 @@ type StoreSetter = (
 type StoreGetter = () => AppState
 
 // Apply a history-rewriting prediction (commit action / merge / rebase): show
-// the predicted layout, select + scroll to the predicted new HEAD, and take the
-// pending lock. With no prediction we still take the lock to block further
-// actions while the server works.
+// the predicted layout, focus either the requested ref or the predicted new
+// HEAD, scroll to the new HEAD, and take the pending lock. With no prediction
+// we still take the lock to block further actions while the server works.
 function applyOptimisticRewrite(
   set: StoreSetter,
   snapshot: OptimisticSnapshot,
   predicted: OptimisticGraph | null,
+  focusRefName?: string,
 ) {
   if (!predicted) {
-    set({ pendingMutation: true })
+    set({
+      pendingMutation: true,
+      ...(focusRefName
+        ? {
+            selectedSha: null,
+            selectedRefName: focusRefName,
+            commitDetail: null,
+            commitDiff: null,
+            commitPRs: [],
+            commitFileDiffs: {},
+            mergePreview: null,
+          }
+        : {}),
+    })
     return
   }
   set((s) => ({
     pendingMutation: true,
     refs: predicted.refs,
     historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
-    selectedSha: predicted.headSha,
-    selectedRefName: null,
+    selectedSha: focusRefName ? null : predicted.headSha,
+    selectedRefName: focusRefName ?? null,
     scrollToSha: predicted.headSha,
     scrollToKey: s.scrollToKey + 1,
     commitDetail: null,
@@ -379,7 +394,7 @@ interface AppState {
   loadWorktreeFileDiff: (file: WorktreeFile, area: WorktreeDiffArea) => Promise<void>
   loadCommitFileDiff: (sha: string, file: ChangedPath) => Promise<void>
   /** Commit the index. Returns true on success (so the UI can clear the message). */
-  performCommit: (message: string, noVerify: boolean) => Promise<boolean>
+  performCommit: (message: string, noVerify: boolean, amend?: boolean) => Promise<boolean>
   showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
@@ -705,7 +720,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  performCommit: async (message, noVerify) => {
+  performCommit: async (message, noVerify, amend = false) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return false
@@ -715,8 +730,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const rows = snapshot.historyWindow?.rows ?? []
     // Predict the new tip so the graph animates immediately. Unlike other
     // rewrites we keep the worktree panel selected — the user may want to
-    // stage and commit more.
-    const predicted = predictAppendOnHead(rows, snapshot.refs, message.split('\n')[0], 'commit')
+    // stage and commit more. Amend replaces the tip in place; a plain commit
+    // appends a fresh one.
+    const subject = message.split('\n')[0]
+    const predicted = amend
+      ? predictAmendHead(rows, snapshot.refs, subject)
+      : predictAppendOnHead(rows, snapshot.refs, subject, 'commit')
     if (predicted) {
       set({
         pendingMutation: true,
@@ -731,7 +750,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       result = await withTimeout((async () => {
         try {
-          return await commitStaged(repoId, message, noVerify)
+          return await commitStaged(repoId, message, noVerify, amend)
         } catch (err) {
           // A lost session means the server restarted and the old call never
           // ran, so the retry cannot double-commit.
@@ -739,7 +758,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             const res = await openRepo({ path: repoPath })
             repoId = res.repoId
             set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-            return await commitStaged(repoId, message, noVerify)
+            return await commitStaged(repoId, message, noVerify, amend)
           }
           throw err
         }
@@ -758,7 +777,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         : s.graphAnimationSuppressToken,
       refs,
       historyWindow: hist,
-      totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
+      // Amend rewrites the tip rather than adding a commit — the count is unchanged.
+      totalCommitCount: amend
+        ? Math.max(s.totalCommitCount, hist.rows.length)
+        : Math.max(s.totalCommitCount + 1, hist.rows.length),
       worktreeChanges: result.changes,
       worktreeFileDiffs: {},
     }))
@@ -1358,7 +1380,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const snapshot = captureSnapshot(get())
     const predicted = predictMerge(snapshot.historyWindow?.rows ?? [], snapshot.refs, refName)
-    applyOptimisticRewrite(set, snapshot, predicted)
+    const currentBranchName = snapshot.refs.find(
+      (ref) => ref.kind === 'head' && ref.isCurrent,
+    )?.shortName
+    applyOptimisticRewrite(set, snapshot, predicted, currentBranchName)
 
     let result: { ok: boolean; message: string; headSha: string }
     try {
@@ -1398,6 +1423,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const [refs, hist] = await fetchRefsAndHistory(repoId)
     const nextSha = result.headSha
+    const reconciledBranchName = refs.find(
+      (ref) => ref.kind === 'head' && ref.isCurrent,
+    )?.shortName ?? currentBranchName
     set((s) => ({
       pendingMutation: false,
       graphAnimationSuppressToken: predicted
@@ -1406,8 +1434,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       refs,
       historyWindow: hist,
       totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
-      selectedSha: nextSha,
-      selectedRefName: null,
+      selectedSha: reconciledBranchName ? null : nextSha,
+      selectedRefName: reconciledBranchName ?? null,
       scrollToSha: nextSha,
       scrollToKey: s.scrollToKey + 1,
       commitDetail: null,
@@ -1417,7 +1445,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       mergePreview: null,
     }))
 
-    loadSelectedCommitExtras(repoId, nextSha)
+    if (!reconciledBranchName) loadSelectedCommitExtras(repoId, nextSha)
     void get().loadWorktreeChanges()
   },
 
