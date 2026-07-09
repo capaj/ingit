@@ -159,4 +159,31 @@ describe('RepoSession commit', () => {
   test('committing an empty index fails with a readable error', async () => {
     await expect(session.commit('nothing here')).rejects.toThrow(/nothing|clean/i)
   })
+
+  test('amend rewrites the previous commit message without adding a commit', async () => {
+    const before = (await runGit(['rev-parse', 'HEAD'], repoDir)).stdout.trim()
+    const countBefore = Number((await runGit(['rev-list', '--count', 'HEAD'], repoDir)).stdout.trim())
+
+    const result = await session.commit('reworded initial', { amend: true })
+
+    expect(result.headSha).not.toBe(before)
+    const subject = (await runGit(['log', '-1', '--format=%s'], repoDir)).stdout.trim()
+    expect(subject).toBe('reworded initial')
+    const countAfter = Number((await runGit(['rev-list', '--count', 'HEAD'], repoDir)).stdout.trim())
+    expect(countAfter).toBe(countBefore)
+  })
+
+  test('amend folds staged changes into the previous commit', async () => {
+    const countBefore = Number((await runGit(['rev-list', '--count', 'HEAD'], repoDir)).stdout.trim())
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nworld\n')
+    await session.stageFiles(['file.txt'])
+
+    const result = await session.commit('initial with world', { amend: true })
+
+    expect(result.changes.staged).toEqual([])
+    const countAfter = Number((await runGit(['rev-list', '--count', 'HEAD'], repoDir)).stdout.trim())
+    expect(countAfter).toBe(countBefore)
+    const committed = (await runGit(['show', 'HEAD:file.txt'], repoDir)).stdout
+    expect(committed).toBe('hello\nworld\n')
+  })
 })

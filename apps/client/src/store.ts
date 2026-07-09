@@ -46,6 +46,7 @@ import {
   predictMoveRef,
   predictUncommit,
   predictAppendOnHead,
+  predictAmendHead,
   predictMerge,
   predictRebase,
   type OptimisticGraph,
@@ -379,7 +380,7 @@ interface AppState {
   loadWorktreeFileDiff: (file: WorktreeFile, area: WorktreeDiffArea) => Promise<void>
   loadCommitFileDiff: (sha: string, file: ChangedPath) => Promise<void>
   /** Commit the index. Returns true on success (so the UI can clear the message). */
-  performCommit: (message: string, noVerify: boolean) => Promise<boolean>
+  performCommit: (message: string, noVerify: boolean, amend?: boolean) => Promise<boolean>
   showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
   dismissError: () => void
   openRepoByPath: (path: string) => Promise<void>
@@ -705,7 +706,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  performCommit: async (message, noVerify) => {
+  performCommit: async (message, noVerify, amend = false) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return false
@@ -715,8 +716,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const rows = snapshot.historyWindow?.rows ?? []
     // Predict the new tip so the graph animates immediately. Unlike other
     // rewrites we keep the worktree panel selected — the user may want to
-    // stage and commit more.
-    const predicted = predictAppendOnHead(rows, snapshot.refs, message.split('\n')[0], 'commit')
+    // stage and commit more. Amend replaces the tip in place; a plain commit
+    // appends a fresh one.
+    const subject = message.split('\n')[0]
+    const predicted = amend
+      ? predictAmendHead(rows, snapshot.refs, subject)
+      : predictAppendOnHead(rows, snapshot.refs, subject, 'commit')
     if (predicted) {
       set({
         pendingMutation: true,
@@ -731,7 +736,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       result = await withTimeout((async () => {
         try {
-          return await commitStaged(repoId, message, noVerify)
+          return await commitStaged(repoId, message, noVerify, amend)
         } catch (err) {
           // A lost session means the server restarted and the old call never
           // ran, so the retry cannot double-commit.
@@ -739,7 +744,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             const res = await openRepo({ path: repoPath })
             repoId = res.repoId
             set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-            return await commitStaged(repoId, message, noVerify)
+            return await commitStaged(repoId, message, noVerify, amend)
           }
           throw err
         }
@@ -758,7 +763,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         : s.graphAnimationSuppressToken,
       refs,
       historyWindow: hist,
-      totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
+      // Amend rewrites the tip rather than adding a commit — the count is unchanged.
+      totalCommitCount: amend
+        ? Math.max(s.totalCommitCount, hist.rows.length)
+        : Math.max(s.totalCommitCount + 1, hist.rows.length),
       worktreeChanges: result.changes,
       worktreeFileDiffs: {},
     }))

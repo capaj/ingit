@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { InProgressOperationKind, WorktreeFile, WorktreeDiffArea } from '@ingit/rpc-contract'
 import { useAppStore, worktreeDiffKey } from '../store'
+import { getCommitDetail } from '../api'
 import { RefActionButton } from './graph-canvas/ActionButtons'
 import { DiffView } from './DiffView'
 
@@ -168,29 +169,70 @@ function Section({
   )
 }
 
-function CommitBox({ stagedCount }: { stagedCount: number }) {
+function CommitBox({
+  stagedCount,
+  headSha,
+  amendable,
+}: {
+  stagedCount: number
+  headSha?: string
+  amendable: boolean
+}) {
   const performCommit = useAppStore((s) => s.performCommit)
   const pendingMutation = useAppStore((s) => s.pendingMutation)
+  const repoId = useAppStore((s) => s.repoId)
   const [message, setMessage] = useState('')
   const [noVerify, setNoVerify] = useState(() => {
     try { return localStorage.getItem('commitNoVerify') === 'true' } catch { return false }
   })
+  const [amend, setAmend] = useState(false)
+  // The previous message we auto-filled, so unchecking Amend can clear it back
+  // out without discarding text the user typed themselves.
+  const [prefilled, setPrefilled] = useState('')
+
+  // An in-progress merge/rebase (or no HEAD yet) can't be amended.
+  const amending = amend && amendable
 
   const toggleNoVerify = (value: boolean) => {
     try { localStorage.setItem('commitNoVerify', String(value)) } catch { /* ignore */ }
     setNoVerify(value)
   }
 
-  const canCommit = stagedCount > 0 && message.trim().length > 0 && !pendingMutation
+  const toggleAmend = async (value: boolean) => {
+    setAmend(value)
+    if (value) {
+      // Prefill with the previous commit's full message so the user edits it in
+      // place instead of retyping. Skip if they've already written something.
+      if (message.trim().length === 0 && repoId && headSha) {
+        try {
+          const detail = await getCommitDetail(repoId, headSha)
+          const full = detail.body ? `${detail.subject}\n\n${detail.body}` : detail.subject
+          setMessage((cur) => (cur.trim().length === 0 ? full : cur))
+          setPrefilled(full)
+        } catch { /* ignore — the user can type the message */ }
+      }
+    } else if (message === prefilled) {
+      setMessage('')
+      setPrefilled('')
+    }
+  }
+
+  // Amend can rewrite the tip with nothing staged (message-only edit); a plain
+  // commit needs staged changes.
+  const canCommit = (amending || stagedCount > 0) && message.trim().length > 0 && !pendingMutation
 
   const submit = async () => {
     if (!canCommit) return
-    const ok = await performCommit(message.trim(), noVerify)
-    if (ok) setMessage('')
+    const ok = await performCommit(message.trim(), noVerify, amending)
+    if (ok) { setMessage(''); setPrefilled(''); setAmend(false) }
   }
 
+  const buttonLabel = pendingMutation
+    ? (amending ? 'Amending…' : 'Committing…')
+    : `${amending ? 'Amend' : 'Commit'}${stagedCount > 0 ? ` (${stagedCount})` : ''}`
+
   return (
-    <div style={{ borderTop: '1px solid #313244', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+    <div style={{ borderBottom: '1px solid #313244', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
       <textarea
         value={message}
         onChange={(e) => setMessage(e.target.value)}
@@ -200,7 +242,7 @@ function CommitBox({ stagedCount }: { stagedCount: number }) {
             void submit()
           }
         }}
-        placeholder={stagedCount > 0 ? 'Commit message' : 'Stage files to commit'}
+        placeholder={amending ? 'Amend commit message' : stagedCount > 0 ? 'Commit message' : 'Stage files to commit'}
         rows={3}
         style={{
           resize: 'vertical',
@@ -218,18 +260,34 @@ function CommitBox({ stagedCount }: { stagedCount: number }) {
         onBlur={(e) => { e.currentTarget.style.borderColor = '#313244' }}
       />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <label
-          title="Commit with --no-verify (skips pre-commit and commit-msg hooks)"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#a6adc8', cursor: 'pointer', userSelect: 'none' }}
-        >
-          <input
-            type="checkbox"
-            checked={noVerify}
-            onChange={(e) => toggleNoVerify(e.target.checked)}
-            style={{ accentColor: '#fab387', cursor: 'pointer' }}
-          />
-          Skip git hooks
-        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          {amendable && (
+            <label
+              title="Replace the previous commit (git commit --amend) instead of creating a new one"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#a6adc8', cursor: 'pointer', userSelect: 'none' }}
+            >
+              <input
+                type="checkbox"
+                checked={amend}
+                onChange={(e) => void toggleAmend(e.target.checked)}
+                style={{ accentColor: '#cba6f7', cursor: 'pointer' }}
+              />
+              Amend
+            </label>
+          )}
+          <label
+            title="Commit with --no-verify (skips pre-commit and commit-msg hooks)"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#a6adc8', cursor: 'pointer', userSelect: 'none' }}
+          >
+            <input
+              type="checkbox"
+              checked={noVerify}
+              onChange={(e) => toggleNoVerify(e.target.checked)}
+              style={{ accentColor: '#fab387', cursor: 'pointer' }}
+            />
+            Skip git hooks
+          </label>
+        </div>
         <button
           onClick={() => void submit()}
           disabled={!canCommit}
@@ -243,11 +301,10 @@ function CommitBox({ stagedCount }: { stagedCount: number }) {
             padding: '6px 14px',
             cursor: canCommit ? 'pointer' : 'default',
             fontFamily: 'inherit',
+            flexShrink: 0,
           }}
         >
-          {pendingMutation
-            ? 'Committing…'
-            : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ''}`}
+          {buttonLabel}
         </button>
       </div>
     </div>
@@ -350,6 +407,12 @@ export function WorkingTreeDetail() {
         </div>
       </div>
 
+      <CommitBox
+        stagedCount={staged.length}
+        headSha={changes?.headSha}
+        amendable={!operation && !!changes?.headSha}
+      />
+
       <div style={{ flex: 1, overflow: 'auto', padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {operation && <OperationBanner operation={operation} conflictedCount={conflictedCount} />}
         {total === 0 ? (
@@ -379,8 +442,6 @@ export function WorkingTreeDetail() {
           </>
         )}
       </div>
-
-      <CommitBox stagedCount={staged.length} />
     </div>
   )
 }
