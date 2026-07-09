@@ -9,8 +9,7 @@ const HEIGHT = Number(process.env.INGIT_RECORD_HEIGHT ?? 900)
 const FPS = Number(process.env.INGIT_RECORD_FPS ?? 30)
 const PRE_ACTION_DELAY_MS = Number(process.env.INGIT_RECORD_PRE_ACTION_DELAY_MS ?? 2500)
 const PRE_CLICK_DELAY_MS = Number(process.env.INGIT_RECORD_PRE_CLICK_DELAY_MS ?? 900)
-const STAMP = new Date().toISOString().replace(/[:.]/g, '-')
-const OUT_DIR = process.env.INGIT_RECORD_OUT ?? join(process.cwd(), 'social-recordings', STAMP)
+const OUT_DIR = process.env.INGIT_RECORD_OUT ?? join(process.cwd(), 'video-showcase')
 const CHROME_PORT = Number(process.env.INGIT_CHROME_PORT ?? 9230)
 
 type GitEnv = Record<string, string>
@@ -18,6 +17,7 @@ type GitEnv = Record<string, string>
 interface Clip {
   slug: string
   title: string
+  posterTimeSeconds: number
   currentBranch?: string
   run: (page: PageDriver) => Promise<void>
 }
@@ -287,6 +287,12 @@ interface Point {
   y: number
 }
 
+interface TextPointOptions {
+  tag?: string
+  exact?: boolean
+  maxXRatio?: number
+}
+
 class PageDriver {
   constructor(private cdp: CdpClient) { }
 
@@ -501,8 +507,19 @@ class PageDriver {
     await this.cdp.send('Input.insertText', { text })
   }
 
-  async pointForText(text: string, opts: { tag?: string; exact?: boolean } = {}): Promise<Point> {
-    const point = await this.evaluateWithArgs((args: { text: string; tag?: string; exact?: boolean }) => {
+  async replaceText(text: string) {
+    const selected = await this.evaluate(() => {
+      const active = document.activeElement
+      if (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) return false
+      active.setSelectionRange(0, active.value.length)
+      return true
+    })
+    if (!selected) throw new Error('Could not replace text because no text input is focused')
+    await this.insertText(text)
+  }
+
+  async pointForText(text: string, opts: TextPointOptions = {}): Promise<Point> {
+    const point = await this.evaluateWithArgs((args: TextPointOptions & { text: string }) => {
       const tag = args.tag?.toUpperCase()
       const candidates = Array.from(document.querySelectorAll<HTMLElement>(tag ? args.tag! : 'button, div, span, label'))
       const matches = candidates
@@ -516,6 +533,7 @@ class PageDriver {
             && rect.right >= 0
             && rect.top <= window.innerHeight
             && rect.left <= window.innerWidth
+            && (args.maxXRatio === undefined || rect.left + rect.width / 2 <= window.innerWidth * args.maxXRatio)
             && style.display !== 'none'
             && style.visibility !== 'hidden'
             && Number(style.opacity || '1') > 0.01
@@ -541,11 +559,11 @@ class PageDriver {
     return point
   }
 
-  async clickText(text: string, opts: { tag?: string; exact?: boolean } = {}) {
+  async clickText(text: string, opts: TextPointOptions = {}) {
     await this.clickPoint(await this.pointForText(text, opts))
   }
 
-  async hoverText(text: string, opts: { tag?: string; exact?: boolean } = {}) {
+  async hoverText(text: string, opts: TextPointOptions = {}) {
     await this.hoverPoint(await this.pointForText(text, opts))
   }
 
@@ -606,6 +624,7 @@ class PageDriver {
 async function recordClip(page: PageDriver, clip: Clip) {
   const repo = await createDemoRepo(clip.slug, clip.currentBranch)
   const clipDir = join(OUT_DIR, `${clip.slug}-frames`)
+  await rm(clipDir, { recursive: true, force: true })
   await mkdir(clipDir, { recursive: true })
   const videoPath = join(OUT_DIR, `${clip.slug}.mp4`)
 
@@ -643,6 +662,18 @@ async function recordClip(page: PageDriver, clip: Clip) {
     '-movflags', '+faststart',
     videoPath,
   ])
+  await runCommand([
+    'ffmpeg',
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-y',
+    '-ss', String(clip.posterTimeSeconds),
+    '-i', videoPath,
+    '-frames:v', '1',
+    '-vf', 'scale=640:-2',
+    '-q:v', '3',
+    join(OUT_DIR, `${clip.slug}.jpg`),
+  ])
   if (process.env.INGIT_KEEP_FRAMES !== '1') {
     await rm(clipDir, { recursive: true, force: true })
   }
@@ -653,6 +684,7 @@ const clips: Clip[] = [
   {
     slug: '01-switch-branches',
     title: 'Switch branches and recenter the graph',
+    posterTimeSeconds: 3.47,
     run: async (page) => {
       await page.clickText('payments')
       await sleep(450)
@@ -663,6 +695,7 @@ const clips: Clip[] = [
   {
     slug: '02-merge-preview',
     title: 'Preview and merge a feature branch',
+    posterTimeSeconds: 5.9,
     run: async (page) => {
       await page.clickText('payments')
       await sleep(650)
@@ -675,6 +708,7 @@ const clips: Clip[] = [
   {
     slug: '03-rebase-branch',
     title: 'Rebase an experiment branch onto main',
+    posterTimeSeconds: 6.15,
     currentBranch: 'refactor',
     run: async (page) => {
       await page.clickText('refactor')
@@ -688,6 +722,7 @@ const clips: Clip[] = [
   {
     slug: '04-cherry-pick',
     title: 'Cherry-pick a side-branch commit',
+    posterTimeSeconds: 6.05,
     run: async (page) => {
       await page.clickSvgTitle('fix: ship announcement banner')
       await sleep(500)
@@ -700,6 +735,7 @@ const clips: Clip[] = [
   {
     slug: '05-time-machine-recover',
     title: 'Recover a lost commit from Time Machine',
+    posterTimeSeconds: 12.2,
     run: async (page) => {
       await page.clickText('Time Machine', { tag: 'button', exact: true })
       await page.waitForText('LOST')
@@ -708,15 +744,21 @@ const clips: Clip[] = [
       await sleep(500)
       await page.clickText('Recover branch', { tag: 'button', exact: true })
       await sleep(300)
-      await page.insertText('recovered-social-demo')
+      await page.replaceText('recovered-social-demo')
       await sleep(250)
       await page.clickDialogButton('Create')
-      await sleep(1600)
+      await sleep(1200)
+      await page.clickText('History', { tag: 'button', exact: true })
+      await page.waitForText('recovered-social-demo')
+      await sleep(700)
+      await page.clickText('recovered-social-demo', { maxXRatio: 0.7 })
+      await sleep(2400)
     },
   },
   {
     slug: '06-create-branch',
     title: 'Create a branch from any commit',
+    posterTimeSeconds: 7.35,
     run: async (page) => {
       await page.hoverSvgTitle('feat: add activity feed')
       await sleep(350)
@@ -733,6 +775,7 @@ const clips: Clip[] = [
   {
     slug: '07-move-branch',
     title: 'Move a branch label to another commit',
+    posterTimeSeconds: 6.05,
     run: async (page) => {
       await page.clickText('staging')
       await sleep(500)

@@ -125,24 +125,38 @@ type StoreSetter = (
 type StoreGetter = () => AppState
 
 // Apply a history-rewriting prediction (commit action / merge / rebase): show
-// the predicted layout, select + scroll to the predicted new HEAD, and take the
-// pending lock. With no prediction we still take the lock to block further
-// actions while the server works.
+// the predicted layout, focus either the requested ref or the predicted new
+// HEAD, scroll to the new HEAD, and take the pending lock. With no prediction
+// we still take the lock to block further actions while the server works.
 function applyOptimisticRewrite(
   set: StoreSetter,
   snapshot: OptimisticSnapshot,
   predicted: OptimisticGraph | null,
+  focusRefName?: string,
 ) {
   if (!predicted) {
-    set({ pendingMutation: true })
+    set({
+      pendingMutation: true,
+      ...(focusRefName
+        ? {
+            selectedSha: null,
+            selectedRefName: focusRefName,
+            commitDetail: null,
+            commitDiff: null,
+            commitPRs: [],
+            commitFileDiffs: {},
+            mergePreview: null,
+          }
+        : {}),
+    })
     return
   }
   set((s) => ({
     pendingMutation: true,
     refs: predicted.refs,
     historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
-    selectedSha: predicted.headSha,
-    selectedRefName: null,
+    selectedSha: focusRefName ? null : predicted.headSha,
+    selectedRefName: focusRefName ?? null,
     scrollToSha: predicted.headSha,
     scrollToKey: s.scrollToKey + 1,
     commitDetail: null,
@@ -1366,7 +1380,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const snapshot = captureSnapshot(get())
     const predicted = predictMerge(snapshot.historyWindow?.rows ?? [], snapshot.refs, refName)
-    applyOptimisticRewrite(set, snapshot, predicted)
+    const currentBranchName = snapshot.refs.find(
+      (ref) => ref.kind === 'head' && ref.isCurrent,
+    )?.shortName
+    applyOptimisticRewrite(set, snapshot, predicted, currentBranchName)
 
     let result: { ok: boolean; message: string; headSha: string }
     try {
@@ -1406,6 +1423,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const [refs, hist] = await fetchRefsAndHistory(repoId)
     const nextSha = result.headSha
+    const reconciledBranchName = refs.find(
+      (ref) => ref.kind === 'head' && ref.isCurrent,
+    )?.shortName ?? currentBranchName
     set((s) => ({
       pendingMutation: false,
       graphAnimationSuppressToken: predicted
@@ -1414,8 +1434,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       refs,
       historyWindow: hist,
       totalCommitCount: Math.max(s.totalCommitCount + 1, hist.rows.length),
-      selectedSha: nextSha,
-      selectedRefName: null,
+      selectedSha: reconciledBranchName ? null : nextSha,
+      selectedRefName: reconciledBranchName ?? null,
       scrollToSha: nextSha,
       scrollToKey: s.scrollToKey + 1,
       commitDetail: null,
@@ -1425,7 +1445,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       mergePreview: null,
     }))
 
-    loadSelectedCommitExtras(repoId, nextSha)
+    if (!reconciledBranchName) loadSelectedCommitExtras(repoId, nextSha)
     void get().loadWorktreeChanges()
   },
 
