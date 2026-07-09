@@ -8,31 +8,6 @@ A fast, animated git GUI that runs in your browser — a **vibecoded alternative
 
 Yes, vibecoded: this codebase is written entirely by AI coding agents, steered by a human with strong opinions about how a git client should feel. If that offends you, ungit is lovely and hand-crafted. If you're curious what an agent-built tool looks like when it's used daily by its author, read on.
 
-## See it in action
-
-Click any preview to watch the full recording.
-
-https://github.com/user-attachments/assets/7e8f8f2f-057f-4eca-ab80-68c7a9f8a1a9
-
-https://github.com/user-attachments/assets/7da64406-1dc7-4178-b9f3-e3589a4f9891
-
-
-### Rebase onto main 
-https://github.com/user-attachments/assets/633d5fb2-60ac-49a2-93cc-623d40167725
-
-### Cherry-pick a commit 
-
-https://github.com/user-attachments/assets/3eb48f31-b8d2-4494-bcb5-087a217d9948
-
-
-https://github.com/user-attachments/assets/74ce82e9-0963-423e-a962-3ebf7eae248c
-
-https://github.com/user-attachments/assets/0ec99170-801c-4a65-9878-ec7ee49993ba
-
-
-https://github.com/user-attachments/assets/2a869a8f-63a9-4555-b518-10b537e29e52
-
-
 ## What it does
 
 - **Commit graph** — smooth, virtualized history graph with lanes, edges, and ref labels. Loads thousand-commit windows and paginates on scroll.
@@ -64,6 +39,39 @@ bun dev               # server on http://127.0.0.1:8488 + vite dev client
 ```
 
 Linux is the primary target today (agent detection reads `/proc`). The git UI itself is platform-agnostic; macOS/Windows agent detection is a welcome contribution.
+
+## See it in action
+
+Click any preview to watch the full recording.
+
+### Switch branches
+
+https://github.com/user-attachments/assets/7e8f8f2f-057f-4eca-ab80-68c7a9f8a1a9
+
+### Preview and merge
+
+https://github.com/user-attachments/assets/7da64406-1dc7-4178-b9f3-e3589a4f9891
+
+### Rebase onto main
+
+https://github.com/user-attachments/assets/633d5fb2-60ac-49a2-93cc-623d40167725
+
+### Cherry-pick a commit
+
+https://github.com/user-attachments/assets/3eb48f31-b8d2-4494-bcb5-087a217d9948
+
+### Recover with Time Machine
+
+https://github.com/user-attachments/assets/74ce82e9-0963-423e-a962-3ebf7eae248c
+
+### Create a branch
+
+https://github.com/user-attachments/assets/0ec99170-801c-4a65-9878-ec7ee49993ba
+
+### Move a branch
+
+https://github.com/user-attachments/assets/2a869a8f-63a9-4555-b518-10b537e29e52
+
 
 ## How it's built
 
