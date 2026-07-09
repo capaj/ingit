@@ -4,6 +4,12 @@ import { promisify } from 'node:util'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
+import {
+  readDarwinCwds,
+  readDarwinOpenFiles,
+  readDarwinProcesses,
+  type ProcessInfo,
+} from './darwin-processes.js'
 
 const execFile = promisify(execFileCb)
 
@@ -41,23 +47,12 @@ export interface FocusResult {
 }
 
 // ---------------------------------------------------------------------------
-// /proc scanning
+// Process scanning
 // ---------------------------------------------------------------------------
 
-interface ProcInfo {
-  pid: number
-  ppid: number
-  comm: string
-  state: string
-  ttyNr: number
-  /** utime + stime in clock ticks (100/s) — total CPU consumed so far. */
-  cpuTicks: number
-  argv: string[]
-  exe: string
-  cwd: string
-}
+type ProcInfo = ProcessInfo
 
-async function readProc(pid: number): Promise<ProcInfo | null> {
+async function readLinuxProc(pid: number): Promise<ProcInfo | null> {
   try {
     const [statRaw, cmdlineRaw, cwd] = await Promise.all([
       readFile(`/proc/${pid}/stat`, 'utf8'),
@@ -76,14 +71,24 @@ async function readProc(pid: number): Promise<ProcInfo | null> {
       comm,
       state: rest[0] ?? '',
       ttyNr: Number(rest[4] ?? 0),
+      tty: null,
       cpuTicks: Number(rest[11] ?? 0) + Number(rest[12] ?? 0),
       argv,
+      command: argv.join(' '),
       exe: argv[0] ?? '',
       cwd,
     }
   } catch {
     return null
   }
+}
+
+async function readProc(pid: number): Promise<ProcInfo | null> {
+  if (process.platform !== 'darwin') return readLinuxProc(pid)
+  const [info] = await readDarwinProcesses([pid])
+  if (!info) return null
+  info.cwd = (await readDarwinCwds([pid])).get(pid) ?? ''
+  return info
 }
 
 /** Decode stat's tty_nr into a /dev/pts path (unix98 pty majors 136-143). */
@@ -111,15 +116,21 @@ const CLAUDE_INFRA_FLAGS = new Set(['--bg-pty-host', '--bg-spare', '--claude-in-
 const CODEX_INFRA_SUBCOMMANDS = new Set(['mcp-server', 'login', 'logout', 'completion'])
 
 function isCodexAppServer(info: ProcInfo): boolean {
-  return (basename(info.exe) === 'codex' || info.comm === 'codex') && info.argv[1] === 'app-server'
+  return (
+    basename(info.exe) === 'codex'
+    || basename(info.argv[0] ?? '') === 'codex'
+    || info.comm === 'codex'
+  // Recent builds insert global `-c key=value` options before the subcommand.
+  ) && info.argv.slice(1).includes('app-server')
 }
 
 function detectAgent(info: ProcInfo): AgentName | null {
+  const argvExe = info.argv[0] ?? ''
   if (
-    basename(info.exe) === 'claude' || info.comm === 'claude'
+    basename(info.exe) === 'claude' || basename(argvExe) === 'claude' || info.comm === 'claude'
     // Version-pinned binaries live at ~/.local/share/claude/versions/<semver>,
     // so neither basename nor comm reads "claude" for those.
-    || info.exe.includes('/share/claude/versions/')
+    || info.command.includes('/share/claude/versions/')
   ) {
     if (info.argv.some((a) => CLAUDE_INFRA_FLAGS.has(a))) return null
     if (info.argv[1] === 'daemon') return null
@@ -128,7 +139,7 @@ function detectAgent(info: ProcInfo): AgentName | null {
 
   // Codex's npm wrapper (`node .../bin/codex.js`) spawns the real vendored
   // binary as a child; matching on the binary alone avoids double-counting.
-  if (basename(info.exe) === 'codex' || info.comm === 'codex') {
+  if (basename(info.exe) === 'codex' || basename(argvExe) === 'codex' || info.comm === 'codex') {
     const subcommand = info.argv[1]
     if (subcommand !== undefined && CODEX_INFRA_SUBCOMMANDS.has(subcommand)) return null
     return 'codex'
@@ -154,14 +165,14 @@ async function findGitRoot(dir: string): Promise<string | null> {
 }
 
 function classify(info: ProcInfo, agent: AgentName): Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'> | null {
-  if (info.state === 'Z' || !info.cwd) return null
+  if (info.state.startsWith('Z') || !info.cwd) return null
 
-  const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.exe))
+  const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.command) || m.pattern.test(info.exe))
   if (ideMarker) {
     return { pid: info.pid, agent, kind: 'ide', cwd: info.cwd, tty: null, ide: ideMarker.ide }
   }
 
-  const tty = ptsFromTtyNr(info.ttyNr)
+  const tty = info.tty ?? ptsFromTtyNr(info.ttyNr)
   if (tty) return { pid: info.pid, agent, kind: 'terminal', cwd: info.cwd, tty, ide: null }
 
   return { pid: info.pid, agent, kind: 'background', cwd: info.cwd, tty: null, ide: null }
@@ -172,9 +183,10 @@ function classify(info: ProcInfo, agent: AgentName): Omit<AgentSession, 'focusab
 //
 // The title an agent shows in its terminal tab lives in its session transcript,
 // not anywhere readable via the window system. Codex keeps its rollout .jsonl
-// open (visible in /proc/pid/fd). Claude doesn't, so we pair the process with
-// a transcript in ~/.claude/projects/<escaped-cwd>/ whose creation time is
-// closest to the process start time.
+// open (visible in /proc/pid/fd on Linux and lsof on macOS). Claude doesn't,
+// so we pair the process with a transcript in
+// ~/.claude/projects/<escaped-cwd>/ whose creation time is closest to the
+// process start time.
 // ---------------------------------------------------------------------------
 
 // Generous — the UI ellipsizes to the actual available width via CSS.
@@ -309,6 +321,12 @@ async function codexRolloutCwd(path: string): Promise<string | null> {
 /** Rollout files a codex process currently holds open. */
 async function openCodexRollouts(pid: number): Promise<string[]> {
   const rollouts = new Set<string>()
+  if (process.platform === 'darwin') {
+    for (const path of await readDarwinOpenFiles(pid)) {
+      if (path.includes('/.codex/sessions/') && path.endsWith('.jsonl')) rollouts.add(path)
+    }
+    return [...rollouts]
+  }
   try {
     for (const fd of await readdir(`/proc/${pid}/fd`)) {
       const link = await readlink(`/proc/${pid}/fd/${fd}`).catch(() => '')
@@ -478,13 +496,24 @@ async function scanAgentProcs(): Promise<{
   procs: Array<{ info: ProcInfo; agent: AgentName }>
   codexAppServers: ProcInfo[]
 }> {
-  const entries = await readdir('/proc')
-  const pids = entries.filter((e) => /^\d+$/.test(e)).map(Number)
-  const infos = await Promise.all(pids.map(readProc))
+  let infos: Array<ProcInfo | null>
+  if (process.platform === 'darwin') {
+    const darwinInfos = await readDarwinProcesses()
+    const candidates = darwinInfos.filter((info) => isCodexAppServer(info) || detectAgent(info) !== null)
+    const cwds = await readDarwinCwds(candidates.map((info) => info.pid))
+    for (const info of candidates) info.cwd = cwds.get(info.pid) ?? ''
+    infos = candidates
+  } else {
+    // procfs can also be unavailable in restricted Linux containers. Agent
+    // discovery is optional and must never take down the polling RPC.
+    const entries = await readdir('/proc').catch(() => [] as string[])
+    const pids = entries.filter((e) => /^\d+$/.test(e)).map(Number)
+    infos = await Promise.all(pids.map(readLinuxProc))
+  }
   const procs: Array<{ info: ProcInfo; agent: AgentName }> = []
   const codexAppServers: ProcInfo[] = []
   for (const info of infos) {
-    if (!info || info.state === 'Z') continue
+    if (!info || info.state.startsWith('Z')) continue
     if (isCodexAppServer(info)) {
       codexAppServers.push(info)
       continue
@@ -642,6 +671,7 @@ async function focusViaWindowCalls(pids: Set<number>, target: FocusTarget): Prom
 
 /** Try each backend to raise a window owned by any of `pids`. */
 async function focusWindowOfPids(pids: Set<number>, target: FocusTarget): Promise<string | null> {
+  if (process.platform === 'darwin') return null
   try {
     if (await focusViaWindowCalls(pids, target)) return 'window-calls'
   } catch { /* extension missing — fall through */ }
@@ -670,18 +700,22 @@ let staticCapsPromise: Promise<Omit<ProbedCapabilities, 'hasWindowCalls'>> | nul
 async function getCapabilities(): Promise<ProbedCapabilities> {
   staticCapsPromise ??= (async () => {
     const [hasWmctrl, ideCliChecks] = await Promise.all([
-      commandExists('wmctrl'),
+      process.platform === 'darwin' ? false : commandExists('wmctrl'),
       Promise.all(IDE_MARKERS.map(async (m) => [m.cli, await commandExists(m.cli)] as const)),
     ])
     return {
-      displayServer: process.env.XDG_SESSION_TYPE ?? 'unknown',
+      displayServer: process.platform === 'darwin'
+        ? 'aqua'
+        : process.env.XDG_SESSION_TYPE ?? 'unknown',
       hasWmctrl,
       ideClis: new Map(ideCliChecks),
     }
   })()
   const [staticCaps, hasWindowCalls] = await Promise.all([
     staticCapsPromise,
-    listShellWindows().then(() => true).catch(() => false),
+    process.platform === 'darwin'
+      ? false
+      : listShellWindows().then(() => true).catch(() => false),
   ])
   return { ...staticCaps, hasWindowCalls }
 }
@@ -716,7 +750,7 @@ export async function listAgentSessions(): Promise<{
     rollout: string
   }> = []
   for (const info of codexAppServers) {
-    const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.exe))
+    const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.command) || m.pattern.test(info.exe))
     for (const rollout of await openCodexRollouts(info.pid)) {
       const cwd = await codexRolloutCwd(rollout)
       if (!cwd) continue
@@ -902,7 +936,9 @@ export async function focusAgentSession(pid: number, cwdOverride?: string): Prom
   const caps = await getCapabilities()
   return {
     ok: false,
-    error: caps.hasWindowCalls || caps.hasWmctrl
+    error: process.platform === 'darwin'
+      ? 'Terminal window focusing is not yet implemented on macOS'
+      : caps.hasWindowCalls || caps.hasWmctrl
       ? 'No window found for this session (terminal may be on another display)'
       : caps.displayServer === 'wayland'
         ? "No window-activation backend. Install the 'Window Calls' GNOME Shell extension (extensions.gnome.org/extension/4724)."

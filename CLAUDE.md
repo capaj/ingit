@@ -27,7 +27,7 @@ Bun workspaces monorepo — a browser git GUI (vibecoded ungit alternative):
 - `packages/rpc-contract` — zod-typed oRPC contract shared by client and server. **Single source of truth for the API**: to add an endpoint, define it in `src/contract.ts`, implement it in `apps/server/src/rpc-router.ts`, then call it type-safe from the client (`apps/client/src/api.ts`).
 - `packages/git-core` — spawns real git (long-lived `rev-list` / `cat-file --batch` processes), output parsers, and `RepoSession` which owns per-repo state. No libgit2 — everything is plain git commands.
 - `packages/graph-core` — pure layout logic: lane allocation and edge building for the commit graph. No I/O.
-- `apps/server` — `node:http` + WebSocket (`ws`) server; hosts the oRPC router, serves the built client, agent-session detection (`agent-sessions.ts`, reads `/proc` — Linux-first), GitHub CI status polling.
+- `apps/server` — `node:http` + WebSocket (`ws`) server; hosts the oRPC router, serves the built client, agent-session detection (`agent-sessions.ts`, with `/proc` on Linux and `ps`/`lsof` on macOS), GitHub CI status polling.
 - `apps/client` — React 19 + Vite + Zustand. Key concept: **optimistic mutations** — `optimistic-graph.ts` predicts the post-mutation graph layout so checkout/merge/rebase/etc. animate immediately, then reconciles against the real server result; failures roll back.
 - `apps/cli` — wraps the server into a standalone executable that embeds the bun runtime.
 

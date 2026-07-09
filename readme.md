@@ -46,7 +46,8 @@ bun install
 bun dev               # server on http://127.0.0.1:8488 + vite dev client
 ```
 
-Linux is the primary target today (agent detection reads `/proc`). The git UI itself is platform-agnostic; macOS/Windows agent detection is a welcome contribution.
+Linux and macOS are supported. Agent detection reads `/proc` on Linux and uses
+the system `ps` and `lsof` tools on macOS. The git UI itself is platform-agnostic.
 
 ## See it in action
 
@@ -111,7 +112,7 @@ PRs welcome. Ground rules:
 
 Good first areas:
 
-- macOS agent detection + window focusing (AppleScript can target Terminal/iTerm tabs by tty — cleaner than what Wayland allows).
+- macOS window focusing (AppleScript can target Terminal/iTerm tabs by tty — cleaner than what Wayland allows).
 - KDE Wayland focusing backend (`kdotool`).
 - More agents (Gemini CLI, Amp, opencode…) — detection lives in `apps/server/src/agent-sessions.ts` and is ~20 lines per agent.
 - Diff view polish, partial-file staging.
@@ -124,8 +125,8 @@ Models used: mostly codex with GPT-5.5, some with opus 4.8
 
 ## Supported Platforms
 
-- Linux (primary target, agent detection reads `/proc`)
-- macOS 
+- Linux (`/proc` agent detection and GNOME/X11 window focusing)
+- macOS (`ps`/`lsof` agent detection; window focusing is not yet implemented)
 
 ## License
 
