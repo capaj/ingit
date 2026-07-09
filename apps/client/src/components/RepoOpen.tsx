@@ -377,6 +377,18 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           padding: 14px 16px 16px;
         }
 
+        .repo-open-agents-brand {
+          display: flex;
+          justify-content: center;
+          margin-bottom: 8px;
+        }
+
+        .repo-open-agents-logo {
+          width: 34px;
+          height: 34px;
+          display: block;
+        }
+
         .repo-open-agents-title {
           color: #eef0f6;
           font-size: 14px;
@@ -401,6 +413,14 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           display: flex;
           flex-direction: column;
           overflow: hidden;
+        }
+
+        .repo-open-version {
+          flex-shrink: 0;
+          align-self: center;
+          color: #777d8e;
+          font-size: 12px;
+          line-height: 1;
         }
 
         .repo-open-header {
@@ -910,56 +930,63 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
       `}</style>
 
       <div className="repo-open-stack">
-      {agentGroups.length > 0 && (
-        <section className="repo-open-agents-card">
-          <div className="repo-open-agents-title">Running agent sessions</div>
-          <div className="repo-open-agents-grid">
-            {agentGroups.map((group) => (
-              <div key={group.cwd} className="repo-open-list-button repo-open-claude-row">
-                <span className="repo-open-list-name repo-open-agent-name">
-                  {[...new Set(group.sessions.map((s) => s.agent))].map((agent) => (
-                    <AgentIcon
-                      key={agent}
-                      agent={agent}
-                      size={15}
-                      busy={group.sessions.some((s) => s.agent === agent && s.busy)}
-                    />
-                  ))}
-                  {getRepoLabel(group.cwd)}
-                </span>
-                <span className="repo-open-list-path">{group.cwd}</span>
-                <span className="repo-open-claude-chips">
-                  {group.sessions.map((session) => (
-                    <button
-                      key={`${session.pid}:${session.cwd}`}
-                      type="button"
-                      className={`repo-open-claude-chip${session.busy ? ' repo-open-claude-chip-busy' : ''}`}
-                      disabled={!session.focusable || focusingPid !== null}
-                      title={session.focusable
-                        ? `Focus this session's window — ${agentSessionKindLabel(session)} (pid ${session.pid})`
-                        : `${agentSessionKindLabel(session)} (pid ${session.pid}) — window focus unavailable for this session`}
-                      onClick={() => void focusAgentSession(session)}
-                    >
-                      {focusingPid === session.pid
-                        ? 'focusing…'
-                        : `${session.title ?? `${session.agent === 'codex' ? 'codex ' : ''}${agentSessionKindLabel(session)}`}${session.count > 1 ? ` ×${session.count}` : ''}`}
-                    </button>
-                  ))}
-                </span>
-                <button
-                  type="button"
-                  className="repo-open-row-action repo-open-claude-open"
-                  onClick={() => onOpen(group.cwd)}
-                >
-                  Open
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+        {agentGroups.length > 0 && (
+          <section className="repo-open-agents-card">
+            <div className="repo-open-agents-brand">
+              <img
+                className="repo-open-agents-logo"
+                src="/press-kit/ingit-icon-mark-light.svg"
+                alt="ingit"
+              />
+            </div>
+            <div className="repo-open-agents-title">Running agent sessions</div>
+            <div className="repo-open-agents-grid">
+              {agentGroups.map((group) => (
+                <div key={group.cwd} className="repo-open-list-button repo-open-claude-row">
+                  <span className="repo-open-list-name repo-open-agent-name">
+                    {[...new Set(group.sessions.map((s) => s.agent))].map((agent) => (
+                      <AgentIcon
+                        key={agent}
+                        agent={agent}
+                        size={15}
+                        busy={group.sessions.some((s) => s.agent === agent && s.busy)}
+                      />
+                    ))}
+                    {getRepoLabel(group.cwd)}
+                  </span>
+                  <span className="repo-open-list-path">{group.cwd}</span>
+                  <span className="repo-open-claude-chips">
+                    {group.sessions.map((session) => (
+                      <button
+                        key={`${session.pid}:${session.cwd}`}
+                        type="button"
+                        className={`repo-open-claude-chip${session.busy ? ' repo-open-claude-chip-busy' : ''}`}
+                        disabled={!session.focusable || focusingPid !== null}
+                        title={session.focusable
+                          ? `Focus this session's window — ${agentSessionKindLabel(session)} (pid ${session.pid})`
+                          : `${agentSessionKindLabel(session)} (pid ${session.pid}) — window focus unavailable for this session`}
+                        onClick={() => void focusAgentSession(session)}
+                      >
+                        {focusingPid === session.pid
+                          ? 'focusing…'
+                          : `${session.title ?? `${session.agent === 'codex' ? 'codex ' : ''}${agentSessionKindLabel(session)}`}${session.count > 1 ? ` ×${session.count}` : ''}`}
+                      </button>
+                    ))}
+                  </span>
+                  <button
+                    type="button"
+                    className="repo-open-row-action repo-open-claude-open"
+                    onClick={() => onOpen(group.cwd)}
+                  >
+                    Open
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
-      <div className="repo-open-shell">
+        <div className="repo-open-shell">
         <div className="repo-open-header">
           <h1 className="repo-open-title">Open repository</h1>
 
@@ -1119,6 +1146,7 @@ export function RepoOpen({ onOpen, error, recentRepos, discoveredFolder, discove
           </aside>
         </div>
       </div>
+        <div className="repo-open-version">v{__APP_VERSION__}</div>
       </div>
     </div>
   )
