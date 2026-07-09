@@ -198,6 +198,8 @@ interface RefPlacement {
 
 interface VisibleEdgeItem {
   key: string
+  fromSha: string
+  toSha: string
   path: string
   plan: EdgeRoutePlan
   bundleOffset: number
@@ -1207,6 +1209,8 @@ function buildVisibleEdgeItems(
     const colorNode = edge.isMerge ? edge.to : edge.from
     return {
       key: edge.key,
+      fromSha: edge.from.row.sha,
+      toSha: edge.to.row.sha,
       path: routedEdgePath(edge.from, edge.to, plan, bundleOffset),
       plan,
       bundleOffset,
@@ -1822,6 +1826,23 @@ export function GraphCanvas() {
         const displayEdge = toEdge ?? fromEdge
         if (!displayEdge) return null
 
+        // When an edge enters or exits but its endpoint commits survive, keep
+        // it attached to those commits as they move. This is especially
+        // important for rebase, where one parent edge exits while another
+        // enters; offsetting either whole edge leaves a rail floating in space.
+        const enteringFromNode = toEdge
+          ? graphAnimation.fromLayout.shaToNode.get(toEdge.fromSha)
+          : undefined
+        const enteringToNode = toEdge
+          ? graphAnimation.fromLayout.shaToNode.get(toEdge.toSha)
+          : undefined
+        const exitingFromNode = fromEdge
+          ? graphAnimation.toLayout.shaToNode.get(fromEdge.fromSha)
+          : undefined
+        const exitingToNode = fromEdge
+          ? graphAnimation.toLayout.shaToNode.get(fromEdge.toSha)
+          : undefined
+
         const sortY = Math.min(toEdge?.y1 ?? fromEdge?.y1 ?? 0, toEdge?.y2 ?? fromEdge?.y2 ?? 0)
         return {
           sortY,
@@ -1837,14 +1858,14 @@ export function GraphCanvas() {
             toStrokeWidth: toEdge?.strokeWidth ?? displayEdge.strokeWidth,
             fromOpacity: fromEdge?.opacity ?? 0,
             toOpacity: toEdge?.opacity ?? 0,
-            fromX1: fromEdge?.x1 ?? displayEdge.x1,
-            fromY1: fromEdge ? fromEdge.y1 : displayEdge.y1 + GRAPH_ENTER_OFFSET_Y,
-            fromX2: fromEdge?.x2 ?? displayEdge.x2,
-            fromY2: fromEdge ? fromEdge.y2 : displayEdge.y2 + GRAPH_ENTER_OFFSET_Y,
-            toX1: toEdge?.x1 ?? displayEdge.x1,
-            toY1: toEdge ? toEdge.y1 : displayEdge.y1 - GRAPH_EXIT_OFFSET_Y,
-            toX2: toEdge?.x2 ?? displayEdge.x2,
-            toY2: toEdge ? toEdge.y2 : displayEdge.y2 - GRAPH_EXIT_OFFSET_Y,
+            fromX1: fromEdge?.x1 ?? enteringFromNode?.x ?? displayEdge.x1,
+            fromY1: fromEdge?.y1 ?? enteringFromNode?.y ?? displayEdge.y1 + GRAPH_ENTER_OFFSET_Y,
+            fromX2: fromEdge?.x2 ?? enteringToNode?.x ?? displayEdge.x2,
+            fromY2: fromEdge?.y2 ?? enteringToNode?.y ?? displayEdge.y2 + GRAPH_ENTER_OFFSET_Y,
+            toX1: toEdge?.x1 ?? exitingFromNode?.x ?? displayEdge.x1,
+            toY1: toEdge?.y1 ?? exitingFromNode?.y ?? displayEdge.y1 - GRAPH_EXIT_OFFSET_Y,
+            toX2: toEdge?.x2 ?? exitingToNode?.x ?? displayEdge.x2,
+            toY2: toEdge?.y2 ?? exitingToNode?.y ?? displayEdge.y2 - GRAPH_EXIT_OFFSET_Y,
           } satisfies RenderedEdgeItem,
         }
       })

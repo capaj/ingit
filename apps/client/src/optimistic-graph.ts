@@ -360,24 +360,24 @@ export function predictRebase(
   const replayedShas = new Set(replayed.map((r) => r.sha))
   const oldestReplayed = replayed[replayed.length - 1]
 
-  // Rebuild ordering: pull the replayed block out and re-seat it directly above
-  // the target tip so the branch visibly slides down onto it.
+  // Pull the replayed block out before rebuilding it with its new parent.
   const remaining = baseEntries(rows).filter((e) => !replayedShas.has(e.sha))
-  const ontoIndex = remaining.findIndex((e) => e.sha === ontoSha)
-  if (ontoIndex === -1) return null
+  if (!remaining.some((e) => e.sha === ontoSha)) return null
 
+  const rewrittenAt = Math.floor(Date.now() / 1000)
   const replayedEntries: SynthEntry[] = replayed.map((r) => ({
     sha: r.sha,
     // The oldest replayed commit reparents onto the target tip; the rest keep
     // pointing at the next (preserved) replayed commit.
     parentShas: r.sha === oldestReplayed.sha ? [ontoSha] : r.parentShas,
-    meta: metaOf(r),
+    // Git gives rebased commits fresh committer dates. The server's date-ordered
+    // history consequently puts this rewritten block ahead of unrelated tips.
+    meta: { ...metaOf(r), committerUnix: rewrittenAt },
   }))
 
   const ordered = [
-    ...remaining.slice(0, ontoIndex),
     ...replayedEntries,
-    ...remaining.slice(ontoIndex),
+    ...remaining,
   ]
 
   // HEAD sha is unchanged (placeholder), so the current branch label stays put.
