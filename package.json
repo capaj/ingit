@@ -12,10 +12,11 @@
     "build": "bun run --filter '*' build",
     "build:packages": "bun run --filter '@ingit/rpc-contract' build && bun run --filter '@ingit/git-core' build && bun run --filter '@ingit/graph-core' build",
     "cli:release": "bun run --filter '@ingit/cli' release",
-    "typecheck": "tsc --build",
+    "typecheck": "tsc --build && tsc -p tsconfig.scripts.json",
     "bump": "bunx npm-check-updates -u --workspaces --root && bun install"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.14",
     "typescript": "^7.0.2"
   }
 }
