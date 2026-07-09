@@ -343,6 +343,7 @@ class PageDriver {
     await this.evaluate(() => {
       type RecordingWindow = Window & {
         __ingitMoveRecordingCursor?: (point: { x: number; y: number }) => void
+        __ingitShowRecordingClick?: (point: { x: number; y: number }) => void
       }
 
       const existing = document.getElementById('__ingit_recording_cursor')
@@ -372,7 +373,36 @@ class PageDriver {
       const move = (point: { x: number; y: number }) => {
         cursor.style.transform = `translate3d(${Math.round(point.x - 4)}px, ${Math.round(point.y - 3)}px, 0)`
       }
-      ;(window as RecordingWindow).__ingitMoveRecordingCursor = move
+      const recordingWindow = window as RecordingWindow
+      recordingWindow.__ingitMoveRecordingCursor = move
+      recordingWindow.__ingitShowRecordingClick = (point: { x: number; y: number }) => {
+        const indicator = document.createElement('div')
+        indicator.style.cssText = [
+          'position: fixed',
+          `left: ${Math.round(point.x - 9)}px`,
+          `top: ${Math.round(point.y - 9)}px`,
+          'width: 18px',
+          'height: 18px',
+          'box-sizing: border-box',
+          'z-index: 2147483646',
+          'pointer-events: none',
+          'border: 3px solid #ef4444',
+          'border-radius: 50%',
+          'background: rgba(239, 68, 68, 0.22)',
+          'box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75)',
+        ].join(';')
+        document.body.appendChild(indicator)
+        const animation = indicator.animate([
+          { transform: 'scale(0.65)', opacity: 1 },
+          { transform: 'scale(1)', opacity: 0.95, offset: 0.28 },
+          { transform: 'scale(1.65)', opacity: 0 },
+        ], {
+          duration: 500,
+          easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+          fill: 'forwards',
+        })
+        animation.addEventListener('finish', () => indicator.remove(), { once: true })
+      }
       move({ x: window.innerWidth - 96, y: 80 })
     })
   }
@@ -383,6 +413,15 @@ class PageDriver {
         __ingitMoveRecordingCursor?: (point: Point) => void
       }
       ;(window as RecordingWindow).__ingitMoveRecordingCursor?.(nextPoint)
+    }, point).catch(() => { })
+  }
+
+  async showClickIndicator(point: Point) {
+    await this.evaluateWithArgs((clickPoint: Point) => {
+      type RecordingWindow = Window & {
+        __ingitShowRecordingClick?: (point: Point) => void
+      }
+      ;(window as RecordingWindow).__ingitShowRecordingClick?.(clickPoint)
     }, point).catch(() => { })
   }
 
@@ -448,6 +487,7 @@ class PageDriver {
     await this.moveCursor(point)
     await this.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none' })
     await sleep(PRE_CLICK_DELAY_MS)
+    await this.showClickIndicator(point)
     await this.cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
     await this.cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
   }
