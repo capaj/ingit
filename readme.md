@@ -1,3 +1,7 @@
+
+
+
+
 # ingit
 
 A fast, animated git GUI that runs in your browser — a **vibecoded alternative to [ungit](https://github.com/FredrikNoren/ungit)**.
@@ -8,25 +12,26 @@ Yes, vibecoded: this codebase is written entirely by AI coding agents, steered b
 
 Click any preview to watch the full recording.
 
-| Switch branches | Preview and merge |
-| :---: | :---: |
-| [![Switching from main to the payments branch](./video-showcase/01-switch-branches.jpg)](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/01-switch-branches.mp4) | [![Previewing and merging the payments branch](./video-showcase/02-merge-preview.jpg)](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/02-merge-preview.mp4) |
-| [Watch branch switching](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/01-switch-branches.mp4) | [Watch merge preview](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/02-merge-preview.mp4) |
+https://github.com/user-attachments/assets/7e8f8f2f-057f-4eca-ab80-68c7a9f8a1a9
 
-| Rebase onto main | Cherry-pick a commit |
-| :---: | :---: |
-| [![Rebasing the refactor branch onto main](./video-showcase/03-rebase-branch.jpg)](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/03-rebase-branch.mp4) | [![Cherry-picking a commit from another branch](./video-showcase/04-cherry-pick.jpg)](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/04-cherry-pick.mp4) |
-| [Watch rebase](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/03-rebase-branch.mp4) | [Watch cherry-pick](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/04-cherry-pick.mp4) |
+https://github.com/user-attachments/assets/7da64406-1dc7-4178-b9f3-e3589a4f9891
 
-| Recover with Time Machine | Create a branch |
-| :---: | :---: |
-| [![Recovering a lost commit with Time Machine](./video-showcase/05-time-machine-recover.jpg)](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/05-time-machine-recover.mp4) | [![Creating a branch from an existing commit](./video-showcase/06-create-branch.jpg)](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/06-create-branch.mp4) |
-| [Watch Time Machine recovery](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/05-time-machine-recover.mp4) | [Watch branch creation](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/06-create-branch.mp4) |
 
-| Move a branch |
-| :---: |
-| [![Moving a branch label to another commit](./video-showcase/07-move-branch.jpg)](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/07-move-branch.mp4) |
-| [Watch branch moving](https://github.com/capaj/ingit/raw/refs/heads/master/video-showcase/07-move-branch.mp4) |
+### Rebase onto main 
+https://github.com/user-attachments/assets/633d5fb2-60ac-49a2-93cc-623d40167725
+
+### Cherry-pick a commit 
+
+https://github.com/user-attachments/assets/3eb48f31-b8d2-4494-bcb5-087a217d9948
+
+
+https://github.com/user-attachments/assets/74ce82e9-0963-423e-a962-3ebf7eae248c
+
+https://github.com/user-attachments/assets/0ec99170-801c-4a65-9878-ec7ee49993ba
+
+
+https://github.com/user-attachments/assets/2a869a8f-63a9-4555-b518-10b537e29e52
+
 
 ## What it does
 
