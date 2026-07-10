@@ -1,3 +1,4 @@
+import assert from 'node:assert'
 import { implement, ORPCError } from '@orpc/server'
 import { GitCommandError } from '@ingit/git-core'
 import { contract } from '@ingit/rpc-contract'
@@ -14,6 +15,12 @@ const sessionManager = new SessionManager()
 export { sessionManager }
 
 const os = implement(contract)
+
+function getSession(repoId: string) {
+  const session = sessionManager.getSession(repoId)
+  assert(session, `No session found for repoId: ${repoId}`)
+  return session
+}
 
 /** Detect a push rejected because the remote tip isn't an ancestor of ours. */
 function isNonFastForwardRejection(stderr: string): boolean {
@@ -51,26 +58,22 @@ export const router = os.router({
   }),
 
   getRefs: os.getRefs.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return session.getRefs()
   }),
 
   getStatus: os.getStatus.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return session.getStatus()
   }),
 
   getWorktreeChanges: os.getWorktreeChanges.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return session.getWorktreeChanges()
   }),
 
   stageAction: os.stageAction.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     switch (input.action) {
       case 'stage':
         return session.stageFiles(input.paths)
@@ -84,14 +87,12 @@ export const router = os.router({
   }),
 
   getWorktreeFileDiff: os.getWorktreeFileDiff.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return session.getWorktreeFileDiff(input.path, input.area, input.oldPath)
   }),
 
   commit: os.commit.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     try {
       const result = await session.commit(input.message, {
         noVerify: input.noVerify ?? false,
@@ -108,20 +109,17 @@ export const router = os.router({
   }),
 
   queryHistory: os.queryHistory.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return handleHistoryQuery(session, input)
   }),
 
   getCommitDetail: os.getCommitDetail.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return session.getCommitDetail(input.sha)
   }),
 
   getCommitAuthor: os.getCommitAuthor.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     if (!session.githubUrl) return { avatarUrl: null }
 
     const ownerRepo = extractOwnerRepoFromGithubUrl(session.githubUrl)
@@ -130,21 +128,18 @@ export const router = os.router({
   }),
 
   getCommitDiff: os.getCommitDiff.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     const diff = await session.getCommitDiff(input.sha)
     return { sha: input.sha, ...diff }
   }),
 
   getCommitFileDiff: os.getCommitFileDiff.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return session.getCommitFileDiff(input.sha, input.path, input.oldPath)
   }),
 
   getCommitPRs: os.getCommitPRs.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     if (!session.githubUrl) return []
 
     // Extract owner/repo from githubUrl like https://github.com/owner/repo
@@ -185,8 +180,7 @@ export const router = os.router({
   }),
 
   getCommitCIStatus: os.getCommitCIStatus.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     if (!session.githubUrl) return { state: 'none' as const, runs: [] }
 
     const ownerRepo = extractOwnerRepoFromGithubUrl(session.githubUrl)
@@ -196,8 +190,7 @@ export const router = os.router({
   }),
 
   getCommitCIStatuses: os.getCommitCIStatuses.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
 
     const emptyResult = Object.fromEntries(
       input.shas.map((sha) => [sha, { state: 'none' as const, runs: [] }]),
@@ -214,8 +207,7 @@ export const router = os.router({
   }),
 
   commitAction: os.commitAction.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
 
     const result = await (input.action === 'cherry-pick'
       ? session.cherryPick(input.sha)
@@ -228,42 +220,36 @@ export const router = os.router({
   }),
 
   getMergePreview: os.getMergePreview.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return getMergePreview(session, input.refName)
   }),
 
   mergeRef: os.mergeRef.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     const result = await session.mergeRef(input.refName).catch(rethrowWithDetail)
     return { ok: true, ...result }
   }),
 
   rebaseRef: os.rebaseRef.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     const result = await session.rebaseRef(input.refName).catch(rethrowWithDetail)
     return { ok: true, ...result }
   }),
 
   abortOperation: os.abortOperation.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     const result = await session.abortOperation(input.operation).catch(rethrowWithDetail)
     return { ok: true, ...result }
   }),
 
   continueOperation: os.continueOperation.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     const result = await session.continueOperation(input.operation).catch(rethrowWithDetail)
     return { ok: true, ...result }
   }),
 
   refAction: os.refAction.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     let message = ''
     switch (input.action) {
       case 'checkout': {
@@ -321,8 +307,7 @@ export const router = os.router({
   }),
 
   getReflog: os.getReflog.handler(async ({ input }) => {
-    const session = sessionManager.getSession(input.repoId)
-    if (!session) throw new Error('No session found for this repoId')
+    const session = getSession(input.repoId)
     return session.getReflog(input.ref ?? 'HEAD', input.maxCount ?? 300)
   }),
 
