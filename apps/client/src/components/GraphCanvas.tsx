@@ -3,6 +3,7 @@ import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
+import { shouldRequestMoreHistory } from '../history-pagination'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
@@ -1274,7 +1275,6 @@ function shouldAnimateGraphMutation(
 export function GraphCanvas() {
   const histWindow = useAppStore((state) => state.historyWindow)
   const refs = useAppStore((state) => state.refs)
-  const totalCommitCount = useAppStore((state) => state.totalCommitCount)
   const selectedSha = useAppStore((state) => state.selectedSha)
   const selectedRefName = useAppStore((state) => state.selectedRefName)
   const mergePreview = useAppStore((state) => state.mergePreview)
@@ -1659,36 +1659,20 @@ export function GraphCanvas() {
         forceRender()
       }
 
-      // Request more data when scrolled past the last loaded commit
+      // Start fetching the next page halfway through the loaded history so it
+      // is normally ready before the user reaches the end.
       if (histWindow && histWindow.hasMoreAfter && layout) {
-        const lastLoadedY = layout.nodes.length * NODE_SPACING_Y * zoomRef.current
-        const viewBottom = el.scrollTop + el.clientHeight
-        if (viewBottom > lastLoadedY - el.clientHeight) {
+        const loadedContentHeight = layout.totalHeight * zoomRef.current
+        if (shouldRequestMoreHistory(el.scrollTop, el.clientHeight, loadedContentHeight)) {
           void requestMore('down')
         }
       }
     }
 
-    // Initial
-    if (layout) {
-      viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
-      setClientHeight(el.clientHeight)
-      lastObservedScrollTopRef.current = el.scrollTop
-      syncScrollTopState(el.scrollTop)
-      if (timeLabelsLayerRef.current) {
-        timeLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
-      }
-      if (commitLabelsLayerRef.current) {
-        commitLabelsLayerRef.current.style.transform = `translateY(${-el.scrollTop}px)`
-      }
-      const { firstIdx, lastIdx } = computeVisibleRange(el.scrollTop, el.clientHeight, layout.nodes.length, zoomRef.current)
-      lastRenderedRange.current = { firstIdx, lastIdx }
-      forceRender()
-    }
-
     el.addEventListener('scroll', check, { passive: true })
     const ro = new ResizeObserver(() => check())
     ro.observe(el)
+    check()
     return () => {
       el.removeEventListener('scroll', check)
       ro.disconnect()
@@ -2538,12 +2522,10 @@ export function GraphCanvas() {
     )
   }
 
-  // Use totalCommitCount as estimate, but shrink to actual loaded count once all are loaded
-  const estimatedCount = histWindow?.hasMoreAfter === false
-    ? layout.nodes.length
-    : Math.max(totalCommitCount, layout.nodes.length)
   const fullWidth = layout.totalWidth
-  const fullHeight = estimatedCount * NODE_SPACING_Y + PAD_TOP * 2 + GRAPH_TOP_HEADROOM
+  // The scroll range represents loaded rows only. It grows as pages arrive,
+  // preventing the scrollbar from jumping into unloaded blank history.
+  const fullHeight = layout.totalHeight
   const scaledW = fullWidth * zoom
   const scaledH = fullHeight * zoom
   const worktreeConflictBadgeWidth = worktreeNode

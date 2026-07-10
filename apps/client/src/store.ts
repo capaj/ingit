@@ -53,6 +53,7 @@ import {
   predictRebase,
   type OptimisticGraph,
 } from './optimistic-graph'
+import { mergeHistory } from './history-pagination'
 
 /** Optional extra button shown in the error dialog (e.g. "Force push"). */
 export interface ErrorDialogAction {
@@ -301,22 +302,6 @@ function clearRepoPathInUrl() {
 
 function isSessionError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('No session found')
-}
-
-function mergeHistory(
-  prev: HistoryWindowResponse | null,
-  incoming: HistoryWindowResponse,
-): HistoryWindowResponse {
-  if (!prev) return incoming
-  const existingShas = new Set(prev.rows.map(r => r.sha))
-  const newRows = incoming.rows.filter(r => !existingShas.has(r.sha))
-  if (newRows.length === 0) return prev
-  return {
-    ...incoming,
-    rows: [...prev.rows, ...newRows],
-    edges: [...prev.edges, ...incoming.edges],
-    hasMoreBefore: prev.hasMoreBefore,
-  }
 }
 
 function prependRecentRepo(recentRepos: string[], repoPath: string): string[] {
@@ -1164,16 +1149,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (direction === 'down' && !historyWindow.hasMoreAfter) return
 
     set({ loadingMore: true })
-    const rows = historyWindow.rows
-    const lastRow = rows[rows.length - 1]
-
     try {
       const result = await queryHistory(repoId, {
         repoId,
         scope: { kind: 'all' },
-        anchor: { kind: 'sha', value: lastRow.sha },
+        anchor: { kind: 'head' },
         beforeRows: 0,
-        afterRows: LOAD_MORE_ROWS,
+        afterRows: historyWindow.rows.length + LOAD_MORE_ROWS,
         firstParent: false,
         topoOrder: true,
       })
