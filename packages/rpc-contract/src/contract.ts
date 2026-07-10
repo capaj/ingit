@@ -289,6 +289,12 @@ export const contract = {
       refs: z.array(z.string()),
     })),
 
+  getCommitAuthor: oc
+    .input(z.object({ repoId: RepoId, sha: CommitSha }))
+    .output(z.object({
+      avatarUrl: z.string().nullable(),
+    })),
+
   getCommitDiff: oc
     .input(z.object({ repoId: RepoId, sha: CommitSha }))
     .output(z.object({

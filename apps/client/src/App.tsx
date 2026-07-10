@@ -31,7 +31,7 @@ export function App() {
   const [fetching, setFetching] = useState(false)
   const {
     status, repoPath, recentRepos, discoveredFolder, discoveredRepos, refs, historyWindow, selectedSha,
-    commitDetail, commitDiff, commitPRs, commitCIStatus, githubUrl, openError,
+    commitDetail, commitDiff, commitPRs, commitAuthorAvatars, commitCIStatus, githubUrl, openError,
     errorDialog, dismissError, showError,
     openRepoByPath, closeRepo, openFromUrl, selectRef,
     navigateTo, checkoutSha, performRefAction,
@@ -291,6 +291,7 @@ export function App() {
           diff={commitDiff}
           branchName={selectedBranchName}
           prs={commitPRs}
+          authorAvatarUrl={commitDetail ? commitAuthorAvatars[commitDetail.sha] : undefined}
           ciState={selectedCIStatus?.state}
           ciRuns={selectedCIRuns}
           githubUrl={githubUrl}

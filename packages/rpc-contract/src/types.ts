@@ -124,6 +124,10 @@ export interface CommitDetailResponse {
   isPushed: boolean
 }
 
+export interface CommitAuthorResponse {
+  avatarUrl: string | null
+}
+
 export interface CommitDiffRequest {
   repoId: RepoId
   sha: CommitSha

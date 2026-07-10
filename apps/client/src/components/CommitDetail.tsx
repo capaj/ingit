@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import type { CommitDetailResponse, CommitDiffResponse, ChangedPath } from '@ingit/rpc-contract'
 import { commitFileDiffKey, useAppStore } from '../store'
 import { DiffView } from './DiffView'
@@ -26,6 +26,7 @@ interface CommitDetailProps {
   diff: CommitDiffResponse | null
   branchName?: string | null
   prs?: PRInfo[]
+  authorAvatarUrl?: string | null
   ciState?: CIStatusState
   ciRuns?: CIRun[]
   githubUrl?: string | null
@@ -79,7 +80,7 @@ function formatDate(unix: number): string {
   })
 }
 
-export function CommitDetail({ commit, diff, branchName, prs, ciState, ciRuns, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
+export function CommitDetail({ commit, diff, branchName, prs, authorAvatarUrl, ciState, ciRuns, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
   if (!commit) {
     return null
   }
@@ -138,7 +139,11 @@ export function CommitDetail({ commit, diff, branchName, prs, ciState, ciRuns, g
           {commit.subject}
         </p>
 
-        <MetaRow label="Author" value={`${commit.authorName} <${commit.authorEmail}>`} />
+        <MetaRow
+          label="Author"
+          value={`${commit.authorName} <${commit.authorEmail}>`}
+          leading={<AuthorAvatar name={commit.authorName} url={authorAvatarUrl} />}
+        />
         <MetaRow label="Date" value={formatDate(commit.authorUnix)} />
         {branchName && <MetaRow label="Branch" value={branchName} />}
         {(commit.committerName !== commit.authorName ||
@@ -352,26 +357,76 @@ function MetaRow({
   label,
   value,
   mono,
+  leading,
 }: {
   label: string
   value: string
   mono?: boolean
+  leading?: ReactNode
 }) {
   return (
-    <div style={{ display: 'flex', gap: 8, marginBottom: 3, fontSize: 12 }}>
+    <div style={{ display: 'flex', alignItems: leading ? 'center' : undefined, gap: 8, marginBottom: 3, fontSize: 12 }}>
       <span style={{ color: '#6c7086', minWidth: 76, flexShrink: 0 }}>{label}</span>
       <span
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          minWidth: 0,
           color: '#a6adc8',
           fontFamily: mono ? 'monospace' : 'inherit',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
         }}
       >
-        {value}
+        {leading}
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {value}
+        </span>
       </span>
     </div>
+  )
+}
+
+function AuthorAvatar({ name, url }: { name: string; url?: string | null }) {
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => setFailed(false), [url])
+
+  const sharedStyle: CSSProperties = {
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    flexShrink: 0,
+  }
+
+  if (url && !failed) {
+    return (
+      <img
+        src={url}
+        alt={`${name} avatar`}
+        width={24}
+        height={24}
+        onError={() => setFailed(true)}
+        style={{ ...sharedStyle, display: 'block', objectFit: 'cover', background: '#313244' }}
+      />
+    )
+  }
+
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        ...sharedStyle,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#313244',
+        color: '#cdd6f4',
+        fontSize: 11,
+        fontWeight: 700,
+      }}
+    >
+      {name.trim().charAt(0).toUpperCase() || '?'}
+    </span>
   )
 }
 

@@ -5,6 +5,7 @@ import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
 import { getMergePreview } from './merge-handler.js'
 import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl } from './ci-status-handler.js'
+import { fetchGithubCommitAuthor } from './github-author-handler.js'
 import { discoverRepos, listDirectory } from './discover-repos.js'
 import { listAgentSessions, focusAgentSession, installWindowCalls } from './agent-sessions.js'
 
@@ -116,6 +117,16 @@ export const router = os.router({
     const session = sessionManager.getSession(input.repoId)
     if (!session) throw new Error('No session found for this repoId')
     return session.getCommitDetail(input.sha)
+  }),
+
+  getCommitAuthor: os.getCommitAuthor.handler(async ({ input }) => {
+    const session = sessionManager.getSession(input.repoId)
+    if (!session) throw new Error('No session found for this repoId')
+    if (!session.githubUrl) return { avatarUrl: null }
+
+    const ownerRepo = extractOwnerRepoFromGithubUrl(session.githubUrl)
+    if (!ownerRepo) return { avatarUrl: null }
+    return fetchGithubCommitAuthor(ownerRepo, input.sha)
   }),
 
   getCommitDiff: os.getCommitDiff.handler(async ({ input }) => {

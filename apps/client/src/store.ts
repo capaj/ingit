@@ -3,6 +3,7 @@ import type {
   RefSummary,
   HistoryWindowResponse,
   CommitDetailResponse,
+  CommitAuthorResponse,
   CommitDiffResponse,
   CommitActionKind,
   CommitRow,
@@ -23,6 +24,7 @@ import {
   getRefs,
   queryHistory,
   getCommitDetail,
+  getCommitAuthor,
   getCommitDiff,
   getCommitPRs,
   getCommitCIStatuses,
@@ -242,6 +244,7 @@ function loadSelectedCommitExtras(repoId: string, sha: string) {
     .catch((err) => console.error('Failed to load commit detail:', err))
 
   if (useAppStore.getState().githubUrl) {
+    loadCommitAuthor(repoId, sha)
     getCommitPRs(repoId, sha)
       .then((prs: CommitPRInfo) => {
         if (useAppStore.getState().selectedSha === sha) useAppStore.setState({ commitPRs: prs })
@@ -249,6 +252,20 @@ function loadSelectedCommitExtras(repoId: string, sha: string) {
       .catch(() => {})
   }
   useAppStore.getState().fetchCommitCIStatusesIfNeeded([sha])
+}
+
+function loadCommitAuthor(repoId: string, sha: string) {
+  const state = useAppStore.getState()
+  if (!state.githubUrl || sha in state.commitAuthorAvatars) return
+
+  getCommitAuthor(repoId, sha)
+    .then(({ avatarUrl }: CommitAuthorResponse) => {
+      if (useAppStore.getState().repoId !== repoId) return
+      useAppStore.setState((current) => ({
+        commitAuthorAvatars: { ...current.commitAuthorAvatars, [sha]: avatarUrl },
+      }))
+    })
+    .catch(() => {})
 }
 
 function fetchVisibleTipSha(refs: RefSummary[]): string | null {
@@ -366,6 +383,7 @@ interface AppState {
   commitDetail: CommitDetailResponse | null
   commitDiff: CommitDiffResponse | null
   commitPRs: CommitPRInfo
+  commitAuthorAvatars: Record<string, string | null>
   mergePreview: MergePreviewResponse | null
   githubUrl: string | null
   openError: string | null
@@ -444,6 +462,7 @@ async function openRepoByPathImpl(
       totalCommitCount: res.totalCommitCount,
       recentRepos: prependRecentRepo(get().recentRepos, res.rootPath),
       githubUrl: res.githubUrl,
+      commitAuthorAvatars: {},
       commitCIStatus: {},
       openError: null,
       selectedRefName: null,
@@ -579,6 +598,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   commitDetail: null,
   commitDiff: null,
   commitPRs: [],
+  commitAuthorAvatars: {},
   mergePreview: null,
   githubUrl: null,
   openError: null,
@@ -944,6 +964,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitDetail: null,
       commitDiff: null,
       commitPRs: [],
+      commitAuthorAvatars: {},
       mergePreview: null,
       githubUrl: null,
       openError: null,
@@ -1011,6 +1032,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // Load PR data in parallel (non-blocking) if this is a GitHub repo
     if (githubUrl) {
+      loadCommitAuthor(repoId, sha)
       getCommitPRs(repoId, sha).then((prs: CommitPRInfo) => {
         if (get().selectedSha === sha) set({ commitPRs: prs })
       }).catch(() => {})
@@ -1120,6 +1142,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { repoId: rid } = get()
     if (rid) {
       get().fetchCommitCIStatusesIfNeeded([sha])
+      loadCommitAuthor(rid, sha)
       Promise.all([
         getCommitDetail(rid, sha),
         getCommitDiff(rid, sha),

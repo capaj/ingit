@@ -84,6 +84,10 @@ export function getCommitDetail(repoId: string, sha: string) {
   return ensureClient().getCommitDetail({ repoId, sha })
 }
 
+export function getCommitAuthor(repoId: string, sha: string) {
+  return ensureClient().getCommitAuthor({ repoId, sha })
+}
+
 export function getCommitDiff(repoId: string, sha: string) {
   return ensureClient().getCommitDiff({ repoId, sha })
 }
