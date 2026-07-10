@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 1200px; height: 630px; margin: 0; overflow: hidden; }
+      body { background: #08090c; color: #f5f5f1; font-family: Inter, "SF Pro Display", "Segoe UI", Arial, sans-serif; }
+      .card { position: relative; width: 1200px; height: 630px; overflow: hidden; isolation: isolate; background: #08090c; }
+      .background { position: absolute; z-index: -3; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .72; }
+      .shade { position: absolute; z-index: -2; inset: 0; background: linear-gradient(90deg, #08090c 0%, rgba(8,9,12,.97) 36%, rgba(8,9,12,.7) 62%, rgba(8,9,12,.28) 100%), linear-gradient(0deg, rgba(8,9,12,.6), transparent 48%); }
+      .grid { position: absolute; z-index: -1; inset: 0; opacity: .18; background-image: linear-gradient(rgba(255,255,255,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px); background-size: 64px 64px; mask-image: linear-gradient(90deg, black, transparent 72%); }
+      .top { position: absolute; top: 55px; left: 64px; display: flex; align-items: center; gap: 13px; font-size: 29px; font-weight: 750; letter-spacing: -.05em; }
+      .top img { width: 42px; height: 42px; }
+      .eyebrow { position: absolute; top: 145px; left: 67px; color: #d6ff48; font: 700 11px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .18em; }
+      .eyebrow::before { display: inline-block; width: 6px; height: 6px; margin-right: 10px; border-radius: 50%; background: #d6ff48; box-shadow: 0 0 14px #d6ff48; content: ""; }
+      h1 { position: absolute; top: 180px; left: 62px; width: 610px; margin: 0; font-size: 79px; font-weight: 800; letter-spacing: -.072em; line-height: .9; }
+      h1 em { display: block; margin-top: 10px; color: #d6ff48; font-family: Georgia, "Times New Roman", serif; font-size: .76em; font-weight: 400; letter-spacing: -.05em; }
+      .description { position: absolute; top: 395px; left: 67px; width: 540px; color: #a7a9b2; font-size: 19px; line-height: 1.5; }
+      .command { position: absolute; bottom: 60px; left: 67px; display: flex; align-items: center; gap: 11px; height: 45px; padding: 0 16px; border: 1px solid rgba(255,255,255,.18); border-radius: 3px; background: rgba(10,11,15,.8); color: #f2f2ed; font: 13px ui-monospace, "SFMono-Regular", Consolas, monospace; }
+      .command span { color: #d6ff48; }
+      .proof { position: absolute; top: 70px; right: 62px; width: 415px; height: 495px; overflow: hidden; border: 1px solid rgba(255,255,255,.2); border-radius: 12px; background: #0d0e13; box-shadow: 0 42px 90px rgba(0,0,0,.55), 0 0 70px rgba(125,170,255,.12); transform: rotate(1.2deg); }
+      .proof img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 2%; }
+      .proof::after { position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 1px rgba(255,255,255,.12); content: ""; }
+      .meta { position: absolute; right: 64px; bottom: 34px; color: #777985; font: 8px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .16em; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <img class="background" src="../assets/og-source/graph-background.png" alt="" />
+      <div class="shade"></div>
+      <div class="grid"></div>
+      <div class="top"><img src="../../client/public/press-kit/ingit-icon-transparent.svg" alt="" /><span>ingit</span></div>
+      <p class="eyebrow">GIT, RECOMPOSED</p>
+      <h1>Git at the speed<em>of thought.</em></h1>
+      <p class="description">The fast, animated Git GUI with optimistic mutations, Time Machine recovery, and a control tower for your coding agents.</p>
+      <div class="command"><span>$</span> npm install --global @ingit/cli</div>
+      <div class="proof"><img src="../assets/og-source/graph-morph.png" alt="" /></div>
+      <p class="meta">LOCAL-FIRST · OPEN SOURCE · LINUX + MACOS</p>
+    </main>
+  </body>
+</html>

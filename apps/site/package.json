@@ -8,7 +8,7 @@
     "dev": "bun run sync-media && astro dev",
     "build": "bun run sync-media && astro build",
     "preview": "astro preview",
-    "deploy": "bun run build && wrangler pages deploy dist --project-name ingit"
+    "deploy": "bun run build && wrangler pages deploy --project-name ingit --branch main"
   },
   "dependencies": {
     "astro": "^7.0.7"
