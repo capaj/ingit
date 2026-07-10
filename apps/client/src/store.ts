@@ -408,7 +408,8 @@ interface AppState {
   reloadFromServer: () => Promise<void>
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
-  runStageAction: (action: StageActionKind, paths: string[]) => Promise<void>
+  /** Run a staging action and report whether it succeeded. */
+  runStageAction: (action: StageActionKind, paths: string[]) => Promise<boolean>
   loadWorktreeFileDiff: (file: WorktreeFile, area: WorktreeDiffArea) => Promise<void>
   loadCommitFileDiff: (sha: string, file: ChangedPath) => Promise<void>
   /** Commit the index. Returns true on success (so the UI can clear the message). */
@@ -825,21 +826,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   runStageAction: async (action, paths) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
-    if (!repoId || !repoPath) return
+    if (!repoId || !repoPath) return false
     try {
-      const changes = await stageAction(repoId, action, paths)
-      // A file's diff moves between the staged/unstaged areas, so drop the cache.
-      set({ worktreeChanges: changes, worktreeFileDiffs: {} })
-    } catch (err) {
-      if (isSessionError(err) || isConnectionLostError(err)) {
+      let changes: WorktreeChangesResponse
+      try {
+        changes = await stageAction(repoId, action, paths)
+      } catch (err) {
+        if (!isSessionError(err) && !isConnectionLostError(err)) throw err
+
         const res = await openRepo({ path: repoPath })
         repoId = res.repoId
         set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-        const changes = await stageAction(repoId, action, paths)
-        set({ worktreeChanges: changes, worktreeFileDiffs: {} })
-      } else {
-        get().showError('Staging action failed', err)
+        changes = await stageAction(repoId, action, paths)
       }
+
+      // A file's diff moves between the staged/unstaged areas, so drop the cache.
+      set({ worktreeChanges: changes, worktreeFileDiffs: {} })
+      return true
+    } catch (err) {
+      get().showError('Staging action failed', err)
+      return false
     }
   },
 

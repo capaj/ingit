@@ -179,6 +179,7 @@ function CommitBox({
   amendable: boolean
 }) {
   const performCommit = useAppStore((s) => s.performCommit)
+  const runStageAction = useAppStore((s) => s.runStageAction)
   const pendingMutation = useAppStore((s) => s.pendingMutation)
   const repoId = useAppStore((s) => s.repoId)
   const [message, setMessage] = useState('')
@@ -186,6 +187,7 @@ function CommitBox({
     try { return localStorage.getItem('commitNoVerify') === 'true' } catch { return false }
   })
   const [amend, setAmend] = useState(false)
+  const [amendStaging, setAmendStaging] = useState(false)
   // The previous message we auto-filled, so unchecking Amend can clear it back
   // out without discarding text the user typed themselves.
   const [prefilled, setPrefilled] = useState('')
@@ -201,6 +203,14 @@ function CommitBox({
   const toggleAmend = async (value: boolean) => {
     setAmend(value)
     if (value) {
+      setAmendStaging(true)
+      const staged = await runStageAction('stage-all', [])
+      setAmendStaging(false)
+      if (!staged) {
+        setAmend(false)
+        return
+      }
+
       // Prefill with the previous commit's full message so the user edits it in
       // place instead of retyping. Skip if they've already written something.
       if (message.trim().length === 0 && repoId && headSha) {
@@ -217,9 +227,10 @@ function CommitBox({
     }
   }
 
-  // Amend can rewrite the tip with nothing staged (message-only edit); a plain
-  // commit needs staged changes.
-  const canCommit = (amending || stagedCount > 0) && message.trim().length > 0 && !pendingMutation
+  const canCommit = stagedCount > 0
+    && message.trim().length > 0
+    && !amendStaging
+    && !pendingMutation
 
   const submit = async () => {
     if (!canCommit) return
@@ -227,7 +238,9 @@ function CommitBox({
     if (ok) { setMessage(''); setPrefilled(''); setAmend(false) }
   }
 
-  const buttonLabel = pendingMutation
+  const buttonLabel = amendStaging
+    ? 'Staging…'
+    : pendingMutation
     ? (amending ? 'Amending…' : 'Committing…')
     : `${amending ? 'Amend' : 'Commit'}${stagedCount > 0 ? ` (${stagedCount})` : ''}`
 
@@ -269,8 +282,9 @@ function CommitBox({
               <input
                 type="checkbox"
                 checked={amend}
+                disabled={amendStaging}
                 onChange={(e) => void toggleAmend(e.target.checked)}
-                style={{ accentColor: '#cba6f7', cursor: 'pointer' }}
+                style={{ accentColor: '#cba6f7', cursor: amendStaging ? 'default' : 'pointer' }}
               />
               Amend
             </label>
