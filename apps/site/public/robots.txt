@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ingit.pages.dev/sitemap.xml
+Host: ingit.pages.dev

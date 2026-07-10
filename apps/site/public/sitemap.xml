@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">
+  <url>
+    <loc>https://ingit.pages.dev/</loc>
+    <lastmod>2026-07-10</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://ingit.pages.dev/og/ingit-social-card.png</image:loc>
+      <image:title>ingit — Git at the speed of thought</image:title>
+      <image:caption>An animated Git GUI with optimistic mutations and visual commit history.</image:caption>
+    </image:image>
+    <video:video>
+      <video:thumbnail_loc>https://ingit.pages.dev/media/ingit-promo-preview.png</video:thumbnail_loc>
+      <video:title>ingit — Git at the speed of thought</video:title>
+      <video:description>A product film showing branch switching, merge preview, rebasing, cherry-picking, Time Machine recovery, and branch management in ingit.</video:description>
+      <video:content_loc>https://ingit.pages.dev/media/ingit-promo-vertical.mp4</video:content_loc>
+      <video:duration>48</video:duration>
+      <video:family_friendly>yes</video:family_friendly>
+      <video:live>no</video:live>
+    </video:video>
+  </url>
+</urlset>

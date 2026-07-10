@@ -1,0 +1,8 @@
+/* TEAM */
+Creator: Capaj
+Development: AI coding agents, steered and reviewed by Capaj
+Site: https://ingit.pages.dev/
+Source: https://github.com/capaj/ingit
+
+/* TECHNOLOGY */
+Astro, TypeScript, Remotion, Cloudflare Pages

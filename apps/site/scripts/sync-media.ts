@@ -39,6 +39,18 @@ await Promise.all([
     join(repoRoot, 'apps/client/public/press-kit/favicon/favicon.svg'),
     join(siteRoot, 'public/favicon.svg'),
   ),
+  cp(
+    join(repoRoot, 'apps/client/public/press-kit/png/dark/ingit-icon-180.png'),
+    join(siteRoot, 'public/apple-touch-icon.png'),
+  ),
+  cp(
+    join(repoRoot, 'apps/client/public/press-kit/png/dark/ingit-icon-192.png'),
+    join(siteRoot, 'public/icon-192.png'),
+  ),
+  cp(
+    join(repoRoot, 'apps/client/public/press-kit/png/dark/ingit-icon-512.png'),
+    join(siteRoot, 'public/icon-512.png'),
+  ),
 ])
 
 console.log(`Synced ${showcase.length} showcase videos and the Remotion hero film.`)

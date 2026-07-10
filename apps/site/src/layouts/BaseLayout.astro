@@ -4,10 +4,127 @@ import '../styles/global.css'
 interface Props {
   title: string
   description: string
+  noindex?: boolean
 }
 
-const {title, description} = Astro.props
-const canonicalURL = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefined
+const {title, description, noindex = false} = Astro.props
+const siteURL = Astro.site ?? new URL('https://ingit.pages.dev')
+const canonicalURL = new URL(Astro.url.pathname, siteURL)
+const socialImageURL = new URL('/og/ingit-social-card.png', siteURL)
+const promoVideoURL = new URL('/media/ingit-promo-vertical.mp4', siteURL)
+const promoPosterURL = new URL('/media/ingit-promo-preview.png', siteURL)
+const keywords = [
+  'ingit',
+  'git GUI',
+  'Git client',
+  'animated Git GUI',
+  'visual Git client',
+  'browser Git GUI',
+  'Git graph visualization',
+  'commit graph',
+  'branch visualization',
+  'Git history viewer',
+  'Git Time Machine',
+  'reflog recovery',
+  'recover lost Git commit',
+  'undo Git reset',
+  'merge preview',
+  'rebase visualization',
+  'cherry-pick GUI',
+  'Git branch management',
+  'working tree GUI',
+  'Git diff viewer',
+  'stage and unstage files',
+  'GitHub CI status',
+  'pull request integration',
+  'AI coding agent dashboard',
+  'Claude Code sessions',
+  'Codex sessions',
+  'local-first developer tool',
+  'open source Git GUI',
+  'ungit alternative',
+  'Git GUI for Linux',
+  'Git GUI for macOS',
+  'optimistic UI',
+  'developer productivity',
+  'version control visualization',
+]
+
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'WebSite',
+      '@id': `${siteURL.href}#website`,
+      url: siteURL.href,
+      name: 'ingit',
+      alternateName: ['ingit Git GUI', 'ingit-vibe'],
+      description,
+      inLanguage: 'en',
+      image: socialImageURL.href,
+      publisher: {'@id': `${siteURL.href}#creator`},
+    },
+    {
+      '@type': 'Person',
+      '@id': `${siteURL.href}#creator`,
+      name: 'Capaj',
+      url: 'https://github.com/capaj',
+      sameAs: ['https://github.com/capaj', 'https://x.com/capajj'],
+    },
+    {
+      '@type': 'SoftwareApplication',
+      '@id': `${siteURL.href}#software`,
+      name: 'ingit',
+      alternateName: 'ingit Git GUI',
+      url: siteURL.href,
+      description,
+      image: socialImageURL.href,
+      screenshot: [
+        socialImageURL.href,
+        new URL('/media/showcase/05-time-machine-recover.jpg', siteURL).href,
+      ],
+      applicationCategory: 'DeveloperApplication',
+      applicationSubCategory: 'Version Control Client',
+      operatingSystem: ['Linux', 'macOS'],
+      softwareVersion: '0.1.4',
+      isAccessibleForFree: true,
+      license: 'https://github.com/capaj/ingit/blob/master/LICENSE',
+      downloadUrl: 'https://www.npmjs.com/package/@ingit/cli',
+      installUrl: 'https://www.npmjs.com/package/@ingit/cli',
+      codeRepository: 'https://github.com/capaj/ingit',
+      releaseNotes: 'https://github.com/capaj/ingit/releases',
+      author: {'@id': `${siteURL.href}#creator`},
+      offers: {
+        '@type': 'Offer',
+        price: 0,
+        priceCurrency: 'USD',
+        availability: 'https://schema.org/InStock',
+      },
+      keywords,
+      featureList: [
+        'Animated and virtualized commit graph',
+        'Optimistic checkout, merge, rebase, cherry-pick, revert, and branch operations',
+        'Visual reflog Time Machine for recovering lost commits and deleted branches',
+        'Working tree staging and diff inspection',
+        'GitHub pull request and live CI status integration',
+        'Claude Code and Codex agent session detection',
+        'Local-first operation with no database or daemon',
+      ],
+    },
+    {
+      '@type': 'VideoObject',
+      '@id': `${siteURL.href}#product-video`,
+      name: 'ingit — Git at the speed of thought',
+      description: 'A 48-second product film showing animated branch switching, merge preview, rebasing, cherry-picking, Time Machine recovery, and branch management in ingit.',
+      contentUrl: promoVideoURL.href,
+      thumbnailUrl: promoPosterURL.href,
+      uploadDate: '2026-07-10T00:00:00+02:00',
+      duration: 'PT47.68S',
+      inLanguage: 'en',
+      isFamilyFriendly: true,
+    },
+  ],
+}
 ---
 
 <!doctype html>
@@ -16,15 +133,50 @@ const canonicalURL = Astro.site ? new URL(Astro.url.pathname, Astro.site) : unde
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
     <meta name="theme-color" content="#08090c" />
+    <meta name="color-scheme" content="dark" />
     <meta name="description" content={description} />
+    <meta name="keywords" content={keywords.join(', ')} />
+    <meta name="author" content="Capaj" />
+    <meta name="creator" content="Capaj" />
+    <meta name="publisher" content="ingit" />
+    <meta name="application-name" content="ingit" />
+    <meta name="apple-mobile-web-app-title" content="ingit" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no, address=no, email=no" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta name="robots" content={noindex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1'} />
+    <meta name="googlebot" content={noindex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1'} />
+    <meta name="bingbot" content={noindex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1'} />
     <meta name="generator" content={Astro.generator} />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ingit" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content={canonicalURL.href} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <meta property="og:image" content="/media/showcase/05-time-machine-recover.jpg" />
+    <meta property="og:image" content={socialImageURL.href} />
+    <meta property="og:image:url" content={socialImageURL.href} />
+    <meta property="og:image:secure_url" content={socialImageURL.href} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ingit — Git at the speed of thought, with an animated commit graph preview" />
+    <meta property="og:updated_time" content="2026-07-10T03:30:00+02:00" />
     <meta name="twitter:card" content="summary_large_image" />
-    {canonicalURL && <link rel="canonical" href={canonicalURL} />}
+    <meta name="twitter:creator" content="@capajj" />
+    <meta name="twitter:domain" content="ingit.pages.dev" />
+    <meta name="twitter:url" content={canonicalURL.href} />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImageURL.href} />
+    <meta name="twitter:image:alt" content="ingit — Git at the speed of thought, with an animated commit graph preview" />
+    <link rel="canonical" href={canonicalURL.href} />
+    <link rel="manifest" href="/site.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    {!noindex && <script type="application/ld+json" set:html={JSON.stringify(structuredData)} />}
     <title>{title}</title>
   </head>
   <body>

@@ -1,0 +1,22 @@
+# ingit
+
+> ingit is a fast, animated, local-first Git GUI for Linux and macOS. It visualizes commit history, predicts Git operations before they finish, and reconciles the graph against real Git results.
+
+## Canonical resources
+
+- Website: https://ingit.pages.dev/
+- Source code: https://github.com/capaj/ingit
+- npm package: https://www.npmjs.com/package/@ingit/cli
+- Installation: `npm install --global @ingit/cli`
+
+## Core features
+
+- Animated and virtualized commit graph
+- Optimistic checkout, merge, rebase, cherry-pick, revert, uncommit, and branch moves
+- Time Machine reflog UI for recovering lost commits and deleted branches
+- Working-tree staging and diff inspection
+- GitHub pull requests and live CI status on commits
+- Claude Code and Codex session detection and focus handoff
+- Plain Git underneath, with no database or daemon
+
+ingit is open source under the MIT license.
