@@ -10,6 +10,7 @@
  */
 import { dirname, join, resolve, isAbsolute } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
+import { findRunningIngit, repositoryUrl } from './existing-server.js'
 
 // Baked in at compile time via `bun build --define` (see scripts/build.ts).
 const VERSION = process.env.INGIT_VERSION ?? '0.1.0'
@@ -67,7 +68,7 @@ Arguments:
                     Its child folders are scanned for git repositories.
 
 Options:
-  -p, --port <n>    Preferred port (default 8488; next free port if taken).
+  -p, --port <n>    Preferred port (default 8488; reuses ingit, else next free).
       --host <h>    Host to bind (default 127.0.0.1).
       --no-open     Don't open the browser automatically.
   -v, --version     Print version and exit.
@@ -152,6 +153,17 @@ async function main(): Promise<void> {
     process.chdir(target)
   }
 
+  const preferredPort = args.port
+    ?? (process.env.PORT ? Number(process.env.PORT) : 8488)
+  const runningUrl = await findRunningIngit(args.host, preferredPort)
+  if (runningUrl) {
+    const url = repositoryUrl(runningUrl, process.cwd())
+    if (args.open) await openBrowser(url)
+    console.log(`ingit is already running at ${runningUrl}`)
+    console.log(`Open ${url} in your browser.`)
+    return
+  }
+
   const assets = resolveAssets()
 
   // Point the server at the bundled assets. Must happen before importing the
@@ -163,11 +175,12 @@ async function main(): Promise<void> {
 
   const { startServer } = await import('@ingit/server')
   const server = await startServer({ host: args.host, port: args.port })
+  const url = repositoryUrl(server.url, process.cwd())
 
   if (args.open) {
-    await openBrowser(server.url)
+    await openBrowser(url)
   }
-  console.log(`\nOpen ${server.url} in your browser.  Press Ctrl+C to stop.`)
+  console.log(`\nOpen ${url} in your browser.  Press Ctrl+C to stop.`)
 }
 
 main().catch((err) => {

@@ -11,6 +11,7 @@ import { router, sessionManager } from './rpc-router.js'
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 8488
+const SERVER_ID = 'ingit'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const DEFAULT_CLIENT_DIST = resolve(__dirname, '../../client/dist')
@@ -139,6 +140,17 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       return
     }
 
+    if (method === 'GET' && url === '/__ingit/health') {
+      const body = JSON.stringify({ name: SERVER_ID })
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body),
+        'Cache-Control': 'no-store',
+      })
+      res.end(body)
+      return
+    }
+
     // Serve static files
     const safePath = url.replace(/\.\./g, '').replace(/\/+/g, '/')
     const filePath = join(clientDist, safePath === '/' ? 'index.html' : safePath)
@@ -154,18 +166,25 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     }
   })
 
-  // WebSocket server — oRPC handles all RPC calls
+  const port = await listen(httpServer, host, startPort)
+  const url = `http://${host}:${port}`
+
+  // Attach WebSockets only after HTTP has found a free port. Attaching first
+  // makes ws re-emit EADDRINUSE and crash before listen() can try the next one.
   const wss = new WebSocketServer({ server: httpServer, path: '/rpc' })
   wss.on('connection', (ws) => {
     rpcHandler.upgrade(ws, { context: {} })
   })
 
-  const port = await listen(httpServer, host, startPort)
-  const url = `http://${host}:${port}`
-
   // Graceful shutdown
+  let closed = false
   const close = (): void => {
+    if (closed) return
+    closed = true
+    process.off('SIGINT', shutdown)
+    process.off('SIGTERM', shutdown)
     sessionManager.closeAll()
+    wss.close()
     httpServer.close()
   }
   const shutdown = (): void => {
