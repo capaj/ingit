@@ -1,0 +1,241 @@
+---
+const nodes = [
+  {id: 'main-tip', additions: 18, deletions: 3, color: '#89b4fa', ref: 'main'},
+  {id: 'feature-tip', additions: 84, deletions: 22, color: '#f38ba8', ref: 'feat/graph'},
+  {id: 'feature-base', additions: 46, deletions: 8, color: '#f38ba8'},
+  {id: 'shared-one', additions: 12, deletions: 2, color: '#a6e3a1'},
+  {id: 'shared-two', additions: 155, deletions: 61, color: '#a6e3a1'},
+]
+
+const edges = [
+  {id: 'main-shared', from: 'main-tip', to: 'shared-one', color: '#89b4fa'},
+  {id: 'feature-chain', from: 'feature-tip', to: 'feature-base', color: '#f38ba8'},
+  {id: 'feature-shared', from: 'feature-base', to: 'shared-one', color: '#f38ba8'},
+  {id: 'shared-chain', from: 'shared-one', to: 'shared-two', color: '#a6e3a1'},
+]
+
+const states = [
+  {
+    current: 'main',
+    positions: {
+      'main-tip': [145, 45],
+      'feature-tip': [255, 66],
+      'feature-base': [255, 121],
+      'shared-one': [145, 176],
+      'shared-two': [145, 236],
+    },
+  },
+  {
+    current: 'feat/graph',
+    positions: {
+      'main-tip': [255, 66],
+      'feature-tip': [145, 45],
+      'feature-base': [145, 108],
+      'shared-one': [145, 176],
+      'shared-two': [145, 236],
+    },
+  },
+]
+
+const nodeRadius = 12
+const gaugeRadius = 8
+const gaugeDiameter = gaugeRadius * 2
+const scaleMax = 120
+const fillHeight = (value: number) => Math.max(2, gaugeDiameter * Math.min(value / scaleMax, 1))
+const halfPath = (side: 'left' | 'right') => `M 0 ${-gaugeRadius} A ${gaugeRadius} ${gaugeRadius} 0 0 ${side === 'right' ? 1 : 0} 0 ${gaugeRadius} L 0 ${-gaugeRadius} Z`
+const halfArc = (side: 'left' | 'right') => `M 0 ${-gaugeRadius} A ${gaugeRadius} ${gaugeRadius} 0 0 ${side === 'right' ? 1 : 0} 0 ${gaugeRadius}`
+
+const initialPath = (from: string, to: string) => {
+  const [x1, y1] = states[0].positions[from as keyof typeof states[0]['positions']]
+  const [x2, y2] = states[0].positions[to as keyof typeof states[0]['positions']]
+  const midY = (y1 + y2) / 2
+  return `M ${x1} ${y1} C ${x1} ${midY} ${x2} ${midY} ${x2} ${y2}`
+}
+---
+
+<div class="graph-morph reveal" data-delay="1" data-graph-morph data-states={JSON.stringify(states)}>
+  <div class="graph-morph__top">
+    <span><i></i> LIVE GRAPH</span>
+    <code data-graph-status>on main</code>
+  </div>
+  <svg viewBox="0 0 400 280" role="img" aria-labelledby="morph-title morph-desc">
+    <title id="morph-title">Animated ingit commit graph</title>
+    <desc id="morph-desc">The graph predicts a checkout by moving the feature branch into the primary lane, then reconciles with git.</desc>
+    <rect class="graph-morph__lane-highlight" data-lane-highlight x="118" y="16" width="54" height="248" rx="27" />
+    <g class="graph-morph__edges">
+      {edges.map((edge) => <path data-edge={edge.id} data-from={edge.from} data-to={edge.to} d={initialPath(edge.from, edge.to)} stroke={edge.color} />)}
+    </g>
+    <g class="graph-morph__nodes">
+      {nodes.map((node) => {
+        const [x, y] = states[0].positions[node.id as keyof typeof states[0]['positions']]
+        const additionsHeight = fillHeight(node.additions)
+        const deletionsHeight = fillHeight(node.deletions)
+        return (
+          <g data-node={node.id} transform={`translate(${x} ${y})`}>
+            <defs>
+              <clipPath id={`morph-${node.id}-left`} clipPathUnits="userSpaceOnUse"><path d={halfPath('left')} /></clipPath>
+              <clipPath id={`morph-${node.id}-right`} clipPathUnits="userSpaceOnUse"><path d={halfPath('right')} /></clipPath>
+            </defs>
+            <circle r={nodeRadius} fill="#11111b" stroke={node.color} stroke-width="2.5" />
+            <path d={halfPath('left')} fill="#1e1e2e" />
+            <path d={halfPath('right')} fill="#1e1e2e" />
+            <rect x={-gaugeRadius} y={gaugeRadius - additionsHeight} width={gaugeRadius} height={additionsHeight} fill="#a6e3a1" clip-path={`url(#morph-${node.id}-left)`} />
+            <rect x="0" y={gaugeRadius - deletionsHeight} width={gaugeRadius} height={deletionsHeight} fill="#f38ba8" clip-path={`url(#morph-${node.id}-right)`} />
+            <path d={halfArc('left')} stroke="#45475a" stroke-width="1.3" fill="none" />
+            <path d={halfArc('right')} stroke="#45475a" stroke-width="1.3" fill="none" />
+            <line x1="0" y1={-gaugeRadius} x2="0" y2={gaugeRadius} stroke="#45475a" stroke-width="1.3" />
+            {node.ref && (
+              <g class="graph-morph__ref" data-ref={node.ref}>
+                <rect x="18" y="-10" width={node.ref === 'main' ? 47 : 78} height="20" rx="3" fill={`${node.color}22`} stroke={node.color} />
+                <text x="27" y="1" fill={node.color}>{node.ref}</text>
+              </g>
+            )}
+          </g>
+        )
+      })}
+    </g>
+  </svg>
+  <div class="graph-morph__bottom">
+    <code data-graph-command><span>$</span> checkout feat/graph</code>
+    <span class="graph-morph__phase" data-graph-phase><i></i> RECONCILED</span>
+  </div>
+</div>
+
+<script>
+  type GraphState = {
+    current: string
+    positions: Record<string, [number, number]>
+  }
+
+  const ease = (value: number) => value < 0.5
+    ? 4 * value * value * value
+    : 1 - Math.pow(-2 * value + 2, 3) / 2
+
+  const edgePath = (x1: number, y1: number, x2: number, y2: number) => {
+    const midY = (y1 + y2) / 2
+    return `M ${x1} ${y1} C ${x1} ${midY} ${x2} ${midY} ${x2} ${y2}`
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-graph-morph]').forEach((root) => {
+    if (root.dataset.ready) return
+    root.dataset.ready = 'true'
+    const states = JSON.parse(root.dataset.states ?? '[]') as GraphState[]
+    const nodeElements = new Map(
+      [...root.querySelectorAll<SVGGElement>('[data-node]')].map((node) => [node.dataset.node ?? '', node]),
+    )
+    const edges = [...root.querySelectorAll<SVGPathElement>('[data-edge]')]
+    const highlight = root.querySelector<SVGRectElement>('[data-lane-highlight]')
+    const phase = root.querySelector<HTMLElement>('[data-graph-phase]')
+    const status = root.querySelector<HTMLElement>('[data-graph-status]')
+    const command = root.querySelector<HTMLElement>('[data-graph-command]')
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
+    let running = false
+    let frame = 0
+    let startedAt = 0
+
+    const render = (fromIndex: number, toIndex: number, progress: number, isMoving: boolean) => {
+      const from = states[fromIndex]
+      const to = states[toIndex]
+      const eased = ease(progress)
+      const positions: Record<string, [number, number]> = {}
+
+      for (const [id, element] of nodeElements) {
+        const start = from.positions[id]
+        const end = to.positions[id]
+        const x = start[0] + (end[0] - start[0]) * eased
+        const y = start[1] + (end[1] - start[1]) * eased
+        positions[id] = [x, y]
+        element.setAttribute('transform', `translate(${x} ${y})`)
+      }
+
+      for (const edge of edges) {
+        const start = positions[edge.dataset.from ?? '']
+        const end = positions[edge.dataset.to ?? '']
+        edge.setAttribute('d', edgePath(start[0], start[1], end[0], end[1]))
+      }
+
+      if (highlight) {
+        const currentTip = to.current === 'main' ? 'main-tip' : 'feature-tip'
+        const priorTip = from.current === 'main' ? 'main-tip' : 'feature-tip'
+        const x = from.positions[priorTip][0] + (to.positions[currentTip][0] - from.positions[priorTip][0]) * eased
+        highlight.setAttribute('x', String(x - 27))
+      }
+
+      if (phase) {
+        phase.classList.toggle('is-predicting', isMoving)
+        phase.lastChild!.textContent = isMoving ? ' PREDICTING' : ' RECONCILED'
+      }
+      if (status) status.textContent = isMoving ? 'optimistic update' : `on ${progress >= 1 ? to.current : from.current}`
+      if (command?.lastChild) command.lastChild.textContent = ` checkout ${to.current}`
+    }
+
+    const tick = (now: number) => {
+      if (!running) return
+      if (!startedAt) startedAt = now
+      const segmentDuration = 4200
+      const local = (now - startedAt) % (segmentDuration * 2)
+      const segment = Math.floor(local / segmentDuration)
+      const segmentTime = local % segmentDuration
+      const from = segment % 2
+      const to = (from + 1) % 2
+      const transitionStart = 1150
+      const transitionDuration = 1250
+      const progress = Math.max(0, Math.min(1, (segmentTime - transitionStart) / transitionDuration))
+      render(from, to, progress, progress > 0 && progress < 1)
+      frame = requestAnimationFrame(tick)
+    }
+
+    if (reducedMotion) {
+      render(0, 1, 1, false)
+      return
+    }
+
+    const observer = new IntersectionObserver(([entry]) => {
+      running = entry.isIntersecting
+      if (running) {
+        startedAt = 0
+        frame = requestAnimationFrame(tick)
+      } else {
+        cancelAnimationFrame(frame)
+      }
+    }, {threshold: 0.2})
+    observer.observe(root)
+  })
+</script>
+
+<style>
+  .graph-morph {
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    background: radial-gradient(circle at 38% 48%, rgba(137,180,250,.1), transparent 42%), #0d0e13;
+    box-shadow: 0 24px 70px rgba(0,0,0,.3);
+  }
+  .graph-morph::before {
+    position: absolute;
+    inset: 0;
+    opacity: .22;
+    background-image: radial-gradient(rgba(255,255,255,.12) 1px, transparent 1px);
+    background-size: 18px 18px;
+    content: '';
+    pointer-events: none;
+  }
+  .graph-morph__top, .graph-morph__bottom { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; height: 42px; padding: 0 15px; border-bottom: 1px solid var(--line); }
+  .graph-morph__top span, .graph-morph__top code, .graph-morph__bottom { color: #686a75; font-family: var(--mono); font-size: 7px; letter-spacing: .1em; text-transform: uppercase; }
+  .graph-morph__top span { display: flex; align-items: center; gap: 7px; color: #8b8d97; }
+  .graph-morph__top i { width: 5px; height: 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 9px var(--green); }
+  .graph-morph svg { position: relative; z-index: 1; width: 100%; height: 270px; }
+  .graph-morph__lane-highlight { fill: #89b4fa; opacity: .055; }
+  .graph-morph__edges path { fill: none; stroke-width: 2.25; stroke-linecap: round; opacity: .78; }
+  .graph-morph__ref text { font-family: var(--mono); font-size: 7px; font-weight: 700; dominant-baseline: central; }
+  .graph-morph__bottom { height: 44px; border-top: 1px solid var(--line); border-bottom: 0; }
+  .graph-morph__bottom code { color: #82848e; font-family: var(--mono); font-size: 8px; text-transform: none; }
+  .graph-morph__bottom code span { margin-right: 6px; color: var(--acid); }
+  .graph-morph__phase { display: flex; align-items: center; gap: 6px; color: var(--green); }
+  .graph-morph__phase i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+  .graph-morph__phase.is-predicting { color: var(--acid); }
+  @media (max-width: 1080px) { .graph-morph { grid-column: 2; } }
+  @media (max-width: 820px) { .graph-morph { grid-column: 1; width: min(100%, 540px); } }
+</style>

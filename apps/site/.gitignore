@@ -1,0 +1,4 @@
+dist/
+.astro/
+public/media/
+public/favicon.svg

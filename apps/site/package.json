@@ -1,0 +1,19 @@
+{
+  "name": "@ingit/site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync-media": "bun run scripts/sync-media.ts",
+    "dev": "bun run sync-media && astro dev",
+    "build": "bun run sync-media && astro build",
+    "preview": "astro preview",
+    "deploy": "bun run build && wrangler pages deploy dist --project-name ingit"
+  },
+  "dependencies": {
+    "astro": "^7.0.7"
+  },
+  "devDependencies": {
+    "wrangler": "^4.110.0"
+  }
+}

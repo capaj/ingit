@@ -9,7 +9,9 @@
   "scripts": {
     "dev": "bun run --filter '@ingit/server' dev & bun run --filter '@ingit/client' dev & wait",
     "dev:client": "bun run --filter '@ingit/client' dev",
+    "dev:site": "bun run --filter '@ingit/site' dev",
     "build": "bun run --filter '*' build",
+    "build:site": "bun run --filter '@ingit/site' build",
     "build:packages": "bun run --filter '@ingit/rpc-contract' build && bun run --filter '@ingit/git-core' build && bun run --filter '@ingit/graph-core' build",
     "cli:release": "bun run --filter '@ingit/cli' release",
     "typecheck": "tsc --build && tsc -p tsconfig.scripts.json",

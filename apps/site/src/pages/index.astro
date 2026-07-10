@@ -1,0 +1,461 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import GraphMorph from '../components/GraphMorph.astro'
+
+const repoURL = 'https://github.com/capaj/ingit'
+const installCommand = 'npm install --global @ingit/cli'
+
+const gaugeRadius = 16
+const gaugeInnerRadius = 11
+const gaugeDiameter = gaugeInnerRadius * 2
+const gaugeScaleMax = 216
+const gaugeExamples = [
+  {id: 'fix', y: 95, additions: 3, deletions: 1, label: 'Fix empty state', color: '#89b4fa'},
+  {id: 'keys', y: 225, additions: 32, deletions: 6, label: 'Refine keyboard flow', color: '#89b4fa'},
+  {id: 'time', y: 365, additions: 142, deletions: 74, label: 'Add Time Machine', color: '#a6e3a1'},
+  {id: 'graph', y: 510, additions: 1840, deletions: 908, label: 'Rebuild graph projection', color: '#f5c2e7'},
+].map((node) => ({
+  ...node,
+  additionsHeight: Math.max(2, gaugeDiameter * Math.min(node.additions / gaugeScaleMax, 1)),
+  deletionsHeight: Math.max(2, gaugeDiameter * Math.min(node.deletions / gaugeScaleMax, 1)),
+}))
+
+const halfCirclePath = (centerX: number, centerY: number, side: 'left' | 'right') => {
+  const sweepFlag = side === 'right' ? 1 : 0
+  return `M ${centerX} ${centerY - gaugeInnerRadius} A ${gaugeInnerRadius} ${gaugeInnerRadius} 0 0 ${sweepFlag} ${centerX} ${centerY + gaugeInnerRadius} L ${centerX} ${centerY - gaugeInnerRadius} Z`
+}
+
+const halfCircleArc = (centerX: number, centerY: number, side: 'left' | 'right') => {
+  const sweepFlag = side === 'right' ? 1 : 0
+  return `M ${centerX} ${centerY - gaugeInnerRadius} A ${gaugeInnerRadius} ${gaugeInnerRadius} 0 0 ${sweepFlag} ${centerX} ${centerY + gaugeInnerRadius}`
+}
+
+const showcase = [
+  {
+    id: '01',
+    slug: '01-switch-branches',
+    title: 'Switch branches',
+    kicker: 'WIP is welcome',
+    body: 'Switch branches with uncommitted work still in flight. ingit handles the transition gracefully, preserving your context while the graph reshapes around the destination branch.',
+    note: 'No stash ritual required',
+    color: 'blue',
+  },
+  {
+    id: '02',
+    slug: '02-merge-preview',
+    title: 'Preview, then merge',
+    kicker: 'See the future first',
+    body: 'Inspect the merge result in the graph before you commit to it. No more imagining topology from a command line.',
+    color: 'pink',
+  },
+  {
+    id: '03',
+    slug: '03-rebase-branch',
+    title: 'Rebase onto main',
+    kicker: 'History, choreographed',
+    body: 'Move a branch onto a new base and follow every commit as it finds its new place.',
+    color: 'green',
+  },
+  {
+    id: '04',
+    slug: '04-cherry-pick',
+    title: 'Cherry-pick a commit',
+    kicker: 'Precise by design',
+    body: 'Bring one change across branches with full context and an immediate visual confirmation.',
+    color: 'peach',
+  },
+  {
+    id: '05',
+    slug: '05-time-machine-recover',
+    title: 'Recover with Time Machine',
+    kicker: 'Nothing is really lost',
+    body: 'Turn the reflog into a navigable timeline. Restore a deleted branch or rescue a commit without memorizing arcane commands.',
+    color: 'yellow',
+  },
+  {
+    id: '06',
+    slug: '06-create-branch',
+    title: 'Create a branch',
+    kicker: 'Point, name, done',
+    body: 'Branch from any commit and keep your mental model anchored to the graph in front of you.',
+    color: 'lavender',
+  },
+  {
+    id: '07',
+    slug: '07-move-branch',
+    title: 'Move a branch',
+    kicker: 'Ref surgery, made visible',
+    body: 'Reset or move a branch with the destination, impact, and result all visible in one place.',
+    color: 'red',
+  },
+]
+---
+
+<BaseLayout
+  title="ingit — Git at the speed of thought"
+  description="A fast, animated git GUI with optimistic mutations, Time Machine recovery, GitHub CI, and a control tower for your coding agents."
+>
+  <header class="site-header" data-header>
+    <a class="brand" href="#top" aria-label="ingit home">
+      <img src="/media/brand/ingit-icon.svg" width="34" height="34" alt="" />
+      <span>ingit</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="#reel">See it move</a>
+      <a href="#inside">Under the hood</a>
+      <a class="nav-github" href={repoURL} target="_blank" rel="noreferrer">
+        GitHub
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.25 11.75 11.5 4.5M5 4.5h6.5V11" /></svg>
+      </a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero__mesh" aria-hidden="true"></div>
+      <svg class="hero__graph" viewBox="0 0 1440 900" fill="none" aria-hidden="true">
+        <path d="M-80 742C96 742 121 616 269 616s151 84 295 84c175 0 134-307 303-307 155 0 163 172 315 172 128 0 128-115 338-115" />
+        <path d="M-90 794c216 0 186-76 367-76 161 0 216 132 366 132 188 0 166-211 337-211 153 0 211 92 320 92 105 0 132-42 240-42" />
+        <g><circle cx="269" cy="616" r="8" /><circle cx="564" cy="700" r="8" /><circle cx="867" cy="393" r="8" /><circle cx="1182" cy="565" r="8" /></g>
+      </svg>
+
+      <div class="hero__copy reveal">
+        <p class="eyebrow"><span>GIT, RECOMPOSED</span> LOCAL-FIRST · OPEN SOURCE</p>
+        <h1 id="hero-title">Your history.<br /><em>Alive.</em></h1>
+        <p class="hero__lead">A git GUI that moves as fast as you think. See every branch, preview every operation, and let the graph respond <strong>before git does.</strong></p>
+        <div class="hero__actions">
+          <button class="install-command" type="button" data-copy={installCommand} aria-label={`Copy ${installCommand}`}>
+            <span class="prompt">$</span>
+            <code>{installCommand}</code>
+            <span class="copy-icon" aria-hidden="true">
+              <svg viewBox="0 0 18 18"><rect x="6" y="6" width="8" height="8" rx="1" /><path d="M4 12H3.5A1.5 1.5 0 0 1 2 10.5v-7A1.5 1.5 0 0 1 3.5 2h7A1.5 1.5 0 0 1 12 3.5V4" /></svg>
+            </span>
+            <span class="copied">Copied</span>
+          </button>
+          <a class="text-link" href="#reel">Watch what it can do <span>↓</span></a>
+        </div>
+        <div class="hero__meta" aria-label="Project facts">
+          <div><strong>01</strong><span>command<br />to start</span></div>
+          <div><strong>0</strong><span>database<br />or daemon</span></div>
+          <div><strong>∞</strong><span>ways back<br />via reflog</span></div>
+        </div>
+      </div>
+
+      <div class="hero__film reveal" data-delay="1">
+        <div class="film-orbit film-orbit--one" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="film-orbit film-orbit--two" aria-hidden="true"><i></i><i></i></div>
+        <div class="film-label film-label--top"><i></i> 48 SEC / BUILT IN REMOTION</div>
+        <div class="film-label film-label--side">THE WHOLE STORY →</div>
+        <div class="film-frame">
+          <video
+            data-hero-video
+            src="/media/ingit-promo-vertical.mp4"
+            poster="/media/ingit-promo-preview.png"
+            autoplay
+            muted
+            loop
+            playsinline
+            preload="metadata"
+            aria-label="ingit product film"
+          ></video>
+          <div class="film-frame__shine" aria-hidden="true"></div>
+          <button class="sound-toggle" type="button" data-sound-toggle aria-label="Turn sound on">
+            <span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span data-sound-label>Sound on</span>
+          </button>
+        </div>
+        <div class="floating-pill floating-pill--fast"><span>↯</span> optimistic</div>
+        <div class="floating-pill floating-pill--safe"><span>✓</span> reconciled</div>
+      </div>
+    </section>
+
+    <section class="ticker" aria-label="Highlights">
+      <div class="ticker__track">
+        <span>COMMIT GRAPH</span><i></i><span>OPTIMISTIC MUTATIONS</span><i></i><span>TIME MACHINE</span><i></i><span>AGENT SESSIONS</span><i></i><span>CI STATUS</span><i></i><span>WORKING TREE</span><i></i>
+        <span aria-hidden="true">COMMIT GRAPH</span><i aria-hidden="true"></i><span aria-hidden="true">OPTIMISTIC MUTATIONS</span><i aria-hidden="true"></i><span aria-hidden="true">TIME MACHINE</span><i aria-hidden="true"></i><span aria-hidden="true">AGENT SESSIONS</span><i aria-hidden="true"></i><span aria-hidden="true">CI STATUS</span><i aria-hidden="true"></i><span aria-hidden="true">WORKING TREE</span><i aria-hidden="true"></i>
+      </div>
+    </section>
+
+    <section class="thesis section-shell" aria-labelledby="thesis-title">
+      <p class="section-number">01 / WHY INGIT</p>
+      <div class="thesis__body reveal">
+        <p class="eyebrow"><span>FEEDBACK WITHOUT THE WAIT</span></p>
+        <h2 id="thesis-title">Git has always been a graph.<br />It’s time it <em>felt</em> like one.</h2>
+        <p>ingit predicts the result of checkout, merge, rebase, cherry-pick, revert, uncommit, and branch moves—then animates the new topology immediately. Real git runs underneath and the view reconciles when it’s done.</p>
+      </div>
+      <GraphMorph />
+    </section>
+
+    <section class="node-language section-shell" aria-labelledby="node-language-title">
+      <div class="node-language__visual reveal" aria-label="Example ingit commit nodes with green additions gauges on the left and pink deletions gauges on the right">
+        <svg class="node-gauge-demo" viewBox="0 0 620 610" role="img" aria-labelledby="gauge-title gauge-desc">
+          <title id="gauge-title">How ingit commit nodes encode lines changed</title>
+          <desc id="gauge-desc">All nodes have the same outer size. Green fills the left half based on additions and pink fills the right half based on deletions.</desc>
+          <path class="gauge-lane gauge-lane--main" d="M240 0V610" />
+          <path class="gauge-lane gauge-lane--branch" d="M240 225C330 225 326 365 420 365" />
+          {gaugeExamples.map((node) => (
+            <g class="gauge-node">
+              <defs>
+                <clipPath id={`gauge-${node.id}-left`}><path d={halfCirclePath(240, node.y, 'left')} /></clipPath>
+                <clipPath id={`gauge-${node.id}-right`}><path d={halfCirclePath(240, node.y, 'right')} /></clipPath>
+              </defs>
+              <circle cx="240" cy={node.y} r={gaugeRadius} fill="#11111b" stroke={node.color} stroke-width="2.75" />
+              <path d={halfCirclePath(240, node.y, 'left')} fill="#1e1e2e" />
+              <path d={halfCirclePath(240, node.y, 'right')} fill="#1e1e2e" />
+              <rect x={240 - gaugeInnerRadius} y={node.y + gaugeInnerRadius - node.additionsHeight} width={gaugeInnerRadius} height={node.additionsHeight} fill="#a6e3a1" clip-path={`url(#gauge-${node.id}-left)`} />
+              <rect x="240" y={node.y + gaugeInnerRadius - node.deletionsHeight} width={gaugeInnerRadius} height={node.deletionsHeight} fill="#f38ba8" clip-path={`url(#gauge-${node.id}-right)`} />
+              <path d={halfCircleArc(240, node.y, 'left')} stroke="#45475a" stroke-width="1.6" fill="none" />
+              <path d={halfCircleArc(240, node.y, 'right')} stroke="#45475a" stroke-width="1.6" fill="none" />
+              <line x1="240" y1={node.y - gaugeInnerRadius} x2="240" y2={node.y + gaugeInnerRadius} stroke="#45475a" stroke-width="1.6" />
+              <g class="gauge-label">
+                <rect x="276" y={node.y - 24} width="238" height="48" rx="2" />
+                <text x="290" y={node.y - 5} class="gauge-label__stat">
+                  <tspan class="gauge-label__add">+{node.additions.toLocaleString()}</tspan>
+                  <tspan class="gauge-label__delete" dx="10">−{node.deletions.toLocaleString()}</tspan>
+                </text>
+                <text x="290" y={node.y + 13} class="gauge-label__subject">{node.label}</text>
+              </g>
+            </g>
+          ))}
+        </svg>
+        <div class="gauge-key" aria-hidden="true">
+          <span><i></i>LEFT / ADDITIONS</span>
+          <span><i></i>RIGHT / DELETIONS</span>
+          <span>FULL HEIGHT = 85TH PERCENTILE</span>
+        </div>
+      </div>
+      <div class="node-language__copy reveal" data-delay="1">
+        <p class="section-number">01.5 / READ THE CHANGE</p>
+        <p class="eyebrow"><span>TWO GAUGES. ONE NODE.</span></p>
+        <h2 id="node-language-title">See the change<br /><em>inside.</em></h2>
+        <p>Every commit node stays the same size. Inside it, the <strong>green left half shows additions</strong> and the <strong>pink right half shows deletions.</strong> Each gauge fills upward in proportion to the amount of code changed.</p>
+        <p class="node-language__aside">The shared scale uses the loaded history’s 85th-percentile LOC change as “full.” That keeps one giant commit from flattening every other signal; larger values simply cap at the top.</p>
+      </div>
+    </section>
+
+    <section class="reel section-shell" id="reel" aria-labelledby="reel-title">
+      <div class="reel__heading reveal">
+        <p class="section-number">02 / THE MOVES</p>
+        <h2 id="reel-title">Seven operations.<br /><em>Zero guesswork.</em></h2>
+        <p>These are the real interactions—not mockups. Press play, scrub around, or just scroll and let them unfold.</p>
+      </div>
+
+      <div class="showcase-list">
+        {showcase.map((item, index) => (
+          <article class:list={['showcase', `showcase--${item.color}`, index % 2 && 'showcase--reverse']}>
+            <div class="showcase__copy reveal">
+              <div class="showcase__index"><span>{item.id}</span><i></i><small>{String(showcase.length).padStart(2, '0')}</small></div>
+              <p class="showcase__kicker">{item.kicker}</p>
+              <h3>{item.title}</h3>
+              <p class="showcase__body">{item.body}</p>
+              {item.note && <p class="showcase__note"><i></i>{item.note}</p>}
+            </div>
+            <div class="showcase__media reveal" data-delay="1">
+              <div class="window-bar" aria-hidden="true">
+                <span><i></i><i></i><i></i></span>
+                <code>~/code/ingit</code>
+                <small>LIVE</small>
+              </div>
+              <video
+                class="showcase-video"
+                src={`/media/showcase/${item.slug}.mp4`}
+                poster={`/media/showcase/${item.slug}.jpg`}
+                muted
+                loop
+                playsinline
+                preload="metadata"
+                controls
+                aria-label={`${item.title} demonstration`}
+              ></video>
+              <div class="media-glow" aria-hidden="true"></div>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <section class="time-machine" aria-labelledby="time-title">
+      <div class="time-machine__grid section-shell">
+        <div class="time-machine__visual reveal" aria-hidden="true">
+          <div class="time-radar"><i></i><i></i><i></i><i></i></div>
+          <div class="time-branch time-branch--a"><b></b><b></b><b></b><b></b><b></b></div>
+          <div class="time-branch time-branch--b"><b></b><b></b><b></b></div>
+          <span class="time-pointer">HEAD@{'{4}'} <i></i></span>
+        </div>
+        <div class="time-machine__copy reveal" data-delay="1">
+          <p class="section-number">03 / THE WAY BACK</p>
+          <p class="eyebrow"><span>REFLOG, MADE HUMAN</span></p>
+          <h2 id="time-title">Lose a commit.<br /><em>Not your cool.</em></h2>
+          <p>Time Machine turns every place HEAD has been into a visual recovery path. Deleted branch? Bad reset? Detached experiment? Find it, inspect it, bring it back.</p>
+          <blockquote>“Where did that commit go?” is now a visual question.</blockquote>
+        </div>
+      </div>
+    </section>
+
+    <section class="inside section-shell" id="inside" aria-labelledby="inside-title">
+      <div class="inside__heading reveal">
+        <p class="section-number">04 / THE WHOLE SYSTEM</p>
+        <h2 id="inside-title">A control tower for<br />your code—and <em>who’s coding it.</em></h2>
+      </div>
+      <div class="feature-grid">
+        <article class="feature feature--agents reveal">
+          <div class="feature__visual agent-ui" aria-hidden="true">
+            <div class="agent-ui__top"><span>Agent sessions</span><small>3 ACTIVE</small></div>
+            <div class="agent-row"><b class="agent-mark agent-mark--claude">C</b><span><strong>Fix failing CI checks</strong><small>~/ingit · terminal</small></span><i></i></div>
+            <div class="agent-row"><b class="agent-mark agent-mark--codex">⌁</b><span><strong>Build landing page</strong><small>~/ingit · VS Code</small></span><i></i></div>
+            <div class="agent-row agent-row--idle"><b class="agent-mark">›_</b><span><strong>Refactor graph lanes</strong><small>~/ingit-worktree · cursor</small></span><i></i></div>
+          </div>
+          <p class="feature__label">Agent sessions</p>
+          <h3>Know what every agent is doing.</h3>
+          <p>See Claude Code and Codex sessions across repos, whether they’re thinking, and the exact terminal or IDE they live in. Click to jump there.</p>
+        </article>
+        <article class="feature feature--ci reveal" data-delay="1">
+          <div class="feature__visual ci-ui" aria-hidden="true">
+            <div class="commit-row"><i class="node node--green"></i><code>8c7a2f1</code><span>Polish graph transitions</span><b>✓ 12</b></div>
+            <div class="commit-row"><i class="node node--blue"></i><code>45a10d9</code><span>Add CI polling</span><b class="waiting">◌ 8</b></div>
+            <div class="commit-row"><i class="node node--pink"></i><code>a21db44</code><span>Agent focus handoff</span><b>✓ 7</b></div>
+            <svg viewBox="0 0 360 120"><path d="M28 0v120M28 38c56 0 44 55 92 55h240M28 74c42 0 44-34 92-34h240" /></svg>
+          </div>
+          <p class="feature__label">GitHub awareness</p>
+          <h3>Your remote state, on the graph.</h3>
+          <p>PRs attach to commits. Live CI dots poll until checks settle. Push, fetch, or force-with-lease without changing context.</p>
+        </article>
+        <article class="feature feature--tree reveal">
+          <div class="feature__visual tree-ui" aria-hidden="true">
+            <div><span>M</span><code>src/GraphCanvas.tsx</code><b>+24 −7</b></div>
+            <div><span>A</span><code>src/TimeMachine.tsx</code><b>+118</b></div>
+            <div><span>M</span><code>packages/git-core</code><b>+9 −3</b></div>
+            <button>Stage all <i>→</i></button>
+          </div>
+          <p class="feature__label">Working tree</p>
+          <h3>Changes stay close to history.</h3>
+          <p>Stage and unstage files, inspect diffs, and see exactly what’s ready to become the next node.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="architecture" aria-labelledby="architecture-title">
+      <div class="section-shell">
+        <div class="architecture__copy reveal">
+          <p class="section-number">05 / NO MAGIC TRICKS</p>
+          <h2 id="architecture-title">Plain git.<br /><em>Beautifully projected.</em></h2>
+          <p>No database. No daemon. Everything ingit shows is derived from your repository, and every action is a git command you could have typed.</p>
+        </div>
+        <div class="architecture__map reveal" data-delay="1" aria-label="ingit architecture: your repository connects through plain git to the local ingit server and browser UI">
+          <div class="map-node"><small>SOURCE</small><strong>Your repo</strong><code>.git/</code></div>
+          <div class="map-link"><span>plain git</span><i></i></div>
+          <div class="map-node map-node--hot"><small>LOCAL</small><strong>ingit</strong><code>127.0.0.1</code></div>
+          <div class="map-link"><span>websocket</span><i></i></div>
+          <div class="map-node"><small>VIEW</small><strong>Browser</strong><code>graph + diffs</code></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="manifesto section-shell">
+      <div class="manifesto__mark reveal"><img src="/media/brand/ingit-icon.svg" alt="" width="120" height="120" /></div>
+      <div class="manifesto__copy reveal" data-delay="1">
+        <p class="eyebrow"><span>BUILT BY AGENTS. STEERED BY TASTE.</span></p>
+        <h2>Yes, it’s <em>vibecoded.</em></h2>
+        <p>This codebase is written entirely by AI coding agents, steered by a human with strong opinions about how a git client should feel. It’s not a disclaimer. It’s the experiment.</p>
+        <a class="text-link" href={repoURL} target="_blank" rel="noreferrer">Read the source <span>↗</span></a>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div class="final-cta__graph" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="final-cta__content reveal">
+        <p class="eyebrow"><span>YOUR NEXT CHECKOUT CAN FEEL DIFFERENT</span></p>
+        <h2>Make git<br /><em>click.</em></h2>
+        <p>Linux and macOS · MIT licensed · runs locally</p>
+        <div class="final-cta__actions">
+          <button class="install-command install-command--light" type="button" data-copy={installCommand} aria-label={`Copy ${installCommand}`}>
+            <span class="prompt">$</span><code>{installCommand}</code><span class="copy-icon" aria-hidden="true">＋</span><span class="copied">Copied</span>
+          </button>
+          <a class="button button--outline" href={repoURL} target="_blank" rel="noreferrer">Star on GitHub <span>↗</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <a class="brand" href="#top"><img src="/media/brand/ingit-icon.svg" width="30" height="30" alt="" /><span>ingit</span></a>
+    <p>Git at the speed of thought.</p>
+    <div><a href={repoURL} target="_blank" rel="noreferrer">GitHub</a><a href={`${repoURL}/issues`} target="_blank" rel="noreferrer">Issues</a><a href={`${repoURL}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MIT License</a></div>
+  </footer>
+
+  <script>
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    const revealObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible')
+          revealObserver.unobserve(entry.target)
+        }
+      }
+    }, {threshold: 0.12})
+
+    document.querySelectorAll('.reveal').forEach((element) => revealObserver.observe(element))
+
+    const videoObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const video = entry.target
+        if (!(video instanceof HTMLVideoElement)) continue
+        if (entry.isIntersecting && entry.intersectionRatio > 0.45 && !reducedMotion) {
+          void video.play().catch(() => undefined)
+        } else {
+          video.pause()
+        }
+      }
+    }, {threshold: [0, 0.45, 0.75]})
+
+    document.querySelectorAll('.showcase-video').forEach((video) => videoObserver.observe(video))
+
+    document.querySelectorAll('[data-copy]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const value = button.getAttribute('data-copy')
+        if (!value) return
+        try {
+          await navigator.clipboard.writeText(value)
+          button.classList.add('is-copied')
+          window.setTimeout(() => button.classList.remove('is-copied'), 1800)
+        } catch {
+          const code = button.querySelector('code')
+          if (code instanceof HTMLElement) window.getSelection()?.selectAllChildren(code)
+        }
+      })
+    })
+
+    const heroVideo = document.querySelector('[data-hero-video]')
+    const soundToggle = document.querySelector('[data-sound-toggle]')
+    const soundLabel = document.querySelector('[data-sound-label]')
+    soundToggle?.addEventListener('click', () => {
+      if (!(heroVideo instanceof HTMLVideoElement)) return
+      heroVideo.muted = !heroVideo.muted
+      soundToggle.classList.toggle('is-playing', !heroVideo.muted)
+      soundToggle.setAttribute('aria-label', heroVideo.muted ? 'Turn sound on' : 'Mute video')
+      if (soundLabel) soundLabel.textContent = heroVideo.muted ? 'Sound on' : 'Mute'
+      if (heroVideo.paused) void heroVideo.play()
+    })
+
+    const root = document.documentElement
+    let raf = 0
+    const updateScroll = () => {
+      const available = document.body.scrollHeight - window.innerHeight
+      root.style.setProperty('--scroll', String(available > 0 ? window.scrollY / available : 0))
+      document.querySelector('[data-header]')?.classList.toggle('is-scrolled', window.scrollY > 24)
+      raf = 0
+    }
+    window.addEventListener('scroll', () => {
+      if (!raf) raf = requestAnimationFrame(updateScroll)
+    }, {passive: true})
+    updateScroll()
+
+    if (!reducedMotion && matchMedia('(pointer: fine)').matches) {
+      window.addEventListener('pointermove', (event) => {
+        root.style.setProperty('--pointer-x', `${event.clientX}px`)
+        root.style.setProperty('--pointer-y', `${event.clientY}px`)
+      }, {passive: true})
+    }
+  </script>
+</BaseLayout>
