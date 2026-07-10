@@ -4,6 +4,7 @@ import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
+import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,13 @@ const REF_PILL_FONT = '600 11px system-ui, -apple-system, sans-serif'
 const GRAPH_ENTER_OFFSET_Y = NODE_SPACING_Y * 0.55
 const GRAPH_EXIT_OFFSET_Y = NODE_SPACING_Y * 0.3
 const PRIMARY_LANE_HIGHLIGHT_WIDTH = 54
+const EDGE_OCCLUSION_GEOMETRY = {
+  laneWidth: LANE_WIDTH,
+  rowHeight: NODE_SPACING_Y,
+  nodeRadius: NODE_RADIUS,
+  clearance: 2,
+  curveControlRatio: 0.3,
+}
 
 const LANE_COLORS = [
   '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
@@ -322,6 +330,7 @@ type EdgeRoutePlan =
   | { mode: 'straight' }
   | { mode: 'curve' }
   | { mode: 'adjacent-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
+  | { mode: 'occlusion-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
   | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
   | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
 
@@ -583,6 +592,22 @@ function planEdgeRoute(
   }
 
   if (rowDelta < EDGE_SHORT_CURVE_ROWS) {
+    const preferredTrack = opts.adjacentTrack ?? 'from'
+    const occlusionTrack = findOcclusionHookTrack(
+      { x: from.x, y: from.y, idx: from.idx, lane: from.row.lane },
+      { x: to.x, y: to.y, idx: to.idx, lane: to.row.lane },
+      occupiedLanes,
+      EDGE_OCCLUSION_GEOMETRY,
+      preferredTrack,
+    )
+    if (occlusionTrack) {
+      return {
+        mode: 'occlusion-hook',
+        laneA: Math.min(from.row.lane, to.row.lane),
+        laneB: Math.max(from.row.lane, to.row.lane),
+        track: occlusionTrack,
+      }
+    }
     return { mode: 'curve' }
   }
 
@@ -662,6 +687,7 @@ function edgeBundleKey(plan: EdgeRoutePlan): string | null {
     case 'inside-rail':
       return `${plan.mode}:${plan.minLane}:${plan.maxLane}`
     case 'adjacent-hook':
+    case 'occlusion-hook':
       return `${plan.mode}:${plan.laneA}:${plan.laneB}:${plan.track}`
     default:
       return null
@@ -680,6 +706,7 @@ function routedEdgePath(
     case 'curve':
       return buildCurvedEdgePath(from, to)
     case 'adjacent-hook':
+    case 'occlusion-hook':
       return buildAdjacentHookPath(from, to, (plan.track === 'to' ? to.x : from.x) + bundleOffset)
     case 'inside-rail':
       return buildInsideRailPath(
@@ -702,6 +729,7 @@ function lerpEdgeRoutePlan(fromPlan: EdgeRoutePlan, toPlan: EdgeRoutePlan, progr
     case 'curve':
       return toPlan
     case 'adjacent-hook':
+    case 'occlusion-hook':
       return toPlan
     case 'inside-rail': {
       const fromInside = fromPlan as Extract<EdgeRoutePlan, { mode: 'inside-rail' }>

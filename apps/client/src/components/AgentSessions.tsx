@@ -39,6 +39,7 @@ export function AgentSessions() {
   // menu renders position:fixed and needs the pill's rect to attach to.
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null)
   const repoPath = useAppStore((s) => s.repoPath)
+  const openRepoByPath = useAppStore((s) => s.openRepoByPath)
   const rootRef = useRef<HTMLDivElement>(null)
 
   // Close the dropdown on any outside click.
@@ -53,6 +54,12 @@ export function AgentSessions() {
 
   const handleFocus = async (session: AgentSession) => {
     if (await focus(session)) setOpen(false)
+  }
+
+  const handleSwitchRepo = (session: AgentSession) => {
+    if (!session.gitRoot || session.gitRoot === repoPath) return
+    setOpen(false)
+    void openRepoByPath(session.gitRoot)
   }
 
   if (sessions.length === 0) return null
@@ -110,8 +117,8 @@ export function AgentSessions() {
             position: 'fixed',
             top: anchor.top,
             right: anchor.right,
-            minWidth: 280,
-            maxWidth: 400,
+            width: 480,
+            maxWidth: 'calc(100vw - 16px)',
             maxHeight: 320,
             overflowY: 'auto',
             background: '#181825',
@@ -150,68 +157,100 @@ export function AgentSessions() {
             </div>
           )}
           {visible.map((session) => {
-            const current = repoPath !== null && session.cwd === repoPath
-            const disabled = !session.focusable
+            const current = repoPath !== null
+              && (session.gitRoot === repoPath || session.cwd === repoPath)
+            const canSwitchRepo = session.gitRoot !== null && !current
+            const focusDisabled = !session.focusable
+            const focusTitle = focusDisabled
+              ? session.kind === 'terminal'
+                ? capabilities?.displayServer === 'wayland'
+                  ? "Can't focus terminal windows on Wayland — install the 'Window Calls' GNOME Shell extension"
+                  : 'Can\'t focus terminal windows — install wmctrl'
+                : 'This session has no window to focus'
+              : `Focus ${session.agent} window · ${agentSessionKindLabel(session)} (pid ${session.pid})`
             return (
-              <button
+              <div
                 key={`${session.pid}:${session.cwd}`}
-                onClick={() => !disabled && void handleFocus(session)}
-                disabled={disabled || focusingPid !== null}
-                title={
-                  disabled
-                    ? session.kind === 'terminal'
-                      ? capabilities?.displayServer === 'wayland'
-                        ? "Can't focus terminal windows on Wayland — install the 'Window Calls' GNOME Shell extension"
-                        : "Can't focus terminal windows — install wmctrl"
-                      : 'This session has no window to focus'
-                    : `${session.cwd} · ${agentSessionKindLabel(session)} (pid ${session.pid})`
-                }
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 8,
                   width: '100%',
-                  padding: '6px 8px',
-                  border: 'none',
                   borderRadius: 4,
                   background: 'transparent',
-                  color: disabled ? '#45475a' : '#a6adc8',
-                  fontSize: 11,
-                  textAlign: 'left',
-                  cursor: disabled ? 'default' : 'pointer',
                   opacity: focusingPid !== null && focusingPid !== session.pid ? 0.5 : 1,
                 }}
-                onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = '#31324466' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#31324466' }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
               >
-                <span style={{ flexShrink: 0, display: 'inline-flex', opacity: disabled ? 0.4 : 1 }}>
-                  <AgentIcon agent={session.agent} size={13} busy={session.busy ?? false} />
-                </span>
-                <span style={{ flexShrink: 0, fontFamily: 'monospace' }}>
-                  {dirName(session.cwd)}{session.count > 1 ? ` ×${session.count}` : ''}
-                </span>
-                <span
+                <button
+                  onClick={() => handleSwitchRepo(session)}
+                  disabled={!canSwitchRepo}
+                  title={
+                    current
+                      ? `${session.cwd} · currently open repository`
+                      : session.gitRoot
+                        ? `Switch to ${session.gitRoot}`
+                        : `${session.cwd} · not inside a Git repository`
+                  }
                   style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
                     flex: 1,
-                    color: '#7f849c',
-                    textAlign: 'right',
+                    minWidth: 0,
+                    padding: '6px 8px',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#a6adc8',
+                    fontSize: 11,
+                    textAlign: 'left',
+                    cursor: canSwitchRepo ? 'pointer' : 'default',
                   }}
                 >
-                  {session.title ?? agentSessionKindLabel(session)}
-                </span>
-                {session.busy && (
-                  <span style={{ flexShrink: 0, color: '#f9e2af', fontSize: 10 }}>working</span>
-                )}
-                {current && (
-                  <span style={{ flexShrink: 0, color: '#a6e3a1', fontSize: 10 }}>this repo</span>
-                )}
-                {focusingPid === session.pid && (
-                  <span style={{ flexShrink: 0, color: '#89b4fa', fontSize: 10 }}>focusing…</span>
-                )}
-              </button>
+                  <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+                    <AgentIcon agent={session.agent} size={13} busy={session.busy ?? false} />
+                  </span>
+                  <span style={{ flexShrink: 0, fontFamily: 'monospace' }}>
+                    {dirName(session.cwd)}{session.count > 1 ? ` ×${session.count}` : ''}
+                  </span>
+                  <span
+                    style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      flex: 1,
+                      color: '#7f849c',
+                      textAlign: 'right',
+                    }}
+                  >
+                    {session.title ?? agentSessionKindLabel(session)}
+                  </span>
+                  {session.busy && (
+                    <span style={{ flexShrink: 0, color: '#f9e2af', fontSize: 10 }}>working</span>
+                  )}
+                  {current && (
+                    <span style={{ flexShrink: 0, color: '#a6e3a1', fontSize: 10 }}>this repo</span>
+                  )}
+                </button>
+                <button
+                  onClick={() => !focusDisabled && void handleFocus(session)}
+                  disabled={focusDisabled || focusingPid !== null}
+                  title={focusTitle}
+                  style={{
+                    flexShrink: 0,
+                    marginRight: 6,
+                    padding: '3px 7px',
+                    border: '1px solid #89b4fa55',
+                    borderRadius: 4,
+                    background: '#89b4fa18',
+                    color: focusDisabled ? '#45475a' : '#89b4fa',
+                    fontSize: 10,
+                    cursor: focusDisabled || focusingPid !== null ? 'default' : 'pointer',
+                  }}
+                >
+                  {focusingPid === session.pid ? 'Focusing…' : 'Focus on window'}
+                </button>
+              </div>
             )
           })}
           {hiddenCount > 0 && (
