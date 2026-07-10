@@ -10,6 +10,11 @@ import {
   readDarwinProcesses,
   type ProcessInfo,
 } from './darwin-processes.js'
+import {
+  assessWindowCalls,
+  parseWindowCallsExtensionInfo,
+  type WindowCallsExtensionInfo,
+} from './window-calls-state.js'
 
 const execFile = promisify(execFileCb)
 
@@ -544,6 +549,14 @@ const WINDOW_CALLS_ARGS = [
   '--method',
 ]
 
+const WINDOW_CALLS_UUID = 'window-calls@domandoman.xyz'
+const GNOME_EXTENSIONS_ARGS = [
+  'call', '--session',
+  '--dest', 'org.gnome.Shell',
+  '--object-path', '/org/gnome/Shell',
+  '--method',
+]
+
 function parseGVariantString(stdout: string): string {
   // gdbus prints a GVariant tuple: ('...',)
   const match = stdout.match(/\('(.*)',\)\s*$/s)
@@ -570,6 +583,58 @@ async function activateShellWindow(id: number): Promise<void> {
   await execFile('gdbus', [
     ...WINDOW_CALLS_ARGS, 'org.gnome.Shell.Extensions.Windows.Activate', String(id),
   ])
+}
+
+async function probeWindowCalls(attempts = 3): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      await listShellWindows()
+      return true
+    } catch {
+      if (attempt + 1 < attempts) await sleep(100)
+    }
+  }
+  return false
+}
+
+async function getWindowCallsExtensionInfo(): Promise<WindowCallsExtensionInfo | null> {
+  try {
+    const { stdout } = await execFile('gdbus', [
+      ...GNOME_EXTENSIONS_ARGS,
+      'org.gnome.Shell.Extensions.GetExtensionInfo',
+      WINDOW_CALLS_UUID,
+    ])
+    return parseWindowCallsExtensionInfo(stdout, WINDOW_CALLS_UUID)
+  } catch {
+    return null
+  }
+}
+
+async function setWindowCallsEnabled(enabled: boolean): Promise<boolean> {
+  try {
+    const method = enabled ? 'EnableExtension' : 'DisableExtension'
+    const { stdout } = await execFile('gdbus', [
+      ...GNOME_EXTENSIONS_ARGS,
+      `org.gnome.Shell.Extensions.${method}`,
+      WINDOW_CALLS_UUID,
+    ])
+    return stdout.includes('true')
+  } catch {
+    return false
+  }
+}
+
+/** Enable, or cleanly restart, an installed copy without reinstalling it. */
+async function repairWindowCalls(info: WindowCallsExtensionInfo): Promise<boolean> {
+  if (!info.installed) return false
+  if (await probeWindowCalls(1)) return true
+
+  // When GNOME thinks it is enabled but its D-Bus object is absent, toggle it
+  // cleanly. This calls the old instance's disable() before exporting a new
+  // object and avoids InstallRemoteExtension's duplicate-export failure.
+  if (info.enabled) await setWindowCallsEnabled(false)
+  if (!await setWindowCallsEnabled(true)) return false
+  return probeWindowCalls(8)
 }
 
 /** X11/XWayland windows via wmctrl. Blind to native Wayland windows. */
@@ -674,7 +739,17 @@ async function focusWindowOfPids(pids: Set<number>, target: FocusTarget): Promis
   if (process.platform === 'darwin') return null
   try {
     if (await focusViaWindowCalls(pids, target)) return 'window-calls'
-  } catch { /* extension missing — fall through */ }
+  } catch {
+    // The extension can be installed/enabled while its D-Bus export is stale
+    // (notably after GNOME tried to reinstall an already-active copy). Repair
+    // it only in response to an explicit focus request, then retry once.
+    const info = await getWindowCallsExtensionInfo()
+    if (info?.installed && await repairWindowCalls(info)) {
+      try {
+        if (await focusViaWindowCalls(pids, target)) return 'window-calls'
+      } catch { /* fall through */ }
+    }
+  }
   try {
     if (await focusViaWmctrl(pids)) return 'wmctrl'
   } catch { /* fall through */ }
@@ -689,13 +764,14 @@ interface ProbedCapabilities {
   displayServer: string
   hasWmctrl: boolean
   hasWindowCalls: boolean
+  windowCallsInfo: WindowCallsExtensionInfo | null
   ideClis: Map<string, boolean>
 }
 
 // Tool presence on PATH won't change mid-run, but the Window Calls GNOME
 // extension can be installed while we're running — probe that one fresh so a
 // just-installed extension works without a server restart.
-let staticCapsPromise: Promise<Omit<ProbedCapabilities, 'hasWindowCalls'>> | null = null
+let staticCapsPromise: Promise<Omit<ProbedCapabilities, 'hasWindowCalls' | 'windowCallsInfo'>> | null = null
 
 async function getCapabilities(): Promise<ProbedCapabilities> {
   staticCapsPromise ??= (async () => {
@@ -715,9 +791,14 @@ async function getCapabilities(): Promise<ProbedCapabilities> {
     staticCapsPromise,
     process.platform === 'darwin'
       ? false
-      : listShellWindows().then(() => true).catch(() => false),
+      : probeWindowCalls(),
   ])
-  return { ...staticCaps, hasWindowCalls }
+  const windowCallsInfo = process.platform === 'darwin'
+    ? null
+    : hasWindowCalls
+      ? { installed: true, enabled: true }
+      : await getWindowCallsExtensionInfo()
+  return { ...staticCaps, hasWindowCalls, windowCallsInfo }
 }
 
 function ideCliFor(ide: string): string | null {
@@ -735,10 +816,11 @@ export async function listAgentSessions(): Promise<{
   const [{ procs, codexAppServers }, caps] = await Promise.all([scanAgentProcs(), getCapabilities()])
   // On Wayland wmctrl only reaches XWayland windows — modern terminals are
   // native Wayland, so don't advertise focus support from wmctrl alone there.
-  const canFocusTerminals = caps.hasWindowCalls
-    || (caps.hasWmctrl && caps.displayServer !== 'wayland')
   const isGnome = (process.env.XDG_CURRENT_DESKTOP ?? '').toLowerCase().includes('gnome')
-  const canInstallWindowCalls = !caps.hasWindowCalls && isGnome
+  const windowCalls = assessWindowCalls(caps.hasWindowCalls, caps.windowCallsInfo, isGnome)
+  const canFocusTerminals = windowCalls.canUseOrRepair
+    || (caps.hasWmctrl && caps.displayServer !== 'wayland')
+  const canInstallWindowCalls = windowCalls.canInstall
 
   const cpuByPid = new Map(
     [...procs.map(({ info }) => info), ...codexAppServers].map((info) => [info.pid, info.cpuTicks]))
@@ -816,8 +898,6 @@ export async function listAgentSessions(): Promise<{
   }
 }
 
-const WINDOW_CALLS_UUID = 'window-calls@domandoman.xyz'
-
 /**
  * Ask GNOME Shell to install the Window Calls extension. Shell shows its own
  * consent dialog, so this blocks until the user answers it. The extension
@@ -825,15 +905,25 @@ const WINDOW_CALLS_UUID = 'window-calls@domandoman.xyz'
  */
 export async function installWindowCalls(): Promise<{ ok: boolean; error?: string }> {
   try {
+    const info = await getWindowCallsExtensionInfo()
+    if (info?.installed) {
+      if (await repairWindowCalls(info)) return { ok: true }
+      return { ok: false, error: 'Window Calls is installed but GNOME could not activate it' }
+    }
+    if (info === null) {
+      return { ok: false, error: 'Could not determine whether Window Calls is already installed' }
+    }
+
     const { stdout } = await execFile('gdbus', [
-      'call', '--session',
-      '--dest', 'org.gnome.Shell',
-      '--object-path', '/org/gnome/Shell',
-      '--method', 'org.gnome.Shell.Extensions.InstallRemoteExtension',
+      ...GNOME_EXTENSIONS_ARGS, 'org.gnome.Shell.Extensions.InstallRemoteExtension',
       WINDOW_CALLS_UUID,
     ], { timeout: 120_000 })
     const result = parseGVariantString(stdout)
-    if (result === 'successful') return { ok: true }
+    if (result === 'successful') {
+      return await probeWindowCalls(8)
+        ? { ok: true }
+        : { ok: false, error: 'Window Calls was installed but its D-Bus endpoint did not start' }
+    }
     return {
       ok: false,
       error: result === 'cancelled'
@@ -938,7 +1028,7 @@ export async function focusAgentSession(pid: number, cwdOverride?: string): Prom
     ok: false,
     error: process.platform === 'darwin'
       ? 'Terminal window focusing is not yet implemented on macOS'
-      : caps.hasWindowCalls || caps.hasWmctrl
+      : caps.hasWindowCalls || caps.windowCallsInfo?.installed || caps.hasWmctrl
       ? 'No window found for this session (terminal may be on another display)'
       : caps.displayServer === 'wayland'
         ? "No window-activation backend. Install the 'Window Calls' GNOME Shell extension (extensions.gnome.org/extension/4724)."
