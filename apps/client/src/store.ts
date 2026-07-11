@@ -49,6 +49,7 @@ import {
   predictUncommit,
   predictAppendOnHead,
   predictAmendHead,
+  predictWorktreeAfterCommit,
   predictMerge,
   predictRebase,
   type OptimisticGraph,
@@ -756,14 +757,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     const predicted = amend
       ? predictAmendHead(rows, snapshot.refs, subject)
       : predictAppendOnHead(rows, snapshot.refs, subject, 'commit')
+    const worktreeChangesBeforeCommit = get().worktreeChanges
+    const worktreeFileDiffsBeforeCommit = get().worktreeFileDiffs
+    const optimisticWorktreeChanges = worktreeChangesBeforeCommit
+      ? predictWorktreeAfterCommit(
+          worktreeChangesBeforeCommit,
+          predicted?.headSha ?? worktreeChangesBeforeCommit.headSha,
+        )
+      : null
     if (predicted) {
       set({
         pendingMutation: true,
         refs: predicted.refs,
         historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
+        worktreeChanges: optimisticWorktreeChanges,
+        worktreeFileDiffs: {},
       })
     } else {
-      set({ pendingMutation: true })
+      set({
+        pendingMutation: true,
+        worktreeChanges: optimisticWorktreeChanges,
+        worktreeFileDiffs: {},
+      })
     }
 
     let result: { ok: boolean; headSha: string; changes: WorktreeChangesResponse }
@@ -784,7 +799,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       })(), COMMIT_MUTATION_TIMEOUT_MS)
     } catch (err) {
-      set({ ...snapshot, pendingMutation: false })
+      set({
+        ...snapshot,
+        pendingMutation: false,
+        worktreeChanges: worktreeChangesBeforeCommit,
+        worktreeFileDiffs: worktreeFileDiffsBeforeCommit,
+      })
       get().showError('Commit failed', err)
       return false
     }

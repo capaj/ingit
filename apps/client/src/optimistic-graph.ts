@@ -18,13 +18,29 @@
 // server-driven path in that case.
 
 import { Projection } from '@ingit/graph-core'
-import type { CommitRow, RefSummary } from '@ingit/rpc-contract'
+import type { CommitRow, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
 
 export interface OptimisticGraph {
   rows: CommitRow[]
   refs: RefSummary[]
   /** New HEAD sha after the mutation (the commit to select / scroll to). */
   headSha: string | null
+}
+
+/**
+ * A successful commit consumes the index but leaves unstaged changes alone.
+ * Predict that alongside the new graph tip so the old worktree node does not
+ * briefly re-anchor above the optimistic commit while the server reconciles.
+ */
+export function predictWorktreeAfterCommit(
+  changes: WorktreeChangesResponse,
+  headSha: string,
+): WorktreeChangesResponse {
+  return {
+    ...changes,
+    headSha,
+    staged: [],
+  }
 }
 
 interface RowMeta {

@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { CommitRow, RefSummary } from '@ingit/rpc-contract'
-import { predictRebase } from './optimistic-graph'
+import { predictRebase, predictWorktreeAfterCommit } from './optimistic-graph'
 
 function row(sha: string, parentShas: string[], refNames: string[] = [], committerUnix = 100): CommitRow {
   return {
@@ -70,5 +70,39 @@ describe('predictRebase', () => {
     ])
     expect(prediction!.rows.find((commit) => commit.sha === 'refactor-1')?.parentShas).toEqual(['main'])
     expect(prediction!.rows.find((commit) => commit.sha === 'refactor-1')?.committerUnix).toBeGreaterThanOrEqual(beforeRewrite)
+  })
+})
+
+describe('predictWorktreeAfterCommit', () => {
+  test('makes the optimistic worktree clean when every change was staged', () => {
+    const prediction = predictWorktreeAfterCommit({
+      branch: 'main',
+      headSha: 'old-head',
+      staged: [{ path: 'committed.ts', status: 'M' }],
+      unstaged: [],
+    }, 'optimistic-commit')
+
+    expect(prediction.staged).toEqual([])
+    expect(prediction.unstaged).toEqual([])
+    expect(prediction.headSha).toBe('optimistic-commit')
+  })
+
+  test('consumes staged files while preserving genuinely unstaged changes', () => {
+    const changes = {
+      branch: 'main',
+      headSha: 'old-head',
+      staged: [{ path: 'committed.ts', status: 'M' as const }],
+      unstaged: [{ path: 'still-dirty.ts', status: 'M' as const }],
+    }
+
+    const prediction = predictWorktreeAfterCommit(changes, 'optimistic-commit')
+
+    expect(prediction).toEqual({
+      branch: 'main',
+      headSha: 'optimistic-commit',
+      staged: [],
+      unstaged: [{ path: 'still-dirty.ts', status: 'M' }],
+    })
+    expect(changes.staged).toHaveLength(1)
   })
 })
