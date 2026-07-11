@@ -4,6 +4,7 @@ import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
+import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
@@ -32,6 +33,7 @@ const GAUGE_TRACK_STROKE_SELECTED = '#cdd6f455'
 const GAUGE_TRACK_FILL_SELECTED = '#cdd6f422'
 const GAUGE_ADDITIONS_FILL = '#a6e3a1'
 const GAUGE_DELETIONS_FILL = '#f38ba8'
+const ACTION_PREVIEW_COLOR = '#a6e3a1'
 const GAUGE_MIN_FILL_HEIGHT = 2
 const GAUGE_SCALE_PERCENTILE = 0.85
 const EDGE_CORNER_RADIUS = 12
@@ -146,6 +148,20 @@ interface ConfirmDialogState {
   onConfirm: () => void
 }
 
+type ActionPreviewState =
+  | { kind: 'commit'; action: 'cherry-pick' | 'revert'; sha: string }
+  | { kind: 'rebase'; targetRefName: string }
+
+interface ActionPreviewGeometry {
+  nodes: Array<{ node: LayoutNode; color: string }>
+  relocatedNodes: Array<{ node: LayoutNode; color: string }>
+  edges: Array<{ key: string; path: string; color: string; dashed: boolean }>
+  refs: RefPlacement[]
+  hiddenShas: Set<string>
+  gutterX?: number
+  extraGutter?: { x: number; color: string }
+}
+
 interface ParsedVersionTag {
   major: number
   minor: number
@@ -246,6 +262,8 @@ interface GraphAnimationSnapshot {
 
 interface RenderedEdgeItem {
   key: string
+  fromSha: string
+  toSha: string
   path: string
   fromPlan: EdgeRoutePlan
   toPlan: EdgeRoutePlan
@@ -394,6 +412,194 @@ function buildLayout(rows: CommitRow[], extraLeftGutter = 0) {
     maxLane,
     totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + extraLeftGutter + (laneRadius * 2 + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
     totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2 + GRAPH_TOP_HEADROOM,
+  }
+}
+
+function sameParents(left: CommitRow, right: CommitRow) {
+  return left.parentShas.length === right.parentShas.length
+    && left.parentShas.every((sha, index) => sha === right.parentShas[index])
+}
+
+function buildActionPreviewGeometry(
+  baseLayout: GraphLayout,
+  prediction: OptimisticGraph,
+  extraLeftGutter: number,
+  preview: ActionPreviewState,
+): ActionPreviewGeometry | null {
+  const previewLayout = buildLayout(prediction.rows, extraLeftGutter)
+
+  if (preview.kind === 'commit') {
+    const newNode = previewLayout.nodes.find((node) => !baseLayout.shaToNode.has(node.row.sha))
+    if (!newNode) return null
+    const parent = baseLayout.shaToNode.get(newNode.row.parentShas[0])
+    if (!parent) return null
+
+    // Keep the existing graph stationary while previewing an appended commit.
+    // The real mutation will insert a row and animate everything down; putting
+    // the ghost one row above the current graph communicates that result
+    // without making the hover itself move live content.
+    const topNode = baseLayout.nodes[0] ?? parent
+    const ghostNode: LayoutNode = {
+      ...newNode,
+      x: parent.x,
+      y: topNode.y - NODE_SPACING_Y,
+      idx: topNode.idx - 1,
+    }
+    const key = `${ghostNode.row.sha}-${parent.row.sha}`
+    const occupied = baseLayout.nodes.map((node) => node.row.lane)
+    const plan = planEdgeRoute(ghostNode, parent, key, occupied)
+
+    return {
+      nodes: [{ node: ghostNode, color: ACTION_PREVIEW_COLOR }],
+      relocatedNodes: [],
+      edges: [{
+        key,
+        path: routedEdgePath(ghostNode, parent, plan, 0),
+        color: ACTION_PREVIEW_COLOR,
+        dashed: true,
+      }],
+      refs: [],
+      hiddenShas: new Set(),
+    }
+  }
+
+  const changedTopology = new Set<string>()
+  for (const node of previewLayout.nodes) {
+    const currentNode = baseLayout.shaToNode.get(node.row.sha)
+    if (!currentNode || !sameParents(currentNode.row, node.row)) {
+      changedTopology.add(node.row.sha)
+    }
+  }
+
+  const currentRef = prediction.refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+  const currentChain: LayoutNode[] = []
+  const visited = new Set<string>()
+  let sha = currentRef?.targetSha
+  while (sha && !visited.has(sha)) {
+    visited.add(sha)
+    const node = previewLayout.shaToNode.get(sha)
+    if (!node) break
+    currentChain.push(node)
+    sha = node.row.parentShas[0]
+  }
+
+  const oldestChangedIndex = currentChain.findIndex((node) => changedTopology.has(node.row.sha))
+  const affectedNodes = oldestChangedIndex >= 0
+    ? currentChain.slice(0, oldestChangedIndex + 1)
+    : prediction.headSha
+      ? [previewLayout.shaToNode.get(prediction.headSha)].filter((node): node is LayoutNode => !!node)
+      : []
+  if (affectedNodes.length === 0) return null
+
+  const targetRef = prediction.refs.find((ref) => ref.shortName === preview.targetRefName)
+  const targetSha = targetRef?.peeledSha ?? targetRef?.targetSha
+  const targetNode = targetSha
+    ? baseLayout.shaToNode.get(targetSha) ?? previewLayout.shaToNode.get(targetSha)
+    : null
+  const alignedNodes = targetNode
+    ? affectedNodes.map((node) => ({
+        ...node,
+        x: targetNode.x,
+        row: { ...node.row, lane: targetNode.row.lane },
+      }))
+    : affectedNodes
+  const affectedShas = new Set(alignedNodes.map((node) => node.row.sha))
+  const affectedNodeBySha = new Map(alignedNodes.map((node) => [node.row.sha, node]))
+  const previewTop = Math.min(...alignedNodes.map((node) => node.y))
+  const blockingNodes = targetNode
+    ? baseLayout.nodes.filter((node) => (
+        node.row.sha !== targetNode.row.sha
+        && !affectedShas.has(node.row.sha)
+        && Math.abs(node.x - targetNode.x) < 0.5
+        && node.y >= previewTop
+        && node.y < targetNode.y
+      ))
+    : []
+  const relocatedLane = Math.max(...baseLayout.nodes.map((node) => node.row.lane)) + 1
+  const relocatedX = Math.max(...baseLayout.nodes.map((node) => node.x)) + LANE_WIDTH
+  const relocatedNodes = blockingNodes.map((node) => ({
+    ...node,
+    x: relocatedX,
+    row: { ...node.row, lane: relocatedLane },
+  }))
+  const relocatedShas = new Set(relocatedNodes.map((node) => node.row.sha))
+  const relocatedNodeBySha = new Map(relocatedNodes.map((node) => [node.row.sha, node]))
+  const occupied = [...previewLayout.nodes.map((node) => node.row.lane), relocatedLane]
+  const edges: ActionPreviewGeometry['edges'] = []
+
+  for (const node of alignedNodes) {
+    for (let parentIndex = 0; parentIndex < node.row.parentShas.length; parentIndex++) {
+      const parentSha = node.row.parentShas[parentIndex]
+      // Replayed commits use their predicted positions. The unchanged target
+      // commit remains anchored to the live graph so the ghost path visibly
+      // reconnects to what is already on screen.
+      const parent = affectedShas.has(parentSha)
+        ? affectedNodeBySha.get(parentSha)
+        : baseLayout.shaToNode.get(parentSha) ?? previewLayout.shaToNode.get(parentSha)
+      if (!parent) continue
+      const key = `action-preview:${node.row.sha}-${parent.row.sha}`
+      const plan = planEdgeRoute(node, parent, key, occupied, {
+        adjacentTrack: parentIndex > 0 ? 'to' : 'from',
+      })
+      edges.push({
+        key,
+        path: routedEdgePath(node, parent, plan, 0),
+        color: ACTION_PREVIEW_COLOR,
+        dashed: true,
+      })
+    }
+  }
+
+  for (const baseNode of baseLayout.nodes) {
+    for (let parentIndex = 0; parentIndex < baseNode.row.parentShas.length; parentIndex++) {
+      const parentSha = baseNode.row.parentShas[parentIndex]
+      if (!relocatedShas.has(baseNode.row.sha) && !relocatedShas.has(parentSha)) continue
+      const node = relocatedNodeBySha.get(baseNode.row.sha) ?? baseNode
+      const baseParent = baseLayout.shaToNode.get(parentSha)
+      if (!baseParent) continue
+      const parent = relocatedNodeBySha.get(parentSha) ?? baseParent
+      const key = `action-relocation:${node.row.sha}-${parent.row.sha}`
+      const plan = planEdgeRoute(node, parent, key, occupied, {
+        adjacentTrack: parentIndex > 0 ? 'to' : 'from',
+      })
+      const colorNode = parentIndex > 0 ? baseParent : baseNode
+      edges.push({
+        key,
+        path: routedEdgePath(node, parent, plan, 0),
+        color: baseLayout.shaToColor.get(colorNode.row.sha) ?? laneColor(colorNode.row.lane),
+        dashed: false,
+      })
+    }
+  }
+
+  const relocatedColors = new Map(
+    relocatedNodes.map((node) => [
+      node.row.sha,
+      baseLayout.shaToColor.get(node.row.sha) ?? laneColor(node.row.lane),
+    ]),
+  )
+  const relocatedRefs = buildRefPlacements(
+    relocatedNodes,
+    currentRef?.shortName ?? null,
+    null,
+    relocatedColors,
+  ).placements
+
+  return {
+    nodes: [
+      ...alignedNodes.map((node) => ({ node, color: ACTION_PREVIEW_COLOR })),
+    ],
+    relocatedNodes: relocatedNodes.map((node) => ({
+      node,
+      color: relocatedColors.get(node.row.sha) ?? laneColor(node.row.lane),
+    })),
+    edges,
+    refs: relocatedRefs,
+    hiddenShas: relocatedShas,
+    gutterX: targetNode ? targetNode.x - PRIMARY_LANE_HIGHLIGHT_WIDTH / 2 : undefined,
+    extraGutter: relocatedNodes.length > 0
+      ? { x: relocatedX, color: laneColor(relocatedLane) }
+      : undefined,
   }
 }
 
@@ -1288,6 +1494,7 @@ export function GraphCanvas() {
   const [graphAnimation, setGraphAnimation] = useState<GraphAnimationSnapshot | null>(null)
   const graphAnimationRef = useRef<GraphAnimationSnapshot | null>(null)
   const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
+  const [actionPreview, setActionPreview] = useState<ActionPreviewState | null>(null)
   const [hoveredAddRefSha, setHoveredAddRefSha] = useState<string | null>(null)
   const [openAddRefSha, setOpenAddRefSha] = useState<string | null>(null)
   const [createRefDialog, setCreateRefDialog] = useState<CreateRefDialogState | null>(null)
@@ -1337,6 +1544,30 @@ export function GraphCanvas() {
     () => nextVersionTagName(refs),
     [refs],
   )
+
+  const actionPreviewPrediction = useMemo(() => {
+    if (!actionPreview || !histWindow) return null
+    if (actionPreview.kind === 'rebase') {
+      return predictRebase(histWindow.rows, refs, actionPreview.targetRefName)
+    }
+
+    const original = histWindow.rows.find((row) => row.sha === actionPreview.sha)
+    if (!original) return null
+    const subject = actionPreview.action === 'revert'
+      ? `Revert "${original.subject}"`
+      : original.subject
+    return predictAppendOnHead(histWindow.rows, refs, subject, actionPreview.action)
+  }, [actionPreview, histWindow, refs])
+
+  const actionPreviewGeometry = useMemo(() => {
+    if (!layout || !actionPreview || !actionPreviewPrediction) return null
+    return buildActionPreviewGeometry(
+      layout,
+      actionPreviewPrediction,
+      showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0,
+      actionPreview,
+    )
+  }, [layout, actionPreview, actionPreviewPrediction, showCommitMessages])
 
   // The working-tree / in-progress operation node floats one row above HEAD,
   // in HEAD's lane. Merge conflicts also draw a dashed second-parent edge.
@@ -1491,8 +1722,9 @@ export function GraphCanvas() {
 
   useEffect(() => {
     setMergePreviewVisible(false)
+    setActionPreview(null)
     setOpenAddRefSha(null)
-  }, [selectedRefName])
+  }, [selectedRefName, selectedSha])
 
   useEffect(() => () => {
     clearAddRefHoverTimer()
@@ -1849,6 +2081,8 @@ export function GraphCanvas() {
           sortY,
           item: {
             key,
+            fromSha: displayEdge.fromSha,
+            toSha: displayEdge.toSha,
             path: toEdge?.path ?? fromEdge?.path ?? '',
             fromPlan: fromEdge?.plan ?? toEdge?.plan ?? { mode: 'curve' },
             toPlan: toEdge?.plan ?? fromEdge?.plan ?? { mode: 'curve' },
@@ -1931,9 +2165,27 @@ export function GraphCanvas() {
     [graphAnimationRenderData, visibleNodes, layout],
   )
 
+  const displayedNodeItems = useMemo(() => [
+    ...renderedNodeItems.filter((node) => !actionPreviewGeometry?.hiddenShas.has(node.row.sha)),
+    ...(actionPreviewGeometry?.relocatedNodes ?? []).map(({ node, color }) => ({
+      key: `action-relocation:${node.row.sha}`,
+      row: node.row,
+      interactive: false,
+      color,
+      fromX: node.x,
+      fromY: node.y,
+      toX: node.x,
+      toY: node.y,
+      fromOpacity: 1,
+      toOpacity: 1,
+    } satisfies RenderedNodeItem)),
+  ], [renderedNodeItems, actionPreviewGeometry])
+
   const renderedEdgeItems = useMemo(
     () => graphAnimationRenderData?.edges ?? visibleEdgeItems.map((edge) => ({
       key: edge.key,
+      fromSha: edge.fromSha,
+      toSha: edge.toSha,
       path: edge.path,
       fromPlan: edge.plan,
       toPlan: edge.plan,
@@ -1973,6 +2225,16 @@ export function GraphCanvas() {
   )
 
   const renderedLaneHighlight = useMemo(() => {
+    if (actionPreviewGeometry?.gutterX !== undefined) {
+      return {
+        key: 'action-preview-gutter',
+        color: ACTION_PREVIEW_COLOR,
+        fromX: actionPreviewGeometry.gutterX,
+        toX: actionPreviewGeometry.gutterX,
+        fromOpacity: 1,
+        toOpacity: 1,
+      } satisfies RenderedLaneHighlight
+    }
     if (graphAnimationRenderData) return graphAnimationRenderData.lane
     if (!currentLaneHighlight) return null
     return {
@@ -1983,7 +2245,7 @@ export function GraphCanvas() {
       fromOpacity: 1,
       toOpacity: 1,
     } satisfies RenderedLaneHighlight
-  }, [graphAnimationRenderData, currentLaneHighlight])
+  }, [actionPreviewGeometry, graphAnimationRenderData, currentLaneHighlight])
 
   const currentHeadNode = useMemo(
     () => (layout && currentBranch ? layout.nodes.find((node) => node.row.refNames.includes(currentBranch)) ?? null : null),
@@ -2126,6 +2388,7 @@ export function GraphCanvas() {
   const handleRefSelect = useCallback((e: React.MouseEvent, refName: string) => {
     e.stopPropagation()
     setMergePreviewVisible(false)
+    setActionPreview(null)
     selectGraphRef(refName)
   }, [selectGraphRef])
 
@@ -2216,6 +2479,7 @@ export function GraphCanvas() {
 
   const handleMergeHoverStart = useCallback(() => {
     if (!selectedRefName) return
+    setActionPreview(null)
     setMergePreviewVisible(true)
     if (!mergePreview || mergePreview.sourceRefName !== selectedRefName) {
       void ensureMergePreview(selectedRefName)
@@ -2224,6 +2488,21 @@ export function GraphCanvas() {
 
   const handleMergeHoverEnd = useCallback(() => {
     setMergePreviewVisible(false)
+  }, [])
+
+  const handleCommitActionHoverStart = useCallback((action: CommitActionKind, sha: string) => {
+    if (action === 'uncommit') return
+    setMergePreviewVisible(false)
+    setActionPreview({ kind: 'commit', action, sha })
+  }, [])
+
+  const handleRebaseHoverStart = useCallback((targetRefName: string) => {
+    setMergePreviewVisible(false)
+    setActionPreview({ kind: 'rebase', targetRefName })
+  }, [])
+
+  const handleActionPreviewEnd = useCallback(() => {
+    setActionPreview(null)
   }, [])
 
   const takeOverMergeViewport = useCallback(() => {
@@ -2257,6 +2536,7 @@ export function GraphCanvas() {
 
   const runRebase = useCallback((targetRefName: string) => {
     setMergePreviewVisible(false)
+    setActionPreview(null)
     performRebaseRef(targetRefName).catch((err) => {
       showError('Rebase failed', err)
     })
@@ -2265,25 +2545,8 @@ export function GraphCanvas() {
   const handleRebaseClick = useCallback((targetRefName: string) => {
     if (!selectedCurrentBranchRef) return
     if (pendingMutation) return
-
-    const trackingRemoteRef = findTrackingRemoteRef(selectedCurrentBranchRef, refs)
-    if (
-      targetRefName === selectedCurrentBranchRef.shortName
-      || targetRefName === selectedCurrentBranchRef.name
-      || targetRefName === trackingRemoteRef?.shortName
-      || targetRefName === trackingRemoteRef?.name
-    ) {
-      runRebase(targetRefName)
-      return
-    }
-
-    setConfirmDialog({
-      title: 'Rebase branch',
-      message: `Rebase ${selectedCurrentBranchRef.shortName} onto ${targetRefName}? This rewrites the current branch history.`,
-      confirmLabel: 'Rebase',
-      onConfirm: () => runRebase(targetRefName),
-    })
-  }, [selectedCurrentBranchRef, refs, runRebase, pendingMutation])
+    runRebase(targetRefName)
+  }, [selectedCurrentBranchRef, runRebase, pendingMutation])
 
   // Sticky lane labels: show a branch name when its tip is above the viewport
   // AND the topmost visible commit on that lane belongs to that branch
@@ -2475,20 +2738,24 @@ export function GraphCanvas() {
     if (!selectedNode) return
     if (pendingMutation) return
 
+    setActionPreview(null)
+    if (action === 'cherry-pick') {
+      performCommitAction(action, selectedNode.row.sha).catch((err) => {
+        showError(`${action} failed`, err)
+      })
+      return
+    }
+
     const shortSha = selectedNode.row.sha.slice(0, 8)
-    const title = action === 'cherry-pick'
-      ? 'Cherry pick commit'
-      : action === 'uncommit'
-        ? 'Uncommit'
-        : 'Revert commit'
+    const title = action === 'uncommit'
+      ? 'Uncommit'
+      : 'Revert commit'
     const message = action === 'uncommit'
       ? `Uncommit ${shortSha}? This will move HEAD to its parent and keep the changes in your working tree.`
-      : `${action === 'cherry-pick' ? 'Cherry-pick' : 'Revert'} commit ${shortSha} on the current branch?`
-    const confirmLabel = action === 'cherry-pick'
-      ? 'Cherry pick'
-      : action === 'uncommit'
-        ? 'Uncommit'
-        : 'Revert'
+      : `Revert commit ${shortSha} on the current branch?`
+    const confirmLabel = action === 'uncommit'
+      ? 'Uncommit'
+      : 'Revert'
 
     setConfirmDialog({
       title,
@@ -2535,6 +2802,7 @@ export function GraphCanvas() {
       style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e', touchAction: 'pan-x pan-y' }}
       onClick={() => {
         setMergePreviewVisible(false)
+        setActionPreview(null)
         setOpenAddRefSha(null)
         setHoveredAddRefSha(null)
         clearAddRefHoverTimer()
@@ -2783,6 +3051,18 @@ export function GraphCanvas() {
               strokeWidth={1}
             />
           ))}
+          {actionPreviewGeometry?.extraGutter && (
+            <rect
+              x={actionPreviewGeometry.extraGutter.x - LANE_WIDTH / 2 + 2}
+              y={0}
+              width={LANE_WIDTH - 4}
+              height={fullHeight}
+              rx={16}
+              fill={`${actionPreviewGeometry.extraGutter.color}16`}
+              stroke={`${actionPreviewGeometry.extraGutter.color}24`}
+              strokeWidth={1}
+            />
+          )}
           {renderedLaneHighlight && (
             <animated.g
               key={renderedLaneHighlight.key}
@@ -2837,7 +3117,12 @@ export function GraphCanvas() {
               />
             </>
           )}
-          {renderedEdgeItems.map((edge) => (
+          {renderedEdgeItems
+            .filter((edge) => (
+              !actionPreviewGeometry?.hiddenShas.has(edge.fromSha)
+              && !actionPreviewGeometry?.hiddenShas.has(edge.toSha)
+            ))
+            .map((edge) => (
             <animated.path
               key={edge.key}
               d={isGraphAnimating
@@ -2855,6 +3140,18 @@ export function GraphCanvas() {
               opacity={isGraphAnimating
                 ? to(graphProgress, (progress) => lerp(edge.fromOpacity, edge.toOpacity, progress))
               : edge.toOpacity}
+            />
+          ))}
+          {actionPreviewGeometry?.edges.map((edge) => (
+            <path
+              key={edge.key}
+              d={edge.path}
+              stroke={edge.color}
+              strokeWidth={3}
+              fill="none"
+              strokeLinecap="round"
+              strokeDasharray={edge.dashed ? '7 6' : undefined}
+              opacity={0.9}
             />
           ))}
         </svg>
@@ -2891,7 +3188,7 @@ export function GraphCanvas() {
               />
             </g>
           )}
-          {renderedNodeItems.map((node) => {
+          {displayedNodeItems.map((node) => {
             const { row } = node
             const selected = row.sha === selectedSha
             const color = node.color
@@ -2947,7 +3244,7 @@ export function GraphCanvas() {
 
             return (
               <animated.g
-                key={row.sha}
+                key={node.key}
                 onClick={node.interactive ? (e) => { e.stopPropagation(); selectCommit(row.sha) } : undefined}
                 onPointerEnter={node.interactive ? () => showAddRefControls(row.sha) : undefined}
                 onPointerLeave={node.interactive ? () => scheduleHideAddRefControls(row.sha) : undefined}
@@ -3033,6 +3330,27 @@ export function GraphCanvas() {
               </animated.g>
             )
           })}
+          {actionPreviewGeometry?.nodes.map(({ node, color }) => (
+            <g key={`action-preview:${node.row.sha}`}>
+              <circle
+                cx={node.x}
+                cy={node.y}
+                r={NODE_RADIUS * 1.9}
+                fill={color}
+                opacity={0.12}
+              />
+              <circle
+                cx={node.x}
+                cy={node.y}
+                r={NODE_RADIUS}
+                fill={NODE_FILL}
+                stroke={color}
+                strokeWidth={3}
+                strokeDasharray="6 4"
+              />
+              <circle cx={node.x} cy={node.y} r={2.5} fill={color} />
+            </g>
+          ))}
           {worktreeNode && !isGraphAnimating && (
             <g
               onClick={(e) => { e.stopPropagation(); selectWorktree() }}
@@ -3118,7 +3436,9 @@ export function GraphCanvas() {
           )}
         </svg>
 
-        {renderedRefItems.map((refItem) => {
+        {renderedRefItems
+          .filter((refItem) => !actionPreviewGeometry?.hiddenShas.has(refItem.placement.nodeSha))
+          .map((refItem) => {
           const { placement } = refItem
           const isEmphasized = placement.isSelected || placement.isCurrent
           const pillTint = placement.isSelected
@@ -3174,6 +3494,33 @@ export function GraphCanvas() {
             </animated.div>
           )
         })}
+        {actionPreviewGeometry?.refs.map((placement) => (
+          <div
+            key={`action-preview-ref:${placement.refName}`}
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              zIndex: 20,
+              height: 20,
+              padding: '0 7px',
+              borderRadius: 4,
+              background: `linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.015) 38%, ${placement.color}18 100%), rgba(24, 24, 37, 0.5)`,
+              border: `1px solid ${placement.color}66`,
+              color: placement.color,
+              fontSize: 11,
+              fontWeight: 600,
+              lineHeight: '20px',
+              whiteSpace: 'nowrap',
+              userSelect: 'none',
+              pointerEvents: 'none',
+              boxShadow: '0 2px 5px rgba(0, 0, 0, 0.18)',
+              transform: `translate(${placement.x}px, ${placement.y}px)`,
+            }}
+          >
+            {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
+          </div>
+        ))}
 
         {visibleNodes.map((node) => {
           const refRowWidth = rowRefWidths.get(node.row.sha) ?? 0
@@ -3199,11 +3546,15 @@ export function GraphCanvas() {
           const rowRebaseTargetRef = !refActionInFlight && selectedCurrentBranchRef && node.row.sha !== selectedCurrentBranchRef.targetSha
             ? pickBestRef(node.row.refNames.filter((refName) => refName !== selectedCurrentBranchRef.shortName))
             : null
+          const visibleRowRebaseTargetRef = rowRebaseTargetRef
+            && (actionPreview?.kind !== 'rebase' || actionPreview.targetRefName === rowRebaseTargetRef)
+            ? rowRebaseTargetRef
+            : null
           const hasTrailingActions = visibleRowRefActions.length > 0
             || rowShowsMerge
             || rowShowsMove
             || rowShowsAddRef
-            || !!rowRebaseTargetRef
+            || !!visibleRowRebaseTargetRef
 
           if (nodeActions.length === 0 && !hasTrailingActions) return null
 
@@ -3227,6 +3578,8 @@ export function GraphCanvas() {
                       label={commitAction.label}
                       tone={commitAction.tone}
                       onClick={() => handleCommitAction(commitAction.action)}
+                      onMouseEnter={() => handleCommitActionHoverStart(commitAction.action, node.row.sha)}
+                      onMouseLeave={handleActionPreviewEnd}
                     />
                   ))}
                 </div>
@@ -3244,7 +3597,7 @@ export function GraphCanvas() {
                     alignItems: 'flex-start',
                     gap: 10,
                     flexWrap: 'nowrap',
-                    zIndex: 20,
+                    zIndex: openAddRefSha === node.row.sha ? 40 : 20,
                   }}
                 >
               {visibleRowRefActions.length > 0 && (
@@ -3278,7 +3631,7 @@ export function GraphCanvas() {
                   />
                 </div>
               )}
-              {rowRebaseTargetRef && (
+              {visibleRowRebaseTargetRef && (
                 <div style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -3290,7 +3643,9 @@ export function GraphCanvas() {
                   <CommitActionButton
                     label="Rebase"
                     tone="success"
-                    onClick={() => handleRebaseClick(rowRebaseTargetRef)}
+                    onClick={() => handleRebaseClick(visibleRowRebaseTargetRef)}
+                    onMouseEnter={() => handleRebaseHoverStart(visibleRowRebaseTargetRef)}
+                    onMouseLeave={handleActionPreviewEnd}
                   />
                 </div>
               )}
