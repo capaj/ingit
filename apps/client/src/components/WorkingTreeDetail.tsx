@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { InProgressOperationKind, WorktreeFile, WorktreeDiffArea } from '@ingit/rpc-contract'
 import { useAppStore, worktreeDiffKey } from '../store'
 import { getCommitDetail } from '../api'
@@ -172,14 +172,18 @@ function Section({
 function CommitBox({
   stagedCount,
   headSha,
+  branch,
   amendable,
 }: {
   stagedCount: number
   headSha?: string
+  branch?: string
   amendable: boolean
 }) {
   const performCommit = useAppStore((s) => s.performCommit)
+  const performRefAction = useAppStore((s) => s.performRefAction)
   const runStageAction = useAppStore((s) => s.runStageAction)
+  const showError = useAppStore((s) => s.showError)
   const pendingMutation = useAppStore((s) => s.pendingMutation)
   const repoId = useAppStore((s) => s.repoId)
   const [message, setMessage] = useState('')
@@ -188,12 +192,41 @@ function CommitBox({
   })
   const [amend, setAmend] = useState(false)
   const [amendStaging, setAmendStaging] = useState(false)
+  const [submitAction, setSubmitAction] = useState<'commit' | 'commit-and-push'>(() => {
+    try {
+      return localStorage.getItem('commitSubmitAction') === 'commit-and-push'
+        ? 'commit-and-push'
+        : 'commit'
+    } catch {
+      return 'commit'
+    }
+  })
+  const [actionMenuOpen, setActionMenuOpen] = useState(false)
+  const [pushingAfterCommit, setPushingAfterCommit] = useState(false)
+  const actionControlRef = useRef<HTMLDivElement>(null)
   // The previous message we auto-filled, so unchecking Amend can clear it back
   // out without discarding text the user typed themselves.
   const [prefilled, setPrefilled] = useState('')
 
   // An in-progress merge/rebase (or no HEAD yet) can't be amended.
   const amending = amend && amendable
+
+  useEffect(() => {
+    if (!actionMenuOpen) return
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!actionControlRef.current?.contains(event.target as Node)) setActionMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActionMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [actionMenuOpen])
 
   const toggleNoVerify = (value: boolean) => {
     try { localStorage.setItem('commitNoVerify', String(value)) } catch { /* ignore */ }
@@ -231,18 +264,60 @@ function CommitBox({
     && message.trim().length > 0
     && !amendStaging
     && !pendingMutation
+  const canSubmit = canCommit && (submitAction === 'commit' || !!branch)
+
+  const chooseSubmitAction = (action: 'commit' | 'commit-and-push') => {
+    try { localStorage.setItem('commitSubmitAction', action) } catch { /* ignore */ }
+    setSubmitAction(action)
+    setActionMenuOpen(false)
+  }
 
   const submit = async () => {
-    if (!canCommit) return
+    if (!canSubmit) return
     const ok = await performCommit(message.trim(), noVerify, amending)
-    if (ok) { setMessage(''); setPrefilled(''); setAmend(false) }
+    if (!ok) return
+
+    setMessage('')
+    setPrefilled('')
+    setAmend(false)
+    if (submitAction !== 'commit-and-push' || !branch) return
+
+    const committedState = useAppStore.getState()
+    const currentRef = committedState.refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+    const refName = currentRef?.shortName ?? branch
+    const sha = currentRef?.targetSha ?? committedState.worktreeChanges?.headSha ?? headSha
+    if (!sha) {
+      showError('Push failed', 'Could not determine the committed revision to push')
+      return
+    }
+
+    setPushingAfterCommit(true)
+    try {
+      await performRefAction('push', refName, sha)
+    } catch (err) {
+      if (err && typeof err === 'object' && (err as { code?: unknown }).code === 'CONFLICT') {
+        showError('Push rejected', err, {
+          label: 'Force push',
+          run: () => {
+            performRefAction('push', refName, sha, true)
+              .catch((forceErr) => showError('Force push failed', forceErr))
+          },
+        })
+      } else {
+        showError('Push failed', err)
+      }
+    } finally {
+      setPushingAfterCommit(false)
+    }
   }
 
   const buttonLabel = amendStaging
     ? 'Staging…'
+    : pushingAfterCommit
+    ? 'Pushing…'
     : pendingMutation
     ? (amending ? 'Amending…' : 'Committing…')
-    : `${amending ? 'Amend' : 'Commit'}${stagedCount > 0 ? ` (${stagedCount})` : ''}`
+    : `${amending ? 'Amend' : 'Commit'}${submitAction === 'commit-and-push' ? ' & push' : ''}${stagedCount > 0 ? ` (${stagedCount})` : ''}`
 
   return (
     <div style={{ borderBottom: '1px solid #313244', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
@@ -302,24 +377,106 @@ function CommitBox({
             Skip git hooks
           </label>
         </div>
-        <button
-          onClick={() => void submit()}
-          disabled={!canCommit}
+        <div
+          ref={actionControlRef}
           style={{
-            background: canCommit ? '#a6e3a1' : '#313244',
-            color: canCommit ? '#11111b' : '#6c7086',
-            border: 'none',
-            borderRadius: 6,
-            fontSize: 12,
-            fontWeight: 700,
-            padding: '6px 14px',
-            cursor: canCommit ? 'pointer' : 'default',
-            fontFamily: 'inherit',
+            display: 'flex',
+            position: 'relative',
             flexShrink: 0,
           }}
         >
-          {buttonLabel}
-        </button>
+          <button
+            onClick={() => void submit()}
+            disabled={!canSubmit}
+            title={submitAction === 'commit-and-push' && !branch ? 'Check out a branch before committing and pushing' : undefined}
+            style={{
+              background: canSubmit ? '#a6e3a1' : '#313244',
+              color: canSubmit ? '#11111b' : '#6c7086',
+              border: 'none',
+              borderRadius: '6px 0 0 6px',
+              fontSize: 12,
+              fontWeight: 700,
+              padding: '6px 12px 6px 14px',
+              cursor: canSubmit ? 'pointer' : 'default',
+              fontFamily: 'inherit',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {buttonLabel}
+          </button>
+          <button
+            type="button"
+            aria-label="Choose commit action"
+            aria-haspopup="menu"
+            aria-expanded={actionMenuOpen}
+            disabled={amendStaging || pendingMutation || pushingAfterCommit}
+            onClick={() => setActionMenuOpen((open) => !open)}
+            style={{
+              width: 28,
+              background: canCommit ? '#a6e3a1' : '#313244',
+              color: canCommit ? '#11111b' : '#6c7086',
+              border: 'none',
+              borderLeft: `1px solid ${canCommit ? '#11111b33' : '#45475a'}`,
+              borderRadius: '0 6px 6px 0',
+              cursor: amendStaging || pendingMutation || pushingAfterCommit ? 'default' : 'pointer',
+              fontFamily: 'inherit',
+              fontSize: 10,
+              fontWeight: 700,
+            }}
+          >
+            ▼
+          </button>
+          {actionMenuOpen && (
+            <div
+              role="menu"
+              aria-label="Commit action"
+              style={{
+                position: 'absolute',
+                right: 0,
+                bottom: 'calc(100% + 6px)',
+                zIndex: 50,
+                minWidth: 154,
+                padding: 4,
+                border: '1px solid #45475a',
+                borderRadius: 7,
+                background: '#1e1e2e',
+                boxShadow: '0 8px 24px #00000066',
+              }}
+            >
+              {([
+                ['commit', 'Commit'],
+                ['commit-and-push', 'Commit & push'],
+              ] as const).map(([action, label]) => (
+                <button
+                  key={action}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={submitAction === action}
+                  onClick={() => chooseSubmitAction(action)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    padding: '7px 9px',
+                    border: 'none',
+                    borderRadius: 5,
+                    background: submitAction === action ? '#313244' : 'transparent',
+                    color: '#cdd6f4',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    fontSize: 12,
+                    textAlign: 'left',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span style={{ width: 12, color: '#a6e3a1' }}>{submitAction === action ? '✓' : ''}</span>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -424,6 +581,7 @@ export function WorkingTreeDetail() {
       <CommitBox
         stagedCount={staged.length}
         headSha={changes?.headSha}
+        branch={changes?.branch}
         amendable={!operation && !!changes?.headSha}
       />
 
