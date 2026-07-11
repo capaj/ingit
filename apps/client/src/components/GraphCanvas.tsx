@@ -6,6 +6,7 @@ import { useAppStore } from '../store'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
+import { circleIntersectsRectangle, type CircleBounds } from './graph-canvas/layering'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
 // ---------------------------------------------------------------------------
@@ -1601,6 +1602,17 @@ export function GraphCanvas() {
     [layout, currentBranch],
   )
 
+  const protectedCurrentBranchShas = useMemo(() => {
+    const shas = buildCurrentBranchShaSet(layout, currentBranch)
+    if (graphAnimation) {
+      for (const sha of buildCurrentBranchShaSet(
+        graphAnimation.fromLayout,
+        graphAnimation.fromCurrentBranch,
+      )) shas.add(sha)
+    }
+    return shas
+  }, [layout, currentBranch, graphAnimation])
+
   const refreshViewport = useCallback((el: HTMLDivElement, nextZoom: number) => {
     if (!layout) return
     viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
@@ -1949,6 +1961,21 @@ export function GraphCanvas() {
     })),
     [graphAnimationRenderData, visibleNodes, layout],
   )
+
+  const protectedNodeCircles = useMemo(() => {
+    const circles: CircleBounds[] = []
+    for (const node of renderedNodeItems) {
+      if (!protectedCurrentBranchShas.has(node.row.sha)) continue
+      circles.push({ x: node.fromX, y: node.fromY, radius: NODE_RADIUS + 4 })
+      if (node.fromX !== node.toX || node.fromY !== node.toY) {
+        circles.push({ x: node.toX, y: node.toY, radius: NODE_RADIUS + 4 })
+      }
+    }
+    if (worktreeNode && !graphAnimation) {
+      circles.push({ x: worktreeNode.x, y: worktreeNode.y, radius: NODE_RADIUS + 4 })
+    }
+    return circles
+  }, [renderedNodeItems, protectedCurrentBranchShas, worktreeNode, graphAnimation])
 
   const renderedEdgeItems = useMemo(
     () => graphAnimationRenderData?.edges ?? visibleEdgeItems.map((edge) => ({
@@ -2754,7 +2781,7 @@ export function GraphCanvas() {
         <svg
           width={fullWidth}
           height={fullHeight}
-          style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
+          style={{ position: 'absolute', top: 0, left: 0, zIndex: 10, pointerEvents: 'none', overflow: 'visible' }}
         >
           {renderedLaneHighlight && (
             <animated.g
@@ -3103,6 +3130,21 @@ export function GraphCanvas() {
 
         {renderedRefItems.map((refItem) => {
           const { placement } = refItem
+          const pillWidth = estimateRefPillWidth(placement.refName, placement.isRemote, placement.isCurrent)
+          const overlapsProtectedNode = protectedNodeCircles.some((circle) => (
+            circleIntersectsRectangle(circle, {
+              x: refItem.fromX,
+              y: refItem.fromY,
+              width: pillWidth,
+              height: REF_PILL_HEIGHT,
+            })
+            || circleIntersectsRectangle(circle, {
+              x: refItem.toX,
+              y: refItem.toY,
+              width: pillWidth,
+              height: REF_PILL_HEIGHT,
+            })
+          ))
 
           return (
             <animated.div
@@ -3114,7 +3156,7 @@ export function GraphCanvas() {
                 position: 'absolute',
                 left: 0,
                 top: 0,
-                zIndex: 20,
+                zIndex: overlapsProtectedNode ? 5 : 20,
                 height: 20,
                 padding: '0 7px',
                 borderRadius: 4,
