@@ -6,7 +6,6 @@ import { useAppStore } from '../store'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
-import { circleIntersectsRectangle, type CircleBounds } from './graph-canvas/layering'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
 // ---------------------------------------------------------------------------
@@ -1583,17 +1582,6 @@ export function GraphCanvas() {
     [layout, currentBranch],
   )
 
-  const protectedCurrentBranchShas = useMemo(() => {
-    const shas = buildCurrentBranchShaSet(layout, currentBranch)
-    if (graphAnimation) {
-      for (const sha of buildCurrentBranchShaSet(
-        graphAnimation.fromLayout,
-        graphAnimation.fromCurrentBranch,
-      )) shas.add(sha)
-    }
-    return shas
-  }, [layout, currentBranch, graphAnimation])
-
   const refreshViewport = useCallback((el: HTMLDivElement, nextZoom: number) => {
     if (!layout) return
     viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
@@ -1942,21 +1930,6 @@ export function GraphCanvas() {
     })),
     [graphAnimationRenderData, visibleNodes, layout],
   )
-
-  const protectedNodeCircles = useMemo(() => {
-    const circles: CircleBounds[] = []
-    for (const node of renderedNodeItems) {
-      if (!protectedCurrentBranchShas.has(node.row.sha)) continue
-      circles.push({ x: node.fromX, y: node.fromY, radius: NODE_RADIUS + 4 })
-      if (node.fromX !== node.toX || node.fromY !== node.toY) {
-        circles.push({ x: node.toX, y: node.toY, radius: NODE_RADIUS + 4 })
-      }
-    }
-    if (worktreeNode && !graphAnimation) {
-      circles.push({ x: worktreeNode.x, y: worktreeNode.y, radius: NODE_RADIUS + 4 })
-    }
-    return circles
-  }, [renderedNodeItems, protectedCurrentBranchShas, worktreeNode, graphAnimation])
 
   const renderedEdgeItems = useMemo(
     () => graphAnimationRenderData?.edges ?? visibleEdgeItems.map((edge) => ({
@@ -2881,9 +2854,17 @@ export function GraphCanvas() {
               strokeLinecap="round"
               opacity={isGraphAnimating
                 ? to(graphProgress, (progress) => lerp(edge.fromOpacity, edge.toOpacity, progress))
-                : edge.toOpacity}
+              : edge.toOpacity}
             />
           ))}
+        </svg>
+
+        {/* Nodes sit above ref pills; edges and gutter rails stay below them. */}
+        <svg
+          width={fullWidth}
+          height={fullHeight}
+          style={{ position: 'absolute', top: 0, left: 0, zIndex: 30, pointerEvents: 'none', overflow: 'visible' }}
+        >
           {previewOverlay && (
             <g>
               <circle
@@ -3139,21 +3120,17 @@ export function GraphCanvas() {
 
         {renderedRefItems.map((refItem) => {
           const { placement } = refItem
-          const pillWidth = estimateRefPillWidth(placement.refName, placement.isRemote, placement.isCurrent)
-          const overlapsProtectedNode = protectedNodeCircles.some((circle) => (
-            circleIntersectsRectangle(circle, {
-              x: refItem.fromX,
-              y: refItem.fromY,
-              width: pillWidth,
-              height: REF_PILL_HEIGHT,
-            })
-            || circleIntersectsRectangle(circle, {
-              x: refItem.toX,
-              y: refItem.toY,
-              width: pillWidth,
-              height: REF_PILL_HEIGHT,
-            })
-          ))
+          const isEmphasized = placement.isSelected || placement.isCurrent
+          const pillTint = placement.isSelected
+            ? placement.color + '35'
+            : placement.isCurrent
+              ? placement.color + '2a'
+              : placement.color + '18'
+          const pillShadow = [
+            'inset 0 1px 0 rgba(255, 255, 255, 0.14)',
+            `inset 0 -1px 0 ${placement.color}18`,
+            isEmphasized ? `0 0 8px ${placement.color}38` : '0 2px 5px rgba(0, 0, 0, 0.18)',
+          ].join(', ')
 
           return (
             <animated.div
@@ -3165,12 +3142,14 @@ export function GraphCanvas() {
                 position: 'absolute',
                 left: 0,
                 top: 0,
-                zIndex: overlapsProtectedNode ? 5 : 20,
+                zIndex: 20,
                 height: 20,
                 padding: '0 7px',
                 borderRadius: 4,
-                background: placement.isSelected ? placement.color + '35' : placement.isCurrent ? placement.color + '2a' : placement.color + '18',
-                border: `1px solid ${placement.isSelected || placement.isCurrent ? placement.color : placement.color + '55'}`,
+                background: `linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.015) 38%, ${placement.color}18 100%), linear-gradient(${pillTint}, ${pillTint}), rgba(24, 24, 37, 0.5)`,
+                backdropFilter: 'blur(3px) saturate(145%) contrast(103%)',
+                WebkitBackdropFilter: 'blur(3px) saturate(145%) contrast(103%)',
+                border: `1px solid ${isEmphasized ? placement.color : placement.color + '66'}`,
                 color: placement.color,
                 fontSize: 11,
                 fontWeight: 600,
@@ -3178,7 +3157,7 @@ export function GraphCanvas() {
                 whiteSpace: 'nowrap',
                 cursor: 'pointer',
                 userSelect: 'none',
-                boxShadow: placement.isSelected || placement.isCurrent ? `0 0 6px ${placement.color}40` : 'none',
+                boxShadow: pillShadow,
                 transformOrigin: 'top left',
                 opacity: isGraphAnimating
                   ? to(graphProgress, (progress) => lerp(refItem.fromOpacity, refItem.toOpacity, progress))
