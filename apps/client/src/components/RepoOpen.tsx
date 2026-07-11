@@ -48,8 +48,10 @@ function pathAutocompleteQuery(rawPath: string): { folder: string; prefix: strin
   if (separatorIndex === -1) return { folder: '.', prefix: rawPath }
 
   const prefix = rawPath.slice(separatorIndex + 1)
+  const separator = rawPath[separatorIndex]!
   let folder = rawPath.slice(0, separatorIndex)
-  if (!folder) folder = rawPath.startsWith('/') ? '/' : '.'
+  if (/^[A-Za-z]:$/.test(folder)) folder += separator
+  if (!folder) folder = rawPath.startsWith('/') || rawPath.startsWith('\\') ? separator : '.'
   return { folder, prefix }
 }
 

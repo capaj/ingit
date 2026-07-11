@@ -13,17 +13,18 @@ const platform = process.platform
 const arch = process.arch
 const pkgName = `@ingit/cli-${platform}-${arch}`
 const platformId = `${platform}-${arch}`
+const binaryName = platform === 'win32' ? 'ingit.exe' : 'ingit'
 
 let binPath
 try {
-  binPath = require.resolve(`${pkgName}/ingit`)
+  binPath = require.resolve(`${pkgName}/${binaryName}`)
 } catch {
   const localBinPath = join(
     __dirname,
     '..',
     'release',
     `cli-${platformId}`,
-    platform === 'win32' ? 'ingit.exe' : 'ingit',
+    binaryName,
   )
   if (existsSync(localBinPath)) {
     binPath = localBinPath
@@ -31,7 +32,7 @@ try {
     console.error(`ingit: no prebuilt binary available for ${platform}-${arch}.`)
     console.error(`Expected the optional dependency "${pkgName}" to be installed.`)
     console.error(`For local testing, run "bun run --filter '@ingit/cli' release ${platformId}" from the repo root.`)
-    console.error('Supported: linux-x64, linux-arm64, darwin-x64, darwin-arm64.')
+    console.error('Supported: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64.')
     process.exit(1)
   }
 }

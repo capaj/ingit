@@ -1,6 +1,6 @@
 # ingit
 
-> ingit is a fast, animated, local-first Git GUI for Linux and macOS. It visualizes commit history, predicts Git operations before they finish, and reconciles the graph against real Git results.
+> ingit is a fast, animated, local-first Git GUI for Linux, macOS, and Windows. It visualizes commit history, predicts Git operations before they finish, and reconciles the graph against real Git results.
 
 ## Canonical resources
 

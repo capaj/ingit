@@ -82,7 +82,13 @@ function getLib(): ZiggitLib | null {
     return null
   }
 
-  lib = dlopen(LIB_PATH, symbols)
+  try {
+    lib = dlopen(LIB_PATH, symbols)
+  } catch {
+    // The FFI library is an optional accelerator. Missing, corrupt, or
+    // wrong-architecture libraries must fall back to regular git subprocesses.
+    lib = null
+  }
   return lib
 }
 
