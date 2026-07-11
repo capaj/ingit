@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
+import { Fragment, useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
 import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
@@ -3199,25 +3199,54 @@ export function GraphCanvas() {
           const rowRebaseTargetRef = !refActionInFlight && selectedCurrentBranchRef && node.row.sha !== selectedCurrentBranchRef.targetSha
             ? pickBestRef(node.row.refNames.filter((refName) => refName !== selectedCurrentBranchRef.shortName))
             : null
+          const hasTrailingActions = visibleRowRefActions.length > 0
+            || rowShowsMerge
+            || rowShowsMove
+            || rowShowsAddRef
+            || !!rowRebaseTargetRef
 
-          if (nodeActions.length === 0 && visibleRowRefActions.length === 0 && !rowShowsMerge && !rowShowsMove && !rowShowsAddRef && !rowRebaseTargetRef) return null
+          if (nodeActions.length === 0 && !hasTrailingActions) return null
 
           return (
-            <div
-              key={`${node.row.sha}-actions`}
-              onPointerEnter={() => showAddRefControls(node.row.sha)}
-              onPointerLeave={() => scheduleHideAddRefControls(node.row.sha)}
-              style={{
-                position: 'absolute',
-                left: px,
-                top: py,
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 10,
-                flexWrap: 'nowrap',
-                zIndex: 20,
-              }}
-            >
+            <Fragment key={`${node.row.sha}-actions`}>
+              {nodeActions.length > 0 && (
+                <div style={{
+                  position: 'absolute',
+                  left: node.x - NODE_RADIUS - 12,
+                  top: node.y,
+                  transform: 'translate(-100%, -50%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  flexWrap: 'nowrap',
+                  zIndex: 20,
+                }}>
+                  {nodeActions.map((commitAction) => (
+                    <CommitActionButton
+                      key={commitAction.action}
+                      label={commitAction.label}
+                      tone={commitAction.tone}
+                      onClick={() => handleCommitAction(commitAction.action)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {hasTrailingActions && (
+                <div
+                  onPointerEnter={() => showAddRefControls(node.row.sha)}
+                  onPointerLeave={() => scheduleHideAddRefControls(node.row.sha)}
+                  style={{
+                    position: 'absolute',
+                    left: px,
+                    top: py,
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    flexWrap: 'nowrap',
+                    zIndex: 20,
+                  }}
+                >
               {visibleRowRefActions.length > 0 && (
                 <div style={{
                   display: 'flex',
@@ -3234,25 +3263,6 @@ export function GraphCanvas() {
                       tone={refAction.tone}
                       loading={!!pendingRowRefAction && refAction.action === pendingRowRefAction.action}
                       onClick={() => handleRefActionClick(refAction)}
-                    />
-                  ))}
-                </div>
-              )}
-              {nodeActions.length > 0 && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  position: 'relative',
-                  top: verticalOffsetForHeight(COMMIT_ACTION_HEIGHT),
-                  zIndex: 7,
-                }}>
-                  {nodeActions.map((commitAction) => (
-                    <CommitActionButton
-                      key={commitAction.action}
-                      label={commitAction.label}
-                      tone={commitAction.tone}
-                      onClick={() => handleCommitAction(commitAction.action)}
                     />
                   ))}
                 </div>
@@ -3396,7 +3406,9 @@ export function GraphCanvas() {
                   )}
                 </div>
               )}
-            </div>
+                </div>
+              )}
+            </Fragment>
           )
         })}
       </div>
