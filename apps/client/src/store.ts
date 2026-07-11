@@ -62,6 +62,10 @@ export interface ErrorDialogAction {
   run: () => void
 }
 
+// Repository switches only need enough recent history to fill the viewport.
+// The graph requests deeper pages as the user approaches them, avoiding a
+// potentially multi-second `git log --numstat` before the first useful paint.
+const INITIAL_VISIBLE_ROWS = 100
 const INITIAL_ROWS = 1000
 const LOAD_MORE_ROWS = 500
 const MAX_RECENT_REPOS = 12
@@ -301,6 +305,10 @@ function clearRepoPathInUrl() {
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
 }
 
+// Late async responses from an earlier repository switch must never replace a
+// newer switch. Incremented for every open attempt and when the repo is closed.
+let repoOpenRequestId = 0
+
 function isSessionError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('No session found')
 }
@@ -437,9 +445,52 @@ async function openRepoByPathImpl(
   get: StoreGetter,
   options: { showOpenError: boolean },
 ): Promise<void> {
-  set({ status: 'loading', openError: null })
+  const requestId = ++repoOpenRequestId
+  set({
+    status: 'loading',
+    repoId: null,
+    repoPath: null,
+    totalCommitCount: 0,
+    refs: [],
+    historyWindow: null,
+    selectedSha: null,
+    selectedRefName: null,
+    scrollToSha: null,
+    commitDetail: null,
+    commitDiff: null,
+    commitPRs: [],
+    commitAuthorAvatars: {},
+    commitCIStatus: {},
+    mergePreview: null,
+    githubUrl: null,
+    openError: null,
+    loadingMore: false,
+    worktreeChanges: null,
+    worktreeSelected: false,
+    worktreeFileDiffs: {},
+    commitFileDiffs: {},
+    reflog: null,
+    reflogLoading: false,
+    pendingMutation: false,
+  })
   try {
     const res = await openRepo({ path })
+    if (requestId !== repoOpenRequestId) return
+
+    const [refs, hist] = await Promise.all([
+      getRefs(res.repoId),
+      queryHistory(res.repoId, {
+        repoId: res.repoId,
+        scope: { kind: 'all' },
+        anchor: { kind: 'head' },
+        beforeRows: 0,
+        afterRows: INITIAL_VISIBLE_ROWS,
+        firstParent: false,
+        topoOrder: true,
+      }),
+    ])
+    if (requestId !== repoOpenRequestId) return
+
     setRepoPathInUrl(res.rootPath)
     // Drop any CI watches/poller left over from a previously open repo.
     ciWatch.clear()
@@ -448,9 +499,11 @@ async function openRepoByPathImpl(
       status: 'ready',
       repoId: res.repoId,
       repoPath: res.rootPath,
-      totalCommitCount: res.totalCommitCount,
+      totalCommitCount: Math.max(res.totalCommitCount, hist.rows.length),
       recentRepos: prependRecentRepo(get().recentRepos, res.rootPath),
       githubUrl: res.githubUrl,
+      refs,
+      historyWindow: hist,
       commitAuthorAvatars: {},
       commitCIStatus: {},
       openError: null,
@@ -464,28 +517,18 @@ async function openRepoByPathImpl(
       reflogMaxCount: REFLOG_PAGE_SIZE,
     })
     if (get().viewMode === 'reflog') void get().loadReflog()
+    // Worktree status can be slow in large repositories and is independent of
+    // painting recent history, so let it fill in after the graph is visible.
     void get().loadWorktreeChanges()
-
-    const [refs, hist] = await Promise.all([
-      getRefs(res.repoId),
-      queryHistory(res.repoId, {
-        repoId: res.repoId,
-        scope: { kind: 'all' },
-        anchor: { kind: 'head' },
-        beforeRows: 0,
-        afterRows: INITIAL_ROWS,
-        firstParent: false,
-        topoOrder: true,
-      }),
-    ])
-    set({ refs, historyWindow: hist })
   } catch (err) {
+    if (requestId !== repoOpenRequestId) return
     let recentRepos = get().recentRepos
     try {
       recentRepos = await getRecentRepos()
     } catch (historyErr) {
       console.error('Failed to load recent repositories:', historyErr)
     }
+    if (requestId !== repoOpenRequestId) return
 
     set({
       status: 'no-repo',
@@ -676,6 +719,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!repoId) return
     try {
       const changes = await getWorktreeChanges(repoId)
+      if (get().repoId !== repoId) return
       // Cached patches may be stale relative to the fresh file list.
       set((s) => ({
         worktreeChanges: changes,
@@ -973,6 +1017,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   closeRepo: () => {
+    repoOpenRequestId += 1
     ciWatch.clear()
     stopCIPolling()
     clearRepoPathInUrl()
@@ -1028,6 +1073,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const path = getRepoPathFromUrl()
     void get().loadRecentRepos()
     void get().loadDiscoveredRepos()
+    // Setting the canonical repository hash after opening can itself dispatch
+    // `hashchange`. Do not tear down and reopen the graph we just loaded.
+    if (path && path === get().repoPath) return
     if (path) void get().openRepoByPath(path)
     else void openRepoByPathImpl('.', set, get, { showOpenError: false })
   },

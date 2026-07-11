@@ -82,7 +82,12 @@ export function App() {
   const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
   const selectedCIRuns = selectedCIStatus?.runs ?? []
 
-  useEffect(() => { openFromUrl() }, [openFromUrl])
+  useEffect(() => {
+    const handleHashChange = () => openFromUrl()
+    window.addEventListener('hashchange', handleHashChange)
+    openFromUrl()
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [openFromUrl])
 
   useEffect(() => {
     setRepoPathInput(repoPath ?? '')
