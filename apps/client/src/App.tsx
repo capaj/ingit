@@ -62,7 +62,7 @@ export function App() {
     errorDialog, dismissError, showError,
     openRepoByPath, closeRepo, openFromUrl, selectRef,
     navigateTo, checkoutSha, performRefAction,
-    showCommitMessages, setShowCommitMessages,
+    showCommitMessages, setShowCommitMessages, showGutterColors, setShowGutterColors,
     viewMode, setViewMode,
     worktreeSelected,
     worktreeChanges,
@@ -262,6 +262,8 @@ export function App() {
           refs={refs}
           onSelectRef={selectRef}
           selectedSha={selectedSha}
+          showGutterColors={showGutterColors}
+          onShowGutterColorsChange={setShowGutterColors}
           onClose={() => setRefsSidebarOpen(false)}
         />
       )}

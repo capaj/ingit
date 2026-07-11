@@ -1,5 +1,6 @@
 import type { EdgeSegment } from '@ingit/rpc-contract'
 import { LaneAllocator } from './lane-allocator.js'
+import { orderLaneSegmentsByContinuity } from './lane-ordering.js'
 import { buildEdges } from './edge-builder.js'
 import type { TopoEntry, ProjectionCheckpoint, LaneSnapshot } from './types.js'
 
@@ -185,6 +186,15 @@ export class Projection {
       const lane = allocator.assignLane(entry.sha, this.getKnownParentShas(entry.parentShas))
       lanes.set(entry.sha, lane)
       rowDescriptors.push({ sha: entry.sha, parentShas: entry.parentShas, row: entry.row, lane })
+    }
+
+    // Keep long-lived rails at the outside of each side. This leaves the inner
+    // gutters available to shorter branches that need to merge toward lane 0,
+    // reducing crossings without changing which side a branch occupies.
+    const orderedLaneBySha = orderLaneSegmentsByContinuity(rowDescriptors)
+    for (const descriptor of rowDescriptors) {
+      descriptor.lane = orderedLaneBySha.get(descriptor.sha) ?? descriptor.lane
+      lanes.set(descriptor.sha, descriptor.lane)
     }
 
     // Build shaToRow and shaToLane maps covering all known entries so that

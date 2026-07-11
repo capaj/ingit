@@ -5,6 +5,8 @@ interface RefsSidebarProps {
   refs: RefSummary[]
   onSelectRef: (ref: RefSummary) => void
   selectedSha?: string | null
+  showGutterColors: boolean
+  onShowGutterColorsChange: (value: boolean) => void
   onClose: () => void
 }
 
@@ -18,7 +20,14 @@ const KIND_LABELS: Record<RefKind, string> = {
 
 const KIND_ORDER: RefKind[] = ['head', 'remote', 'tag']
 
-export function RefsSidebar({ refs, onSelectRef, selectedSha, onClose }: RefsSidebarProps) {
+export function RefsSidebar({
+  refs,
+  onSelectRef,
+  selectedSha,
+  showGutterColors,
+  onShowGutterColorsChange,
+  onClose,
+}: RefsSidebarProps) {
   const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({ head: true, remote: true, tag: true })
   const [filter, setFilter] = useState('')
 
@@ -100,6 +109,28 @@ export function RefsSidebar({ refs, onSelectRef, selectedSha, onClose }: RefsSid
           onBlur={(e) => { e.currentTarget.style.borderColor = '#45475a' }}
         />
       </div>
+
+      <label
+        title="Give each graph gutter a distinct background color"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 14px',
+          borderBottom: '1px solid #313244',
+          color: showGutterColors ? '#cdd6f4' : '#a6adc8',
+          fontSize: 12,
+          cursor: 'pointer',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={showGutterColors}
+          onChange={(event) => onShowGutterColorsChange(event.target.checked)}
+          style={{ margin: 0, accentColor: '#89b4fa', cursor: 'pointer' }}
+        />
+        Color-code gutters
+      </label>
 
       {KIND_ORDER.map((kind) => {
         const items = groups[kind]

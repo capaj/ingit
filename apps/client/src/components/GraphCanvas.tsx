@@ -1134,34 +1134,6 @@ function buildCurrentLaneHighlight(layout: GraphLayout | null, currentBranch: st
   }
 }
 
-// The worktree label sits on the worktree node's row (one row above HEAD). Pick
-// the side whose neighbouring lane is free so the text never overlays a node or
-// a vertical rail. Returns null when both sides are taken, so the caller hides
-// the text entirely.
-function computeWorktreeLabelSide(layout: GraphLayout, headNode: LayoutNode): 'left' | 'right' | null {
-  const headLane = headNode.row.lane
-  const labelRow = headNode.idx - 1 // row index sharing the worktree node's y
-
-  const laneOccupied = (lane: number) => {
-    for (const node of layout.nodes) {
-      // a node sitting directly on the worktree node's row
-      if (node.idx === labelRow && node.row.lane === lane) return true
-      // a straight vertical rail passing through that row
-      if (node.row.lane !== lane) continue
-      const firstParentSha = node.row.parentShas[0]
-      if (!firstParentSha) continue
-      const parent = layout.shaToNode.get(firstParentSha)
-      if (!parent || parent.row.lane !== lane) continue
-      if (node.idx <= labelRow && labelRow <= parent.idx) return true
-    }
-    return false
-  }
-
-  if (!laneOccupied(headLane + 1)) return 'right'
-  if (!laneOccupied(headLane - 1)) return 'left'
-  return null
-}
-
 function countConflictedWorktreeFiles(changes: WorktreeChangesResponse): number {
   return new Set(changes.unstaged.filter((file) => file.status === 'U').map((file) => file.path)).size
 }
@@ -1293,6 +1265,7 @@ export function GraphCanvas() {
   const pendingMutation = useAppStore((state) => state.pendingMutation)
   const graphAnimationSuppressToken = useAppStore((state) => state.graphAnimationSuppressToken)
   const showCommitMessages = useAppStore((state) => state.showCommitMessages)
+  const showGutterColors = useAppStore((state) => state.showGutterColors)
   const showError = useAppStore((state) => state.showError)
   const commitCIStatus = useAppStore((state) => state.commitCIStatus)
   const fetchCommitCIStatusesIfNeeded = useAppStore((state) => state.fetchCommitCIStatusesIfNeeded)
@@ -1441,7 +1414,6 @@ export function GraphCanvas() {
       conflictedCount,
       targetPath,
       sourcePath,
-      labelSide: computeWorktreeLabelSide(layout, headNode),
     }
   }, [layout, worktreeChanges, currentBranch])
 
@@ -1596,6 +1568,15 @@ export function GraphCanvas() {
     () => (layout ? layout.nodes.map((node) => node.row.lane) : []),
     [layout],
   )
+
+  const gutterBackgrounds = useMemo(() => {
+    if (!layout || !showGutterColors) return []
+    const xByLane = new Map<number, number>()
+    for (const node of layout.nodes) xByLane.set(node.row.lane, node.x)
+    return [...xByLane]
+      .sort(([leftLane], [rightLane]) => leftLane - rightLane)
+      .map(([lane, x]) => ({ lane, x, color: laneColor(lane) }))
+  }, [layout, showGutterColors])
 
   const currentBranchEdgeKeys = useMemo(
     () => buildCurrentBranchEdgeKeys(layout, currentBranch),
@@ -2681,6 +2662,39 @@ export function GraphCanvas() {
           </div>
         )}
         <div ref={commitLabelsLayerRef} style={{ position: 'relative' }}>
+          {worktreeNode && worktreeNode.y * zoom - scrollTop > 28 && (
+            <div
+              style={{
+                position: 'absolute',
+                left: 20,
+                top: worktreeNode.y * zoom - 7,
+                maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * zoom,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                color: worktreeSelected ? worktreeNode.color : '#a6adc8',
+                fontSize: 12,
+                fontWeight: 600,
+                pointerEvents: 'none',
+                userSelect: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <span style={{
+                display: 'inline-block',
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: worktreeNode.color,
+                flexShrink: 0,
+              }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {worktreeLabel}
+              </span>
+            </div>
+          )}
           {floatingCommitLabels.map((label) => {
             const status = commitCIStatus[label.sha]
             const dotColor: Record<string, string> = {
@@ -2783,6 +2797,19 @@ export function GraphCanvas() {
           height={fullHeight}
           style={{ position: 'absolute', top: 0, left: 0, zIndex: 10, pointerEvents: 'none', overflow: 'visible' }}
         >
+          {gutterBackgrounds.map((gutter) => (
+            <rect
+              key={`gutter-${gutter.lane}`}
+              x={gutter.x - LANE_WIDTH / 2 + 2}
+              y={0}
+              width={LANE_WIDTH - 4}
+              height={fullHeight}
+              rx={16}
+              fill={`${gutter.color}16`}
+              stroke={`${gutter.color}24`}
+              strokeWidth={1}
+            />
+          ))}
           {renderedLaneHighlight && (
             <animated.g
               key={renderedLaneHighlight.key}
@@ -3105,24 +3132,6 @@ export function GraphCanvas() {
                     </g>
                   )}
                 </>
-              )}
-              {worktreeNode.labelSide && (
-                <text
-                  x={worktreeNode.labelSide === 'left'
-                    ? worktreeNode.x - NODE_RADIUS - 10
-                    : worktreeNode.x + NODE_RADIUS + 10 + (worktreeNode.kind === 'worktree' || worktreeNode.conflictedCount === 0
-                      ? 0
-                      : worktreeConflictBadgeWidth + 6)}
-                  y={worktreeNode.y}
-                  textAnchor={worktreeNode.labelSide === 'left' ? 'end' : 'start'}
-                  dominantBaseline="central"
-                  fontSize={12}
-                  fontWeight={600}
-                  fill={worktreeSelected ? worktreeNode.color : '#a6adc8'}
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  {worktreeLabel}
-                </text>
               )}
             </g>
           )}

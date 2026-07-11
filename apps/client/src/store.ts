@@ -376,6 +376,7 @@ interface AppState {
   loadingMore: boolean
   commitCIStatus: Record<string, CIStatusEntry>
   showCommitMessages: boolean
+  showGutterColors: boolean
   worktreeChanges: WorktreeChangesResponse | null
   worktreeSelected: boolean
   worktreeFileDiffs: Record<string, WorktreeDiffEntry>
@@ -390,6 +391,7 @@ interface AppState {
 
   // Actions
   setShowCommitMessages: (value: boolean) => void
+  setShowGutterColors: (value: boolean) => void
   reloadFromServer: () => Promise<void>
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
@@ -605,10 +607,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       return true
     }
   })(),
+  showGutterColors: (() => {
+    try {
+      return localStorage.getItem('showGutterColors') === 'true'
+    } catch {
+      return false
+    }
+  })(),
 
   setShowCommitMessages: (value) => {
     try { localStorage.setItem('showCommitMessages', String(value)) } catch {}
     set({ showCommitMessages: value })
+  },
+
+  setShowGutterColors: (value) => {
+    try { localStorage.setItem('showGutterColors', String(value)) } catch {}
+    set({ showGutterColors: value })
   },
 
   reloadFromServer: async () => {
