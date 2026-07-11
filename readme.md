@@ -28,8 +28,8 @@ npm install --global @ingit/cli
 ```
 
 The npm package installs a small launcher and a prebuilt, self-contained ingit
-binary for Linux or macOS (x64/arm64). Bun is embedded in the binary and does
-not need to be installed separately.
+binary for Linux or macOS (x64/arm64), or Windows (x64). Bun is embedded in the
+binary and does not need to be installed separately.
 
 ```sh
 ingit                 # open the repo in the current directory
@@ -46,8 +46,9 @@ bun install
 bun dev               # server on http://127.0.0.1:8488 + vite dev client
 ```
 
-Linux and macOS are supported. Agent detection reads `/proc` on Linux and uses
-the system `ps` and `lsof` tools on macOS. The git UI itself is platform-agnostic.
+Linux, macOS, and Windows are supported. Agent detection reads `/proc` on Linux
+and uses the system `ps` and `lsof` tools on macOS; agent detection and window
+focusing are not yet available on Windows. The git UI itself is platform-agnostic.
 
 ## See it in action
 
@@ -127,6 +128,7 @@ Models used: mostly codex with GPT-5.5, some with opus 4.8
 
 - Linux (`/proc` agent detection and GNOME/X11 window focusing)
 - macOS (`ps`/`lsof` agent detection; window focusing is not yet implemented)
+- Windows x64 (git UI; agent detection and window focusing are not yet implemented)
 
 ## License
 

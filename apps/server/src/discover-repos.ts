@@ -11,7 +11,7 @@ const IGNORED_DIRECTORY_NAMES = new Set([
 
 function expandTilde(p: string): string {
   if (p === '~') return homedir()
-  if (p.startsWith('~/')) return resolve(homedir(), p.slice(2))
+  if (/^~[\\/]/.test(p)) return resolve(homedir(), p.slice(2))
   return p
 }
 

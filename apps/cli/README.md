@@ -9,8 +9,8 @@ npm install -g @ingit/cli
 ```
 
 No runtime dependencies — the binary is self-contained (the Bun runtime is
-embedded). Prebuilt binaries are provided for linux (x64/arm64) and macOS
-(x64/arm64).
+embedded). Prebuilt binaries are provided for Linux (x64/arm64), macOS
+(x64/arm64), and Windows (x64).
 
 ## Local testing from this repo
 
@@ -37,6 +37,9 @@ bun run --filter '@ingit/cli' release linux-x64
 ```
 
 You only need to run `bun link` again if the package/link setup changes.
+
+On Windows, use `win32-x64` as the release target. The generated executable is
+`apps/cli/release/cli-win32-x64/ingit.exe`.
 
 ## Usage
 

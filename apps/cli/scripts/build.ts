@@ -7,11 +7,12 @@
  *   cli-linux-arm64/        -> published as `@ingit/cli-linux-arm64`
  *   cli-darwin-x64/         -> published as `@ingit/cli-darwin-x64`
  *   cli-darwin-arm64/       -> published as `@ingit/cli-darwin-arm64`
+ *   cli-win32-x64/          -> published as `@ingit/cli-win32-x64`
  *
  * Each platform package contains a self-contained binary (`bun build --compile`,
- * runtime embedded), the built client, and the native git library. The `ingit`
- * `@ingit/cli` exposes the `ingit` command and picks the matching platform
- * package at runtime via optionalDependencies.
+ * runtime embedded), the built client, and an optional native git accelerator.
+ * The `@ingit/cli` package exposes the `ingit` command and picks the matching
+ * platform package at runtime via optionalDependencies.
  *
  * Usage:
  *   bun scripts/build.ts                 # build all targets
@@ -42,14 +43,17 @@ interface Target {
   os: string
   cpu: string
   bunTarget: string
-  nativeLib: string
+  binaryName: string
+  /** Optional FFI accelerator. The Git subprocess implementation is the fallback. */
+  nativeLib?: string
 }
 
 const TARGETS: Target[] = [
-  { id: 'linux-x64', os: 'linux', cpu: 'x64', bunTarget: 'bun-linux-x64', nativeLib: 'libziggit.so' },
-  { id: 'linux-arm64', os: 'linux', cpu: 'arm64', bunTarget: 'bun-linux-arm64', nativeLib: 'libziggit.so' },
-  { id: 'darwin-x64', os: 'darwin', cpu: 'x64', bunTarget: 'bun-darwin-x64', nativeLib: 'libziggit.dylib' },
-  { id: 'darwin-arm64', os: 'darwin', cpu: 'arm64', bunTarget: 'bun-darwin-arm64', nativeLib: 'libziggit.dylib' },
+  { id: 'linux-x64', os: 'linux', cpu: 'x64', bunTarget: 'bun-linux-x64', binaryName: 'ingit', nativeLib: 'libziggit.so' },
+  { id: 'linux-arm64', os: 'linux', cpu: 'arm64', bunTarget: 'bun-linux-arm64', binaryName: 'ingit', nativeLib: 'libziggit.so' },
+  { id: 'darwin-x64', os: 'darwin', cpu: 'x64', bunTarget: 'bun-darwin-x64', binaryName: 'ingit', nativeLib: 'libziggit.dylib' },
+  { id: 'darwin-arm64', os: 'darwin', cpu: 'arm64', bunTarget: 'bun-darwin-arm64', binaryName: 'ingit', nativeLib: 'libziggit.dylib' },
+  { id: 'win32-x64', os: 'win32', cpu: 'x64', bunTarget: 'bun-windows-x64', binaryName: 'ingit.exe' },
 ]
 
 const ALL_PLATFORM_PKGS = TARGETS.map((t) => `@ingit/cli-${t.id}`)
@@ -98,7 +102,7 @@ async function buildTarget(target: Target): Promise<void> {
       '--minify',
       `--target=${target.bunTarget}`,
       `--define=process.env.INGIT_VERSION=${JSON.stringify(VERSION)}`,
-      `--outfile=${join(pkgDir, 'ingit')}`,
+      `--outfile=${join(pkgDir, target.binaryName)}`,
     ],
     { cwd: REPO_ROOT, stdout: 'inherit', stderr: 'inherit' },
   )
@@ -108,18 +112,22 @@ async function buildTarget(target: Target): Promise<void> {
   // Bundle the built client next to the binary.
   cpSync(CLIENT_DIST, join(pkgDir, 'client'), { recursive: true })
 
-  // Ship the native git library. CI cross-builds a per-target lib into
-  // native-dist/<id>/; otherwise fall back to the committed host-arch lib (a
-  // cross-arch mismatch is fine — FFI is optional and degrades to the git
-  // subprocess rather than breaking).
-  const perTargetLib = join(GIT_CORE_DIR, 'native-dist', target.id, target.nativeLib)
-  const fallbackLib = join(GIT_CORE_DIR, target.nativeLib)
-  const libSrc = existsSync(perTargetLib) ? perTargetLib : fallbackLib
-  if (existsSync(libSrc)) {
-    cpSync(libSrc, join(pkgDir, target.nativeLib))
-  } else {
-    console.warn(`  ! native lib ${target.nativeLib} not found — ${target.id} ships without it`)
+  // Ship the optional native git accelerator where one is supported. CI
+  // cross-builds it into native-dist/<id>/; local builds can use the committed
+  // host library. Windows intentionally uses the Git subprocess fallback.
+  if (target.nativeLib) {
+    const perTargetLib = join(GIT_CORE_DIR, 'native-dist', target.id, target.nativeLib)
+    const fallbackLib = join(GIT_CORE_DIR, target.nativeLib)
+    const libSrc = existsSync(perTargetLib) ? perTargetLib : fallbackLib
+    if (existsSync(libSrc)) {
+      cpSync(libSrc, join(pkgDir, target.nativeLib))
+    } else {
+      console.warn(`  ! native lib ${target.nativeLib} not found — ${target.id} will use git subprocesses`)
+    }
   }
+
+  const files = [target.binaryName, 'client']
+  if (target.nativeLib) files.push(target.nativeLib)
 
   writePackageJson(pkgDir, {
     name: `@ingit/cli-${target.id}`,
@@ -129,7 +137,7 @@ async function buildTarget(target: Target): Promise<void> {
     cpu: [target.cpu],
     license: 'MIT',
     repository: REPOSITORY,
-    files: ['ingit', 'client', target.nativeLib],
+    files,
     publishConfig: PUBLISH_CONFIG,
   })
 
@@ -142,7 +150,9 @@ function buildLauncher(): void {
   mkdirSync(join(pkgDir, 'bin'), { recursive: true })
 
   cpSync(join(CLI_DIR, 'bin/ingit.cjs'), join(pkgDir, 'bin/ingit.cjs'))
-  chmodSync(join(pkgDir, 'bin/ingit.cjs'), 0o755)
+  if (process.platform !== 'win32') {
+    chmodSync(join(pkgDir, 'bin/ingit.cjs'), 0o755)
+  }
   if (existsSync(join(CLI_DIR, 'README.md'))) {
     cpSync(join(CLI_DIR, 'README.md'), join(pkgDir, 'README.md'))
   }

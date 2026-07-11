@@ -24,10 +24,16 @@ jobs:
           - id: linux
             os: ubuntu-latest
             targets: "linux-x64 linux-arm64"
+            native: true
           - id: darwin
             # Zig 0.14.x cannot link Darwin artifacts reliably on macOS 26/Xcode 26.
             os: macos-15
             targets: "darwin-x64 darwin-arm64"
+            native: true
+          - id: windows
+            os: windows-latest
+            targets: "win32-x64"
+            native: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,13 +43,19 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
 
       - uses: mlugg/setup-zig@v2
+        if: matrix.native
         with:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Test Windows git fallback
+        if: matrix.id == 'windows'
+        run: bun test packages/git-core/src/repo-session.test.ts packages/git-core/src/repo-session-staging.test.ts -t "starts on main|unstaged diff of an untracked file"
+
       - name: Build native libraries (per target)
+        if: matrix.native
         working-directory: packages/git-core
         run: |
           set -euo pipefail
@@ -69,6 +81,36 @@ jobs:
           INGIT_VERSION: ${{ github.ref_name }}
         run: bun scripts/build.ts ${{ matrix.targets }}
 
+      - name: Smoke test Windows executable
+        if: matrix.id == 'windows'
+        working-directory: apps/cli
+        shell: pwsh
+        run: |
+          .\release\cli-win32-x64\ingit.exe --version
+
+          $process = Start-Process -FilePath ".\release\cli-win32-x64\ingit.exe" -ArgumentList "--no-open", "--port", "48488" -PassThru -NoNewWindow
+          try {
+            $healthy = $false
+            foreach ($attempt in 1..20) {
+              try {
+                $response = Invoke-RestMethod "http://127.0.0.1:48488/__ingit/health"
+                if ($response.name -eq "ingit") {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Milliseconds 250
+              }
+            }
+            if (-not $healthy) {
+              throw "Windows executable did not expose a healthy server"
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+
       - name: Upload linux packages + launcher
         if: matrix.id == 'linux'
         uses: actions/upload-artifact@v4
@@ -88,6 +130,16 @@ jobs:
           path: |
             apps/cli/release/cli-darwin-x64
             apps/cli/release/cli-darwin-arm64
+          if-no-files-found: error
+
+      - name: Upload Windows package
+        if: matrix.id == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkgs-windows
+          path: |
+            apps/cli/release
+            !apps/cli/release/cli/**
           if-no-files-found: error
 
   publish:
@@ -123,7 +175,7 @@ jobs:
           chmod +x cli-darwin-x64/ingit cli-darwin-arm64/ingit
           chmod +x cli/bin/ingit.cjs
 
-          for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64 cli; do
+          for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64 cli-win32-x64 cli; do
             echo "::group::dry-run $dir"
             (cd "$dir" && npm pack --dry-run)
             echo "::endgroup::"
@@ -151,7 +203,7 @@ jobs:
           }
 
           # Platform packages first; @ingit/cli depends on them via optionalDependencies.
-          for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64; do
+          for dir in cli-linux-x64 cli-linux-arm64 cli-darwin-x64 cli-darwin-arm64 cli-win32-x64; do
             echo "::group::publish $dir"
             publish_dir "$dir"
             echo "::endgroup::"

@@ -3,24 +3,9 @@ export interface GitInfo {
   version: string
 }
 
-async function which(cmd: string): Promise<string> {
-  const proc = Bun.spawnSync(['which', cmd], {
-    stdout: 'pipe',
-    stderr: 'ignore',
-  })
-
-  if (!proc.success) {
-    throw new Error(`Command not found: ${cmd}`)
-  }
-
-  return proc.stdout?.toString('utf8').trim() ?? ''
-}
-
 export async function detectGit(): Promise<GitInfo> {
-  let gitPath: string
-  try {
-    gitPath = await which('git')
-  } catch {
+  const gitPath = Bun.which('git')
+  if (!gitPath) {
     throw new Error('git executable not found in PATH')
   }
 

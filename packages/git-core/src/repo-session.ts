@@ -47,7 +47,7 @@ export class RepoSession {
   readonly scheduler: GitCommandScheduler
   readonly catFile: CatFileProcess
   private readonly hydrator: CommitHydrator
-  private readonly ziggit: ZiggitRepo
+  private readonly ziggit: ZiggitRepo | null
 
   private constructor(
     repoId: string,
@@ -58,7 +58,7 @@ export class RepoSession {
     githubUrl: string | null,
     scheduler: GitCommandScheduler,
     catFile: CatFileProcess,
-    ziggit: ZiggitRepo,
+    ziggit: ZiggitRepo | null,
   ) {
     this.repoId = repoId
     this.rootPath = rootPath
@@ -86,11 +86,19 @@ export class RepoSession {
     )
     const gitDir = gitDirOut.trim()
 
-    // Open ziggit handle for this repo
-    const ziggit = new ZiggitRepo(rootPath)
-
-    // Resolve HEAD sha via ziggit FFI (no subprocess)
-    const headSha = ziggit.revParseHeadFast()
+    // Prefer the ziggit FFI accelerator where it is available. Windows and
+    // packages without a matching native library use regular git subprocesses.
+    let ziggit: ZiggitRepo | null = null
+    let headSha: string
+    try {
+      ziggit = new ZiggitRepo(rootPath)
+      headSha = ziggit.revParseHeadFast()
+    } catch {
+      try { ziggit?.close() } catch { /* ignore a broken native library */ }
+      ziggit = null
+      const { stdout } = await runGit(['rev-parse', 'HEAD'], rootPath)
+      headSha = stdout.trim()
+    }
 
     // Determine if HEAD is symbolic or detached (no ziggit equivalent)
     let headRefName: string | undefined
@@ -130,10 +138,15 @@ export class RepoSession {
     // (the FFI has been observed to return code -1 on some repos).
     let githubUrl: string | null = null
     let raw: string | null = null
-    let source = 'ffi'
-    try {
-      raw = ziggit.remoteGetUrl('origin').trim()
-    } catch {
+    let source = ziggit ? 'ffi' : 'git-subprocess'
+    if (ziggit) {
+      try {
+        raw = ziggit.remoteGetUrl('origin').trim()
+      } catch {
+        raw = null
+      }
+    }
+    if (raw === null) {
       source = 'git-subprocess'
       try {
         const { stdout } = await runGit(['remote', 'get-url', 'origin'], rootPath)
@@ -221,7 +234,7 @@ export class RepoSession {
         // Untracked file: there is nothing in the index to diff against, so
         // synthesize an all-added patch. --no-index exits 1 when files differ.
         const { stdout } = await runGit(
-          ['diff', '--no-index', '--', '/dev/null', path],
+          ['diff', '--no-index', '--', process.platform === 'win32' ? 'NUL' : '/dev/null', path],
           this.rootPath,
           { okCodes: [1] },
         )
@@ -754,6 +767,6 @@ export class RepoSession {
 
   close(): void {
     this.catFile.close()
-    this.ziggit.close()
+    this.ziggit?.close()
   }
 }

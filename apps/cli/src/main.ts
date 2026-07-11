@@ -81,6 +81,10 @@ function nativeLibFilename(): string | null {
       return 'libziggit.dylib'
     case 'linux':
       return 'libziggit.so'
+    case 'win32':
+      // The native accelerator currently uses POSIX shell semantics. Windows
+      // uses git subprocesses instead.
+      return null
     default:
       return null
   }
@@ -104,7 +108,7 @@ function resolveAssets(): AssetPaths {
   const libName = nativeLibFilename()
 
   if (isCompiledBinary()) {
-    // Platform package layout: <dir>/ingit, <dir>/client/**, <dir>/libziggit.*
+    // Platform package layout: <dir>/ingit[.exe], <dir>/client/**, <dir>/libziggit.*
     const baseDir = dirname(process.execPath)
     return {
       clientDist: join(baseDir, 'client'),
@@ -121,8 +125,11 @@ function resolveAssets(): AssetPaths {
 }
 
 async function openBrowser(url: string): Promise<void> {
-  const cmd =
-    process.platform === 'darwin' ? ['open', url] : ['xdg-open', url]
+  const cmd = process.platform === 'darwin'
+    ? ['open', url]
+    : process.platform === 'win32'
+      ? ['rundll32.exe', 'url.dll,FileProtocolHandler', url]
+      : ['xdg-open', url]
   try {
     Bun.spawn(cmd, { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' }).unref()
   } catch {

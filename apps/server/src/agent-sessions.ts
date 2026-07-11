@@ -89,11 +89,14 @@ async function readLinuxProc(pid: number): Promise<ProcInfo | null> {
 }
 
 async function readProc(pid: number): Promise<ProcInfo | null> {
-  if (process.platform !== 'darwin') return readLinuxProc(pid)
-  const [info] = await readDarwinProcesses([pid])
-  if (!info) return null
-  info.cwd = (await readDarwinCwds([pid])).get(pid) ?? ''
-  return info
+  if (process.platform === 'linux') return readLinuxProc(pid)
+  if (process.platform === 'darwin') {
+    const [info] = await readDarwinProcesses([pid])
+    if (!info) return null
+    info.cwd = (await readDarwinCwds([pid])).get(pid) ?? ''
+    return info
+  }
+  return null
 }
 
 /** Decode stat's tty_nr into a /dev/pts path (unix98 pty majors 136-143). */
@@ -508,12 +511,15 @@ async function scanAgentProcs(): Promise<{
     const cwds = await readDarwinCwds(candidates.map((info) => info.pid))
     for (const info of candidates) info.cwd = cwds.get(info.pid) ?? ''
     infos = candidates
-  } else {
+  } else if (process.platform === 'linux') {
     // procfs can also be unavailable in restricted Linux containers. Agent
     // discovery is optional and must never take down the polling RPC.
     const entries = await readdir('/proc').catch(() => [] as string[])
     const pids = entries.filter((e) => /^\d+$/.test(e)).map(Number)
     infos = await Promise.all(pids.map(readLinuxProc))
+  } else {
+    // Windows process/session discovery is not implemented yet.
+    infos = []
   }
   const procs: Array<{ info: ProcInfo; agent: AgentName }> = []
   const codexAppServers: ProcInfo[] = []
@@ -736,7 +742,7 @@ async function focusViaWindowCalls(pids: Set<number>, target: FocusTarget): Prom
 
 /** Try each backend to raise a window owned by any of `pids`. */
 async function focusWindowOfPids(pids: Set<number>, target: FocusTarget): Promise<string | null> {
-  if (process.platform === 'darwin') return null
+  if (process.platform !== 'linux') return null
   try {
     if (await focusViaWindowCalls(pids, target)) return 'window-calls'
   } catch {
@@ -774,6 +780,16 @@ interface ProbedCapabilities {
 let staticCapsPromise: Promise<Omit<ProbedCapabilities, 'hasWindowCalls' | 'windowCallsInfo'>> | null = null
 
 async function getCapabilities(): Promise<ProbedCapabilities> {
+  if (process.platform === 'win32') {
+    return {
+      displayServer: 'windows',
+      hasWmctrl: false,
+      hasWindowCalls: false,
+      windowCallsInfo: null,
+      ideClis: new Map(),
+    }
+  }
+
   staticCapsPromise ??= (async () => {
     const [hasWmctrl, ideCliChecks] = await Promise.all([
       process.platform === 'darwin' ? false : commandExists('wmctrl'),
@@ -977,6 +993,10 @@ async function prepareTmuxTarget(chainPids: Set<number>): Promise<Set<number>> {
 }
 
 export async function focusAgentSession(pid: number, cwdOverride?: string): Promise<FocusResult> {
+  if (process.platform === 'win32') {
+    return { ok: false, error: 'Agent session focusing is not yet implemented on Windows' }
+  }
+
   const info = await readProc(pid)
   const agent = info ? (isCodexAppServer(info) ? 'codex' : detectAgent(info)) : null
   if (!info || !agent) {
