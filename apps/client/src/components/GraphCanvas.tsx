@@ -3,7 +3,7 @@ import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
-import { shouldRequestMoreHistory } from '../history-pagination'
+import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
@@ -1325,6 +1325,7 @@ export function GraphCanvas() {
   }))
   const zoomRef = useRef(1)
   const suppressAutoScrollUntilRef = useRef(0)
+  const lastAppliedCommitScrollKeyRef = useRef<number | null>(null)
   // While a programmatic scroll-to-commit is in flight we must not treat the
   // resulting scroll events as a user gesture that cancels the graph animation —
   // the morph and the follow-scroll are meant to play together.
@@ -1613,12 +1614,19 @@ export function GraphCanvas() {
     forceRender()
   }, [layout, syncScrollTopState])
 
-  // Scroll to a specific commit when scrollToSha changes
+  // Apply each explicit commit-focus request once. Layout changes also rerun
+  // this effect so a not-yet-loaded target can become available, but pagination
+  // must not replay an old request and pull the user away from their position.
   useEffect(() => {
     if (!scrollToSha || !layout || !scrollRef.current) return
     if (Date.now() < suppressAutoScrollUntilRef.current) return
     const node = layout.shaToNode.get(scrollToSha)
-    if (!node) return
+    if (!shouldApplyCommitScrollRequest(
+      lastAppliedCommitScrollKeyRef.current,
+      scrollToKey,
+      !!node,
+    ) || !node) return
+    lastAppliedCommitScrollKeyRef.current = scrollToKey
     const el = scrollRef.current
     const targetTop = node.y * zoom - el.clientHeight / 2
     // Let the follow-scroll ride alongside an in-flight graph animation instead

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { CommitRow, HistoryWindowResponse } from '@ingit/rpc-contract'
-import { mergeHistory, shouldRequestMoreHistory } from './history-pagination'
+import {
+  mergeHistory,
+  shouldApplyCommitScrollRequest,
+  shouldRequestMoreHistory,
+} from './history-pagination'
 
 function row(sha: string): CommitRow {
   return {
@@ -37,6 +41,17 @@ describe('history pagination', () => {
   test('prefetches once the viewport reaches halfway through loaded content', () => {
     expect(shouldRequestMoreHistory(399, 100, 1000)).toBe(false)
     expect(shouldRequestMoreHistory(400, 100, 1000)).toBe(true)
+  })
+
+  test('does not replay a handled commit scroll when a new history page arrives', () => {
+    expect(shouldApplyCommitScrollRequest(null, 4, true)).toBe(true)
+    expect(shouldApplyCommitScrollRequest(4, 4, true)).toBe(false)
+    expect(shouldApplyCommitScrollRequest(4, 5, true)).toBe(true)
+  })
+
+  test('keeps an unhandled commit scroll pending until its target is loaded', () => {
+    expect(shouldApplyCommitScrollRequest(null, 4, false)).toBe(false)
+    expect(shouldApplyCommitScrollRequest(null, 4, true)).toBe(true)
   })
 
   test('adopts an expanded history prefix as the authoritative page', () => {

@@ -8,6 +8,14 @@ export function shouldRequestMoreHistory(
   return scrollTop + clientHeight >= loadedContentHeight / 2
 }
 
+export function shouldApplyCommitScrollRequest(
+  lastAppliedKey: number | null,
+  requestKey: number,
+  targetAvailable: boolean,
+): boolean {
+  return targetAvailable && lastAppliedKey !== requestKey
+}
+
 export function mergeHistory(
   previous: HistoryWindowResponse | null,
   incoming: HistoryWindowResponse,
