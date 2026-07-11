@@ -95,10 +95,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -158,3 +160,45 @@ jobs:
           echo "::group::publish @ingit/cli"
           publish_dir cli
           echo "::endgroup::"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "GitHub release $GITHUB_REF_NAME already exists; skipping"
+            exit 0
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          release_args=(
+            --verify-tag
+            --title "$GITHUB_REF_NAME"
+            --notes-file -
+          )
+          case "$version" in *-*) release_args+=(--prerelease);; esac
+
+          previous_tag="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
+          commit_range="$GITHUB_REF_NAME"
+          if [[ -n "$previous_tag" ]]; then
+            commit_range="$previous_tag..$GITHUB_REF_NAME"
+          fi
+
+          {
+            echo "## What's changed"
+            echo
+            git log \
+              --no-merges \
+              --invert-grep \
+              --grep='^release v[0-9]' \
+              --pretty="format:- %s ([%h](https://github.com/$GITHUB_REPOSITORY/commit/%H))" \
+              "$commit_range"
+
+            if [[ -n "$previous_tag" ]]; then
+              echo
+              echo
+              echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$previous_tag...$GITHUB_REF_NAME"
+            fi
+          } | gh release create "$GITHUB_REF_NAME" "${release_args[@]}"

@@ -14,6 +14,7 @@
     "build:site": "bun run --filter '@ingit/site' build",
     "build:packages": "bun run --filter '@ingit/rpc-contract' build && bun run --filter '@ingit/git-core' build && bun run --filter '@ingit/graph-core' build",
     "cli:release": "bun run --filter '@ingit/cli' release",
+    "release": "bun scripts/release.ts",
     "typecheck": "tsc --build && tsc -p tsconfig.scripts.json",
     "bump": "bunx npm-check-updates -u --workspaces --root && bun install"
   },
