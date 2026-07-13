@@ -6,6 +6,8 @@ interface RefsSidebarProps {
   onSelectRef: (ref: RefSummary) => void
   selectedSha?: string | null
   onClose: () => void
+  onOpenSettings: () => void
+  settingsOpen?: boolean
 }
 
 type RefKind = 'head' | 'remote' | 'tag'
@@ -23,6 +25,8 @@ export function RefsSidebar({
   onSelectRef,
   selectedSha,
   onClose,
+  onOpenSettings,
+  settingsOpen = false,
 }: RefsSidebarProps) {
   const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({ head: true, remote: true, tag: true })
   const [filter, setFilter] = useState('')
@@ -213,6 +217,33 @@ export function RefsSidebar({
           </div>
         )
       })}
+
+      <div style={{ marginTop: 'auto', padding: '10px', borderTop: '1px solid #313244' }}>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title="Open settings"
+          aria-label="Open settings"
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '7px 10px',
+            borderRadius: 5,
+            border: '1px solid #313244',
+            background: settingsOpen ? '#89b4fa20' : 'transparent',
+            color: settingsOpen ? '#89b4fa' : '#a6adc8',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+          }}
+        >
+          <span aria-hidden="true" style={{ color: settingsOpen ? '#89b4fa' : '#6c7086' }}>⚙</span>
+          Settings
+        </button>
+      </div>
     </div>
   )
 }

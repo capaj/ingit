@@ -303,6 +303,8 @@ export function App() {
           onSelectRef={selectRef}
           selectedSha={selectedSha}
           onClose={() => setRefsSidebarOpen(false)}
+          onOpenSettings={() => setSettingsOpen(true)}
+          settingsOpen={settingsOpen}
         />
       )}
 
@@ -526,23 +528,6 @@ export function App() {
             </div>
           )}
           <AgentSessions />
-          <button
-            onClick={() => setSettingsOpen(true)}
-            title="Open settings"
-            aria-label="Open settings"
-            style={{
-              flexShrink: 0,
-              padding: '4px 10px',
-              borderRadius: 4,
-              border: '1px solid #313244',
-              background: settingsOpen ? '#89b4fa20' : 'transparent',
-              color: settingsOpen ? '#89b4fa' : '#6c7086',
-              fontSize: 11,
-              cursor: 'pointer',
-            }}
-          >
-            Settings
-          </button>
           <button
             onClick={handleFetch}
             disabled={fetching}
