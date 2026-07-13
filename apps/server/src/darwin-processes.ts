@@ -13,6 +13,8 @@ export interface ProcessInfo {
   tty: string | null
   /** CPU time normalized to centiseconds, matching Linux's usual clock ticks. */
   cpuTicks: number
+  /** Wall-clock process creation time when the platform exposes it cheaply. */
+  startEpochMs?: number
   argv: string[]
   command: string
   exe: string

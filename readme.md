@@ -46,9 +46,10 @@ bun install
 bun dev               # server on http://127.0.0.1:8488 + vite dev client
 ```
 
-Linux, macOS, and Windows are supported. Agent detection reads `/proc` on Linux
-and uses the system `ps` and `lsof` tools on macOS; agent detection and window
-focusing are not yet available on Windows. The git UI itself is platform-agnostic.
+Linux, macOS, and Windows are supported. Agent detection reads `/proc` on Linux,
+uses `ps` and `lsof` on macOS, and reads native process metadata on Windows.
+Windows currently detects terminal Claude Code and Codex sessions; window
+focusing is not yet available there. The git UI itself is platform-agnostic.
 
 ## See it in action
 
@@ -128,7 +129,7 @@ Models used: mostly codex with GPT-5.5, some with opus 4.8
 
 - Linux (`/proc` agent detection and GNOME/X11 window focusing)
 - macOS (`ps`/`lsof` agent detection; window focusing is not yet implemented)
-- Windows x64 (git UI; agent detection and window focusing are not yet implemented)
+- Windows x64 (terminal agent detection; window focusing is not yet implemented)
 
 ## License
 

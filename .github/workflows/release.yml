@@ -50,9 +50,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Test Windows git fallback
+      - name: Test Windows process and git fallbacks
         if: matrix.id == 'windows'
-        run: bun test packages/git-core/src/repo-session.test.ts packages/git-core/src/repo-session-staging.test.ts -t "starts on main|unstaged diff of an untracked file"
+        run: |
+          bun test apps/server/test/windows-processes.test.ts apps/server/test/agent-sessions.test.ts
+          bun test packages/git-core/src/repo-session.test.ts packages/git-core/src/repo-session-staging.test.ts -t "starts on main|unstaged diff of an untracked file"
 
       - name: Build native libraries (per target)
         if: matrix.native
