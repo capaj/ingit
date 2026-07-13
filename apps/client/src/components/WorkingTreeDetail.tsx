@@ -186,7 +186,8 @@ function CommitBox({
   const showError = useAppStore((s) => s.showError)
   const pendingMutation = useAppStore((s) => s.pendingMutation)
   const repoId = useAppStore((s) => s.repoId)
-  const [message, setMessage] = useState('')
+  const message = useAppStore((s) => s.worktreeCommitMessage)
+  const setMessage = useAppStore((s) => s.setWorktreeCommitMessage)
   const [noVerify, setNoVerify] = useState(() => {
     try { return localStorage.getItem('commitNoVerify') === 'true' } catch { return false }
   })
@@ -250,8 +251,10 @@ function CommitBox({
         try {
           const detail = await getCommitDetail(repoId, headSha)
           const full = detail.body ? `${detail.subject}\n\n${detail.body}` : detail.subject
-          setMessage((cur) => (cur.trim().length === 0 ? full : cur))
-          setPrefilled(full)
+          if (useAppStore.getState().worktreeCommitMessage.trim().length === 0) {
+            setMessage(full)
+            setPrefilled(full)
+          }
         } catch { /* ignore — the user can type the message */ }
       }
     } else if (message === prefilled) {

@@ -388,6 +388,8 @@ interface AppState {
   showGutterColors: boolean
   worktreeChanges: WorktreeChangesResponse | null
   worktreeSelected: boolean
+  /** In-progress commit message; kept while the working-tree panel is hidden. */
+  worktreeCommitMessage: string
   worktreeFileDiffs: Record<string, WorktreeDiffEntry>
   commitFileDiffs: Record<string, CommitFileDiffEntry>
   // True while an optimistic mutation is in flight. Blocks further node actions
@@ -401,6 +403,7 @@ interface AppState {
   // Actions
   setShowCommitMessages: (value: boolean) => void
   setShowGutterColors: (value: boolean) => void
+  setWorktreeCommitMessage: (message: string) => void
   reloadFromServer: () => Promise<void>
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
@@ -467,6 +470,7 @@ async function openRepoByPathImpl(
     loadingMore: false,
     worktreeChanges: null,
     worktreeSelected: false,
+    worktreeCommitMessage: '',
     worktreeFileDiffs: {},
     commitFileDiffs: {},
     reflog: null,
@@ -639,6 +643,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   commitCIStatus: {},
   worktreeChanges: null,
   worktreeSelected: false,
+  worktreeCommitMessage: '',
   worktreeFileDiffs: {},
   commitFileDiffs: {},
   pendingMutation: false,
@@ -668,6 +673,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     try { localStorage.setItem('showGutterColors', String(value)) } catch {}
     set({ showGutterColors: value })
   },
+
+  setWorktreeCommitMessage: (message) => set({ worktreeCommitMessage: message }),
 
   reloadFromServer: async () => {
     const { repoPath } = get()
@@ -1042,6 +1049,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       commitCIStatus: {},
       worktreeChanges: null,
       worktreeSelected: false,
+      worktreeCommitMessage: '',
       worktreeFileDiffs: {},
       commitFileDiffs: {},
       pendingMutation: false,
