@@ -1,4 +1,5 @@
 import { Fragment, useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
+import { createPortal } from 'react-dom'
 import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
@@ -7,6 +8,7 @@ import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../his
 import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-canvas/CommitIcons'
+import { fitPreviewCamera, stackPreviewChainAboveGraph } from './graph-canvas/action-preview-layout'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
@@ -155,12 +157,18 @@ type ActionPreviewState =
 
 interface ActionPreviewGeometry {
   nodes: Array<{ node: LayoutNode; color: string }>
-  relocatedNodes: Array<{ node: LayoutNode; color: string }>
   edges: Array<{ key: string; path: string; color: string; dashed: boolean }>
-  refs: RefPlacement[]
-  hiddenShas: Set<string>
   gutterX?: number
-  extraGutter?: { x: number; color: string }
+}
+
+interface RebaseHoverLock {
+  targetRefName: string
+  buttonRect: { left: number; top: number; width: number; height: number }
+  buttonScale: number
+  baseZoom: number
+  viewport: { width: number; height: number }
+  scroll: { x: number; y: number }
+  targetNode: { x: number; y: number }
 }
 
 interface ParsedVersionTag {
@@ -452,15 +460,12 @@ function buildActionPreviewGeometry(
 
     return {
       nodes: [{ node: ghostNode, color: ACTION_PREVIEW_COLOR }],
-      relocatedNodes: [],
       edges: [{
         key,
         path: routedEdgePath(ghostNode, parent, plan, 0),
         color: ACTION_PREVIEW_COLOR,
         dashed: true,
       }],
-      refs: [],
-      hiddenShas: new Set(),
     }
   }
 
@@ -497,42 +502,35 @@ function buildActionPreviewGeometry(
   const targetNode = targetSha
     ? baseLayout.shaToNode.get(targetSha) ?? previewLayout.shaToNode.get(targetSha)
     : null
-  const alignedNodes = targetNode
+  const laneAlignedNodes = targetNode
     ? affectedNodes.map((node) => ({
         ...node,
         x: targetNode.x,
         row: { ...node.row, lane: targetNode.row.lane },
       }))
     : affectedNodes
+  const topNode = baseLayout.nodes[0]
+  if (!topNode) return null
+
+  // Keep every live row stationary during hover. The oldest replayed commit
+  // sits just above the graph and newer commits continue upward. Long previews
+  // intentionally cross into negative canvas coordinates and are clipped by
+  // the viewport, visually continuing through its top edge.
+  const alignedNodes = stackPreviewChainAboveGraph(
+    laneAlignedNodes,
+    topNode,
+    NODE_SPACING_Y,
+  )
   const affectedShas = new Set(alignedNodes.map((node) => node.row.sha))
   const affectedNodeBySha = new Map(alignedNodes.map((node) => [node.row.sha, node]))
-  const previewTop = Math.min(...alignedNodes.map((node) => node.y))
-  const blockingNodes = targetNode
-    ? baseLayout.nodes.filter((node) => (
-        node.row.sha !== targetNode.row.sha
-        && !affectedShas.has(node.row.sha)
-        && Math.abs(node.x - targetNode.x) < 0.5
-        && node.y >= previewTop
-        && node.y < targetNode.y
-      ))
-    : []
-  const relocatedLane = Math.max(...baseLayout.nodes.map((node) => node.row.lane)) + 1
-  const relocatedX = Math.max(...baseLayout.nodes.map((node) => node.x)) + LANE_WIDTH
-  const relocatedNodes = blockingNodes.map((node) => ({
-    ...node,
-    x: relocatedX,
-    row: { ...node.row, lane: relocatedLane },
-  }))
-  const relocatedShas = new Set(relocatedNodes.map((node) => node.row.sha))
-  const relocatedNodeBySha = new Map(relocatedNodes.map((node) => [node.row.sha, node]))
-  const occupied = [...previewLayout.nodes.map((node) => node.row.lane), relocatedLane]
+  const occupied = previewLayout.nodes.map((node) => node.row.lane)
   const edges: ActionPreviewGeometry['edges'] = []
 
   for (const node of alignedNodes) {
     for (let parentIndex = 0; parentIndex < node.row.parentShas.length; parentIndex++) {
       const parentSha = node.row.parentShas[parentIndex]
-      // Replayed commits use their predicted positions. The unchanged target
-      // commit remains anchored to the live graph so the ghost path visibly
+      // Replayed commits connect within the stacked preview. The unchanged
+      // target remains anchored to the live graph so the ghost path visibly
       // reconnects to what is already on screen.
       const parent = affectedShas.has(parentSha)
         ? affectedNodeBySha.get(parentSha)
@@ -551,56 +549,12 @@ function buildActionPreviewGeometry(
     }
   }
 
-  for (const baseNode of baseLayout.nodes) {
-    for (let parentIndex = 0; parentIndex < baseNode.row.parentShas.length; parentIndex++) {
-      const parentSha = baseNode.row.parentShas[parentIndex]
-      if (!relocatedShas.has(baseNode.row.sha) && !relocatedShas.has(parentSha)) continue
-      const node = relocatedNodeBySha.get(baseNode.row.sha) ?? baseNode
-      const baseParent = baseLayout.shaToNode.get(parentSha)
-      if (!baseParent) continue
-      const parent = relocatedNodeBySha.get(parentSha) ?? baseParent
-      const key = `action-relocation:${node.row.sha}-${parent.row.sha}`
-      const plan = planEdgeRoute(node, parent, key, occupied, {
-        adjacentTrack: parentIndex > 0 ? 'to' : 'from',
-      })
-      const colorNode = parentIndex > 0 ? baseParent : baseNode
-      edges.push({
-        key,
-        path: routedEdgePath(node, parent, plan, 0),
-        color: baseLayout.shaToColor.get(colorNode.row.sha) ?? laneColor(colorNode.row.lane),
-        dashed: false,
-      })
-    }
-  }
-
-  const relocatedColors = new Map(
-    relocatedNodes.map((node) => [
-      node.row.sha,
-      baseLayout.shaToColor.get(node.row.sha) ?? laneColor(node.row.lane),
-    ]),
-  )
-  const relocatedRefs = buildRefPlacements(
-    relocatedNodes,
-    currentRef?.shortName ?? null,
-    null,
-    relocatedColors,
-  ).placements
-
   return {
     nodes: [
       ...alignedNodes.map((node) => ({ node, color: ACTION_PREVIEW_COLOR })),
     ],
-    relocatedNodes: relocatedNodes.map((node) => ({
-      node,
-      color: relocatedColors.get(node.row.sha) ?? laneColor(node.row.lane),
-    })),
     edges,
-    refs: relocatedRefs,
-    hiddenShas: relocatedShas,
     gutterX: targetNode ? targetNode.x - PRIMARY_LANE_HIGHLIGHT_WIDTH / 2 : undefined,
-    extraGutter: relocatedNodes.length > 0
-      ? { x: relocatedX, color: laneColor(relocatedLane) }
-      : undefined,
   }
 }
 
@@ -1497,6 +1451,7 @@ export function GraphCanvas() {
   const graphAnimationRef = useRef<GraphAnimationSnapshot | null>(null)
   const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
   const [actionPreview, setActionPreview] = useState<ActionPreviewState | null>(null)
+  const [rebaseHoverLock, setRebaseHoverLock] = useState<RebaseHoverLock | null>(null)
   const [hoveredAddRefSha, setHoveredAddRefSha] = useState<string | null>(null)
   const [openAddRefSha, setOpenAddRefSha] = useState<string | null>(null)
   const [createRefDialog, setCreateRefDialog] = useState<CreateRefDialogState | null>(null)
@@ -1570,6 +1525,38 @@ export function GraphCanvas() {
       actionPreview,
     )
   }, [layout, actionPreview, actionPreviewPrediction, showCommitMessages])
+
+  const rebasePreviewCamera = useMemo(() => {
+    if (
+      actionPreview?.kind !== 'rebase'
+      || !rebaseHoverLock
+      || rebaseHoverLock.targetRefName !== actionPreview.targetRefName
+      || !actionPreviewGeometry
+      || actionPreviewGeometry.nodes.length === 0
+    ) return null
+
+    const halo = NODE_RADIUS * 2
+    const previewNodes = [
+      ...actionPreviewGeometry.nodes.map(({ node }) => node),
+      rebaseHoverLock.targetNode,
+    ]
+    return fitPreviewCamera({
+      baseZoom: rebaseHoverLock.baseZoom,
+      bounds: {
+        minX: Math.min(...previewNodes.map((node) => node.x)) - halo,
+        minY: Math.min(...previewNodes.map((node) => node.y)) - halo,
+        maxX: Math.max(...previewNodes.map((node) => node.x)) + halo,
+        maxY: Math.max(...previewNodes.map((node) => node.y)) + halo,
+      },
+      viewport: rebaseHoverLock.viewport,
+      scroll: rebaseHoverLock.scroll,
+      margin: 12,
+    })
+  }, [actionPreview, actionPreviewGeometry, rebaseHoverLock])
+
+  const renderedZoom = rebasePreviewCamera?.zoom ?? zoom
+  const graphTranslateX = rebasePreviewCamera?.translateX ?? 0
+  const graphTranslateY = rebasePreviewCamera?.translateY ?? 0
 
   // The working-tree / in-progress operation node floats one row above HEAD,
   // in HEAD's lane. Merge conflicts also draw a dashed second-parent edge.
@@ -1725,6 +1712,7 @@ export function GraphCanvas() {
   useEffect(() => {
     setMergePreviewVisible(false)
     setActionPreview(null)
+    setRebaseHoverLock(null)
     setOpenAddRefSha(null)
   }, [selectedRefName, selectedSha])
 
@@ -2167,22 +2155,6 @@ export function GraphCanvas() {
     [graphAnimationRenderData, visibleNodes, layout],
   )
 
-  const displayedNodeItems = useMemo(() => [
-    ...renderedNodeItems.filter((node) => !actionPreviewGeometry?.hiddenShas.has(node.row.sha)),
-    ...(actionPreviewGeometry?.relocatedNodes ?? []).map(({ node, color }) => ({
-      key: `action-relocation:${node.row.sha}`,
-      row: node.row,
-      interactive: false,
-      color,
-      fromX: node.x,
-      fromY: node.y,
-      toX: node.x,
-      toY: node.y,
-      fromOpacity: 1,
-      toOpacity: 1,
-    } satisfies RenderedNodeItem)),
-  ], [renderedNodeItems, actionPreviewGeometry])
-
   const renderedEdgeItems = useMemo(
     () => graphAnimationRenderData?.edges ?? visibleEdgeItems.map((edge) => ({
       key: edge.key,
@@ -2391,6 +2363,7 @@ export function GraphCanvas() {
     e.stopPropagation()
     setMergePreviewVisible(false)
     setActionPreview(null)
+    setRebaseHoverLock(null)
     selectGraphRef(refName)
   }, [selectGraphRef])
 
@@ -2482,6 +2455,7 @@ export function GraphCanvas() {
   const handleMergeHoverStart = useCallback(() => {
     if (!selectedRefName) return
     setActionPreview(null)
+    setRebaseHoverLock(null)
     setMergePreviewVisible(true)
     if (!mergePreview || mergePreview.sourceRefName !== selectedRefName) {
       void ensureMergePreview(selectedRefName)
@@ -2495,16 +2469,47 @@ export function GraphCanvas() {
   const handleCommitActionHoverStart = useCallback((action: CommitActionKind, sha: string) => {
     if (action === 'uncommit') return
     setMergePreviewVisible(false)
+    setRebaseHoverLock(null)
     setActionPreview({ kind: 'commit', action, sha })
   }, [])
 
-  const handleRebaseHoverStart = useCallback((targetRefName: string) => {
+  const handleRebaseHoverStart = useCallback((
+    targetRefName: string,
+    targetNode: LayoutNode,
+    event: React.PointerEvent<HTMLButtonElement>,
+  ) => {
+    const viewport = scrollRef.current
+    if (!viewport) return
+
+    const buttonRect = event.currentTarget.getBoundingClientRect()
+    const baseZoom = zoomRef.current
+
     setMergePreviewVisible(false)
+    setRebaseHoverLock({
+      targetRefName,
+      buttonRect: {
+        left: buttonRect.left,
+        top: buttonRect.top,
+        width: buttonRect.width,
+        height: buttonRect.height,
+      },
+      buttonScale: buttonRect.height / COMMIT_ACTION_HEIGHT,
+      baseZoom,
+      viewport: { width: viewport.clientWidth, height: viewport.clientHeight },
+      scroll: { x: viewport.scrollLeft, y: viewport.scrollTop },
+      targetNode: { x: targetNode.x, y: targetNode.y },
+    })
     setActionPreview({ kind: 'rebase', targetRefName })
   }, [])
 
   const handleActionPreviewEnd = useCallback(() => {
     setActionPreview(null)
+    setRebaseHoverLock(null)
+  }, [])
+
+  const handleRebaseHoverEnd = useCallback(() => {
+    setActionPreview((current) => current?.kind === 'rebase' ? null : current)
+    setRebaseHoverLock(null)
   }, [])
 
   const takeOverMergeViewport = useCallback(() => {
@@ -2539,6 +2544,7 @@ export function GraphCanvas() {
   const runRebase = useCallback((targetRefName: string) => {
     setMergePreviewVisible(false)
     setActionPreview(null)
+    setRebaseHoverLock(null)
     performRebaseRef(targetRefName).catch((err) => {
       showError('Rebase failed', err)
     })
@@ -2569,7 +2575,7 @@ export function GraphCanvas() {
 
     for (const node of layout.nodes) {
       if (node.row.refNames.length === 0) continue
-      const tipScreenY = node.y * zoom
+      const tipScreenY = node.y * renderedZoom + graphTranslateY
       if (tipScreenY >= scrollTop) continue // tip still on screen
 
       const lane = node.row.lane
@@ -2599,7 +2605,7 @@ export function GraphCanvas() {
     const rowRightEdges: number[] = []
 
     for (const label of sorted) {
-      const labelLeft = label.x * zoom - 4
+      const labelLeft = label.x * renderedZoom + graphTranslateX - 4
       const labelWidth = label.name.length * CHAR_WIDTH + LABEL_PAD
       let assignedRow = 0
       for (let r = 0; r < rowRightEdges.length; r++) {
@@ -2614,20 +2620,29 @@ export function GraphCanvas() {
       result.push({ ...label, row: assignedRow })
     }
     return result
-  }, [layout, visibleNodes, zoom])
+  }, [layout, visibleNodes, renderedZoom, graphTranslateX, graphTranslateY])
 
   const timeLabels = useMemo(
-    () => (layout ? computeTimeLabels(layout.nodes, zoom) : []),
-    [layout, zoom],
+    () => (layout
+      ? computeTimeLabels(layout.nodes, renderedZoom).map((label) => ({
+          ...label,
+          y: label.y + graphTranslateY,
+        }))
+      : []),
+    [layout, renderedZoom, graphTranslateY],
   )
 
   const topTimeLabel = useMemo(() => {
     if (!layout) return null
-    const node = findTopVisibleNode(layout.nodes, scrollTop, zoom)
+    const node = findTopVisibleNode(
+      layout.nodes,
+      Math.max(0, scrollTop - graphTranslateY),
+      renderedZoom,
+    )
     if (!node) return null
     const date = new Date(node.row.committerUnix * 1000)
-    return formatTopTimeLabel(date, zoom)
-  }, [layout, scrollTop, zoom])
+    return formatTopTimeLabel(date, renderedZoom)
+  }, [layout, scrollTop, renderedZoom, graphTranslateY])
 
   const floatingTimeLabels = useMemo(
     () => timeLabels.filter((label) => label.y - scrollTop > 28),
@@ -2646,10 +2661,10 @@ export function GraphCanvas() {
       .map((node) => ({
         key: node.row.sha,
         sha: node.row.sha,
-        y: node.y * zoom,
+        y: node.y * renderedZoom + graphTranslateY,
         text: node.row.subject,
       }))
-  }, [layout, currentBranchShas, zoom, showCommitMessages])
+  }, [layout, currentBranchShas, renderedZoom, graphTranslateY, showCommitMessages])
 
   const floatingCommitLabels = useMemo(
     () => commitMessageLabels.filter((label) => label.y - scrollTop > 28),
@@ -2741,6 +2756,7 @@ export function GraphCanvas() {
     if (pendingMutation) return
 
     setActionPreview(null)
+    setRebaseHoverLock(null)
     if (action === 'cherry-pick') {
       performCommitAction(action, selectedNode.row.sha).catch((err) => {
         showError(`${action} failed`, err)
@@ -2805,6 +2821,7 @@ export function GraphCanvas() {
       onClick={() => {
         setMergePreviewVisible(false)
         setActionPreview(null)
+        setRebaseHoverLock(null)
         setOpenAddRefSha(null)
         setHoveredAddRefSha(null)
         clearAddRefHoverTimer()
@@ -2833,6 +2850,35 @@ export function GraphCanvas() {
         onClose={() => setConfirmDialog(null)}
       />
 
+      {rebaseHoverLock && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: rebaseHoverLock.buttonRect.left,
+            top: rebaseHoverLock.buttonRect.top,
+            width: rebaseHoverLock.buttonRect.width,
+            height: rebaseHoverLock.buttonRect.height,
+            zIndex: 10_000,
+            pointerEvents: 'auto',
+          }}
+        >
+          <div style={{
+            width: rebaseHoverLock.buttonRect.width / rebaseHoverLock.buttonScale,
+            height: rebaseHoverLock.buttonRect.height / rebaseHoverLock.buttonScale,
+            transform: `scale(${rebaseHoverLock.buttonScale})`,
+            transformOrigin: 'top left',
+          }}>
+            <CommitActionButton
+              label="Rebase"
+              tone="success"
+              onClick={() => handleRebaseClick(rebaseHoverLock.targetRefName)}
+              onMouseLeave={handleRebaseHoverEnd}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {/* Sticky branch lane labels at top of viewport */}
       <div style={{
         position: 'sticky',
@@ -2849,7 +2895,7 @@ export function GraphCanvas() {
             onClick={(e) => handleRefSelect(e, label.name)}
             style={{
               position: 'absolute',
-              left: label.x * zoom - 4,
+              left: label.x * renderedZoom + graphTranslateX - 4,
               top: 4 + label.row * 22,
               padding: '2px 8px',
               borderRadius: 4,
@@ -2860,8 +2906,9 @@ export function GraphCanvas() {
               fontWeight: 600,
               whiteSpace: 'nowrap',
               pointerEvents: 'auto',
-              transform: `scale(${Math.min(zoom, 1)})`,
+              transform: `scale(${Math.min(renderedZoom, 1)})`,
               transformOrigin: 'top left',
+              transition: 'left 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
               cursor: 'pointer',
               boxShadow: selectedRefName === label.name ? `0 0 8px ${label.color}40` : 'none',
             }}
@@ -2905,13 +2952,13 @@ export function GraphCanvas() {
           </div>
         )}
         <div ref={commitLabelsLayerRef} style={{ position: 'relative' }}>
-          {worktreeNode && worktreeNode.y * zoom - scrollTop > 28 && (
+          {worktreeNode && worktreeNode.y * renderedZoom + graphTranslateY - scrollTop > 28 && (
             <div
               style={{
                 position: 'absolute',
                 left: 20,
-                top: worktreeNode.y * zoom - 7,
-                maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * zoom,
+                top: worktreeNode.y * renderedZoom + graphTranslateY - 7,
+                maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * renderedZoom,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -2923,6 +2970,7 @@ export function GraphCanvas() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
+                transition: 'top 220ms cubic-bezier(0.22, 1, 0.36, 1), max-width 220ms cubic-bezier(0.22, 1, 0.36, 1)',
               }}
             >
               <span style={{
@@ -2960,7 +3008,7 @@ export function GraphCanvas() {
                   position: 'absolute',
                   left: 20,
                   top: label.y - 7,
-                  maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * zoom,
+                  maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * renderedZoom,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -2971,6 +3019,7 @@ export function GraphCanvas() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
+                  transition: 'top 220ms cubic-bezier(0.22, 1, 0.36, 1), max-width 220ms cubic-bezier(0.22, 1, 0.36, 1)',
                 }}
               >
                 {dot && (
@@ -3007,6 +3056,7 @@ export function GraphCanvas() {
                 whiteSpace: 'nowrap',
                 pointerEvents: 'none',
                 userSelect: 'none',
+                transition: 'top 220ms cubic-bezier(0.22, 1, 0.36, 1)',
               }}
             >
               <span style={{
@@ -3032,8 +3082,10 @@ export function GraphCanvas() {
         left: 0,
         width: fullWidth,
         height: fullHeight,
-        transform: `scale(${zoom})`,
+        transform: `translate(${graphTranslateX}px, ${graphTranslateY}px) scale(${renderedZoom})`,
         transformOrigin: 'top left',
+        transition: 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+        willChange: rebaseHoverLock ? 'transform' : undefined,
       }}>
         <svg
           width={fullWidth}
@@ -3053,18 +3105,6 @@ export function GraphCanvas() {
               strokeWidth={1}
             />
           ))}
-          {actionPreviewGeometry?.extraGutter && (
-            <rect
-              x={actionPreviewGeometry.extraGutter.x - LANE_WIDTH / 2 + 2}
-              y={0}
-              width={LANE_WIDTH - 4}
-              height={fullHeight}
-              rx={16}
-              fill={`${actionPreviewGeometry.extraGutter.color}16`}
-              stroke={`${actionPreviewGeometry.extraGutter.color}24`}
-              strokeWidth={1}
-            />
-          )}
           {renderedLaneHighlight && (
             <animated.g
               key={renderedLaneHighlight.key}
@@ -3119,12 +3159,7 @@ export function GraphCanvas() {
               />
             </>
           )}
-          {renderedEdgeItems
-            .filter((edge) => (
-              !actionPreviewGeometry?.hiddenShas.has(edge.fromSha)
-              && !actionPreviewGeometry?.hiddenShas.has(edge.toSha)
-            ))
-            .map((edge) => (
+          {renderedEdgeItems.map((edge) => (
             <animated.path
               key={edge.key}
               d={isGraphAnimating
@@ -3190,7 +3225,7 @@ export function GraphCanvas() {
               />
             </g>
           )}
-          {displayedNodeItems.map((node) => {
+          {renderedNodeItems.map((node) => {
             const { row } = node
             const selected = row.sha === selectedSha
             const color = node.color
@@ -3459,9 +3494,7 @@ export function GraphCanvas() {
           )}
         </svg>
 
-        {renderedRefItems
-          .filter((refItem) => !actionPreviewGeometry?.hiddenShas.has(refItem.placement.nodeSha))
-          .map((refItem) => {
+        {renderedRefItems.map((refItem) => {
           const { placement } = refItem
           const isEmphasized = placement.isSelected || placement.isCurrent
           const pillTint = placement.isSelected
@@ -3517,34 +3550,6 @@ export function GraphCanvas() {
             </animated.div>
           )
         })}
-        {actionPreviewGeometry?.refs.map((placement) => (
-          <div
-            key={`action-preview-ref:${placement.refName}`}
-            style={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              zIndex: 20,
-              height: 20,
-              padding: '0 7px',
-              borderRadius: 4,
-              background: `linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.015) 38%, ${placement.color}18 100%), rgba(24, 24, 37, 0.5)`,
-              border: `1px solid ${placement.color}66`,
-              color: placement.color,
-              fontSize: 11,
-              fontWeight: 600,
-              lineHeight: '20px',
-              whiteSpace: 'nowrap',
-              userSelect: 'none',
-              pointerEvents: 'none',
-              boxShadow: '0 2px 5px rgba(0, 0, 0, 0.18)',
-              transform: `translate(${placement.x}px, ${placement.y}px)`,
-            }}
-          >
-            {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
-          </div>
-        ))}
-
         {visibleNodes.map((node) => {
           const refRowWidth = rowRefWidths.get(node.row.sha) ?? 0
           const px = node.x + NODE_RADIUS + 8 + refRowWidth + (refRowWidth > 0 ? 8 : 0)
@@ -3669,8 +3674,10 @@ export function GraphCanvas() {
                     label="Rebase"
                     tone="success"
                     onClick={() => handleRebaseClick(visibleRowRebaseTargetRef)}
-                    onMouseEnter={() => handleRebaseHoverStart(visibleRowRebaseTargetRef)}
-                    onMouseLeave={handleActionPreviewEnd}
+                    onMouseEnter={(event) => handleRebaseHoverStart(visibleRowRebaseTargetRef, node, event)}
+                    onMouseLeave={rebaseHoverLock?.targetRefName === visibleRowRebaseTargetRef
+                      ? undefined
+                      : handleRebaseHoverEnd}
                   />
                 </div>
               )}

@@ -193,8 +193,8 @@ export function CommitActionButton({
   label: string
   onClick: () => void
   tone: 'success' | 'warning' | 'uncommit' | 'merge'
-  onMouseEnter?: () => void
-  onMouseLeave?: () => void
+  onMouseEnter?: React.PointerEventHandler<HTMLButtonElement>
+  onMouseLeave?: React.PointerEventHandler<HTMLButtonElement>
 }) {
   const color = tone === 'success'
     ? '#0b1020'
