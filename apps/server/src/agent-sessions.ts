@@ -1,7 +1,7 @@
 import { open, readdir, readFile, readlink, stat, writeFile } from 'node:fs/promises'
 import { execFile as execFileCb } from 'node:child_process'
 import { promisify } from 'node:util'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 import {
@@ -10,6 +10,7 @@ import {
   readDarwinProcesses,
   type ProcessInfo,
 } from './darwin-processes.js'
+import { readWindowsProcesses } from './windows-processes.js'
 import {
   assessWindowCalls,
   parseWindowCallsExtensionInfo,
@@ -96,6 +97,9 @@ async function readProc(pid: number): Promise<ProcInfo | null> {
     info.cwd = (await readDarwinCwds([pid])).get(pid) ?? ''
     return info
   }
+  if (process.platform === 'win32') {
+    return (await readWindowsProcesses([pid]))[0] ?? null
+  }
   return null
 }
 
@@ -109,10 +113,10 @@ function ptsFromTtyNr(ttyNr: number): string | null {
 }
 
 const IDE_MARKERS: Array<{ pattern: RegExp; ide: string; cli: string }> = [
-  { pattern: /\/\.vscode-insiders\//, ide: 'vscode-insiders', cli: 'code-insiders' },
-  { pattern: /\/\.vscode\//, ide: 'vscode', cli: 'code' },
-  { pattern: /\/\.cursor\//, ide: 'cursor', cli: 'cursor' },
-  { pattern: /\/\.windsurf\//, ide: 'windsurf', cli: 'windsurf' },
+  { pattern: /[\\/]\.vscode-insiders[\\/]/i, ide: 'vscode-insiders', cli: 'code-insiders' },
+  { pattern: /[\\/]\.vscode[\\/]/i, ide: 'vscode', cli: 'code' },
+  { pattern: /[\\/]\.cursor[\\/]/i, ide: 'cursor', cli: 'cursor' },
+  { pattern: /[\\/]\.windsurf[\\/]/i, ide: 'windsurf', cli: 'windsurf' },
 ]
 
 // Plumbing processes that belong to a session but aren't one themselves.
@@ -123,22 +127,44 @@ const CLAUDE_INFRA_FLAGS = new Set(['--bg-pty-host', '--bg-spare', '--claude-in-
 // session_meta carries the real workspace cwd.
 const CODEX_INFRA_SUBCOMMANDS = new Set(['mcp-server', 'login', 'logout', 'completion'])
 
-function isCodexAppServer(info: ProcInfo): boolean {
-  return (
-    basename(info.exe) === 'codex'
-    || basename(info.argv[0] ?? '') === 'codex'
-    || info.comm === 'codex'
-  // Recent builds insert global `-c key=value` options before the subcommand.
-  ) && info.argv.slice(1).includes('app-server')
+function executableName(value: string): string {
+  return (value.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) ?? '')
+    .replace(/\.exe$/i, '')
+    .toLowerCase()
 }
 
-function detectAgent(info: ProcInfo): AgentName | null {
-  const argvExe = info.argv[0] ?? ''
+function hasExecutableName(info: ProcInfo, name: AgentName): boolean {
+  return [info.exe, info.argv[0] ?? '', info.comm]
+    .some((value) => executableName(value) === name)
+}
+
+function normalizedCommand(info: ProcInfo): string {
+  return info.command.replace(/\\/g, '/').toLowerCase()
+}
+
+function isCodexAppServer(info: ProcInfo): boolean {
+  // Recent builds insert global `-c key=value` options before the subcommand.
+  return hasExecutableName(info, 'codex') && info.argv.slice(1).includes('app-server')
+}
+
+export function detectAgent(
+  info: ProcInfo,
+  platform: NodeJS.Platform = process.platform,
+): AgentName | null {
+  const command = normalizedCommand(info)
+  const isWindowsDesktopShell = platform === 'win32'
+    && (command.includes('/windowsapps/')
+      || command.includes('/appdata/local/programs/claude/')
+      || info.argv.some((arg) => arg.startsWith('--type=')))
+  if (isWindowsDesktopShell) return null
+
   if (
-    basename(info.exe) === 'claude' || basename(argvExe) === 'claude' || info.comm === 'claude'
+    hasExecutableName(info, 'claude')
     // Version-pinned binaries live at ~/.local/share/claude/versions/<semver>,
     // so neither basename nor comm reads "claude" for those.
-    || info.command.includes('/share/claude/versions/')
+    || command.includes('/share/claude/versions/')
+    // Older npm installations run Claude Code directly under node.exe.
+    || /\/@anthropic-ai\/claude-code\/.*(?:cli|claude)\.js\b/.test(command)
   ) {
     if (info.argv.some((a) => CLAUDE_INFRA_FLAGS.has(a))) return null
     if (info.argv[1] === 'daemon') return null
@@ -147,9 +173,8 @@ function detectAgent(info: ProcInfo): AgentName | null {
 
   // Codex's npm wrapper (`node .../bin/codex.js`) spawns the real vendored
   // binary as a child; matching on the binary alone avoids double-counting.
-  if (basename(info.exe) === 'codex' || basename(argvExe) === 'codex' || info.comm === 'codex') {
-    const subcommand = info.argv[1]
-    if (subcommand !== undefined && CODEX_INFRA_SUBCOMMANDS.has(subcommand)) return null
+  if (hasExecutableName(info, 'codex')) {
+    if (info.argv.slice(1).some((arg) => CODEX_INFRA_SUBCOMMANDS.has(arg))) return null
     return 'codex'
   }
 
@@ -172,7 +197,11 @@ async function findGitRoot(dir: string): Promise<string | null> {
   return null
 }
 
-function classify(info: ProcInfo, agent: AgentName): Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'> | null {
+export function classifyAgentProcess(
+  info: ProcInfo,
+  agent: AgentName,
+  platform: NodeJS.Platform = process.platform,
+): Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'> | null {
   if (info.state.startsWith('Z') || !info.cwd) return null
 
   const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.command) || m.pattern.test(info.exe))
@@ -182,6 +211,12 @@ function classify(info: ProcInfo, agent: AgentName): Omit<AgentSession, 'focusab
 
   const tty = info.tty ?? ptsFromTtyNr(info.ttyNr)
   if (tty) return { pid: info.pid, agent, kind: 'terminal', cwd: info.cwd, tty, ide: null }
+
+  // Windows pseudoconsole attachments do not expose a stable tty path. A
+  // detected CLI agent with a cwd is nevertheless a terminal session.
+  if (platform === 'win32') {
+    return { pid: info.pid, agent, kind: 'terminal', cwd: info.cwd, tty: null, ide: null }
+  }
 
   return { pid: info.pid, agent, kind: 'background', cwd: info.cwd, tty: null, ide: null }
 }
@@ -204,6 +239,7 @@ const TITLE_MAX_CHARS = 300
 const TRANSCRIPT_BIRTH_TOLERANCE_MS = 180_000
 
 let bootEpochMsPromise: Promise<number> | null = null
+const processStartEpochByPid = new Map<number, number>()
 
 function getBootEpochMs(): Promise<number> {
   bootEpochMsPromise ??= readFile('/proc/stat', 'utf8').then((s) => {
@@ -216,6 +252,9 @@ function getBootEpochMs(): Promise<number> {
 
 /** Absolute start time of a process (starttime is clock ticks since boot). */
 async function procStartEpochMs(pid: number): Promise<number | null> {
+  const known = processStartEpochByPid.get(pid)
+  if (known !== undefined) return known
+  if (process.platform !== 'linux') return null
   try {
     const statRaw = await readFile(`/proc/${pid}/stat`, 'utf8')
     const rest = statRaw.slice(statRaw.lastIndexOf(')') + 2).split(' ')
@@ -374,6 +413,7 @@ interface ClaudeRegistryEntry {
   status?: string
   name?: string
   nameSource?: string
+  cwd?: string
 }
 
 /** Claude Code registers each live session at ~/.claude/sessions/<pid>.json. */
@@ -498,6 +538,9 @@ function pruneCpuSamples(livePids: Set<number>): void {
   for (const pid of cpuSamples.keys()) {
     if (!livePids.has(pid)) cpuSamples.delete(pid)
   }
+  for (const pid of processStartEpochByPid.keys()) {
+    if (!livePids.has(pid)) processStartEpochByPid.delete(pid)
+  }
 }
 
 async function scanAgentProcs(): Promise<{
@@ -517,20 +560,37 @@ async function scanAgentProcs(): Promise<{
     const entries = await readdir('/proc').catch(() => [] as string[])
     const pids = entries.filter((e) => /^\d+$/.test(e)).map(Number)
     infos = await Promise.all(pids.map(readLinuxProc))
+  } else if (process.platform === 'win32') {
+    infos = await readWindowsProcesses()
   } else {
-    // Windows process/session discovery is not implemented yet.
     infos = []
   }
   const procs: Array<{ info: ProcInfo; agent: AgentName }> = []
   const codexAppServers: ProcInfo[] = []
   for (const info of infos) {
     if (!info || info.state.startsWith('Z')) continue
+    if (info.startEpochMs !== undefined) processStartEpochByPid.set(info.pid, info.startEpochMs)
     if (isCodexAppServer(info)) {
       codexAppServers.push(info)
       continue
     }
     const agent = detectAgent(info)
-    if (agent) procs.push({ info, agent })
+    if (!agent) continue
+
+    // Reading another process's PEB can be denied across integrity levels.
+    // Agent-owned metadata and explicit cwd arguments provide safe fallbacks.
+    if (!info.cwd && agent === 'claude') {
+      info.cwd = (await readClaudeRegistry(info.pid))?.cwd ?? ''
+    }
+    if (!info.cwd && agent === 'codex') {
+      const cwdFlag = info.argv.findIndex((arg) => arg === '-C' || arg === '--cd' || arg === '--cwd')
+      const cwdAssignment = info.argv.find((arg) => arg.startsWith('--cd=') || arg.startsWith('--cwd='))
+      const explicitCwd = cwdFlag >= 0
+        ? info.argv[cwdFlag + 1]
+        : cwdAssignment?.slice(cwdAssignment.indexOf('=') + 1)
+      if (explicitCwd && isAbsolute(explicitCwd)) info.cwd = explicitCwd
+    }
+    procs.push({ info, agent })
   }
   return { procs, codexAppServers }
 }
@@ -867,7 +927,7 @@ export async function listAgentSessions(): Promise<{
   }
 
   const base = (await Promise.all(procs
-    .map(({ info, agent }) => classify(info, agent))
+    .map(({ info, agent }) => classifyAgentProcess(info, agent))
     // Headless/background sessions have no window to focus — not worth listing.
     .filter((s): s is Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'> =>
       s !== null && s.kind !== 'background')
@@ -1002,7 +1062,7 @@ export async function focusAgentSession(pid: number, cwdOverride?: string): Prom
   if (!info || !agent) {
     return { ok: false, error: `No agent session with pid ${pid} (it may have exited)` }
   }
-  const session = classify(info, agent)
+  const session = classifyAgentProcess(info, agent)
   if (!session) return { ok: false, error: `Process ${pid} is not a focusable agent session` }
   if (cwdOverride) session.cwd = cwdOverride
 

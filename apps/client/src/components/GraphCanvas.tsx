@@ -6,6 +6,7 @@ import { useAppStore } from '../store'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
+import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-canvas/CommitIcons'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
@@ -1451,6 +1452,7 @@ function shouldAnimateGraphMutation(
 // ---------------------------------------------------------------------------
 
 export function GraphCanvas() {
+  const commitIconRules = useCommitIconRules()
   const histWindow = useAppStore((state) => state.historyWindow)
   const refs = useAppStore((state) => state.refs)
   const selectedSha = useAppStore((state) => state.selectedSha)
@@ -3200,6 +3202,7 @@ export function GraphCanvas() {
             const rightClipPathId = `${clipPathBaseId}-right`
             const trackStroke = selected ? GAUGE_TRACK_STROKE_SELECTED : GAUGE_TRACK_STROKE
             const trackFill = selected ? GAUGE_TRACK_FILL_SELECTED : GAUGE_BACKGROUND_FILL
+            const commitIcon = findCommitIcon(row.subject, commitIconRules)
             const nodeX = isGraphAnimating
               ? to(graphProgress, (progress) => lerp(node.fromX, node.toX, progress))
               : node.toX
@@ -3209,6 +3212,12 @@ export function GraphCanvas() {
             const nodeOpacity = isGraphAnimating
               ? to(graphProgress, (progress) => lerp(node.fromOpacity, node.toOpacity, progress))
               : node.toOpacity
+            const iconTransform = isGraphAnimating
+              ? to(
+                  graphProgress,
+                  (progress) => `translate(${lerp(node.fromX, node.toX, progress)} ${lerp(node.fromY, node.toY, progress)})`,
+                )
+              : `translate(${node.toX} ${node.toY})`
             const leftGaugePath = isGraphAnimating
               ? to(graphProgress, (progress) => describeHalfCirclePath(
                   lerp(node.fromX, node.toX, progress),
@@ -3251,7 +3260,7 @@ export function GraphCanvas() {
                 opacity={nodeOpacity}
                 style={{ cursor: node.interactive ? 'pointer' : 'default', pointerEvents: node.interactive ? 'auto' : 'none' }}
               >
-                <title>{`${row.subject}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
+                <title>{`${row.subject}${commitIcon ? `\n${commitIcon.label} commit` : ''}\n+${row.additions} / -${row.deletions} (${row.locChanged} LOC changed)`}</title>
                 {selected && (
                   <animated.circle
                     cx={nodeX}
@@ -3319,13 +3328,27 @@ export function GraphCanvas() {
                   stroke={trackStroke}
                   strokeWidth={1.6}
                 />
-                {row.parentShas.length > 1 && (
+                {!commitIcon && row.parentShas.length > 1 && (
                   <animated.circle
                     cx={nodeX}
                     cy={nodeY}
                     r={2}
                     fill={color}
                   />
+                )}
+                {commitIcon && (
+                  <>
+                    <animated.circle
+                      cx={nodeX}
+                      cy={nodeY}
+                      r={7.4}
+                      fill={NODE_FILL}
+                      opacity={0.9}
+                    />
+                    <animated.g transform={iconTransform}>
+                      <CommitMessageIcon icon={commitIcon.icon} color={color} customSvg={commitIcon.customSvg} />
+                    </animated.g>
+                  </>
                 )}
               </animated.g>
             )
@@ -3570,7 +3593,9 @@ export function GraphCanvas() {
                   alignItems: 'center',
                   gap: 10,
                   flexWrap: 'nowrap',
-                  zIndex: 20,
+                  // Keep commit actions usable when the uncommitted-worktree
+                  // node overlaps this row.
+                  zIndex: 40,
                 }}>
                   {nodeActions.map((commitAction) => (
                     <CommitActionButton

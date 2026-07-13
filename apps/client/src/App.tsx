@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from './store'
 import { listDirectory as fetchDirectory } from './api'
 import { RepoOpen } from './components/RepoOpen'
@@ -10,6 +10,11 @@ import { WorkingTreeDetail } from './components/WorkingTreeDetail'
 import { ErrorDialog } from './components/ErrorDialog'
 import { AgentSessions } from './components/AgentSessions'
 import type { DirectoryEntry, DirectoryListing, WorktreeChangesResponse } from '@ingit/rpc-contract'
+
+const SettingsDialog = lazy(async () => {
+  const module = await import('./components/SettingsDialog')
+  return { default: module.SettingsDialog }
+})
 
 const DEFAULT_TITLE = 'ingit'
 const MAX_PATH_SUGGESTIONS = 8
@@ -44,6 +49,7 @@ function uncommittedFileCount(changes: WorktreeChangesResponse | null): number {
 
 export function App() {
   const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [fetching, setFetching] = useState(false)
   const [repoPathInput, setRepoPathInput] = useState('')
   const [repoPathEditing, setRepoPathEditing] = useState(false)
@@ -64,7 +70,7 @@ export function App() {
     errorDialog, dismissError, showError,
     openRepoByPath, closeRepo, openFromUrl, selectRef,
     navigateTo, checkoutSha, performRefAction,
-    showCommitMessages, setShowCommitMessages, showGutterColors, setShowGutterColors,
+    showCommitMessages, setShowCommitMessages,
     viewMode, setViewMode,
     worktreeSelected,
     worktreeChanges,
@@ -248,6 +254,33 @@ export function App() {
           discoveredFolder={discoveredFolder}
           discoveredRepos={discoveredRepos}
         />
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          title="Open settings"
+          aria-label="Open settings"
+          style={{
+            position: 'fixed',
+            top: 14,
+            right: 14,
+            zIndex: 20,
+            padding: '6px 11px',
+            border: '1px solid #45475a',
+            borderRadius: 6,
+            background: '#181825',
+            color: '#a6adc8',
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          Settings
+        </button>
+        {settingsOpen && (
+          <Suspense fallback={null}>
+            <SettingsDialog open onClose={() => setSettingsOpen(false)} />
+          </Suspense>
+        )}
         <ErrorDialog error={errorDialog} onDismiss={dismissError} />
       </>
     )
@@ -269,8 +302,6 @@ export function App() {
           refs={refs}
           onSelectRef={selectRef}
           selectedSha={selectedSha}
-          showGutterColors={showGutterColors}
-          onShowGutterColorsChange={setShowGutterColors}
           onClose={() => setRefsSidebarOpen(false)}
         />
       )}
@@ -496,6 +527,23 @@ export function App() {
           )}
           <AgentSessions />
           <button
+            onClick={() => setSettingsOpen(true)}
+            title="Open settings"
+            aria-label="Open settings"
+            style={{
+              flexShrink: 0,
+              padding: '4px 10px',
+              borderRadius: 4,
+              border: '1px solid #313244',
+              background: settingsOpen ? '#89b4fa20' : 'transparent',
+              color: settingsOpen ? '#89b4fa' : '#6c7086',
+              fontSize: 11,
+              cursor: 'pointer',
+            }}
+          >
+            Settings
+          </button>
+          <button
             onClick={handleFetch}
             disabled={fetching}
             title="Fetch all remotes"
@@ -561,6 +609,11 @@ export function App() {
       )}
 
       <ErrorDialog error={errorDialog} onDismiss={dismissError} />
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsDialog open onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
     </div>
   )
 }
