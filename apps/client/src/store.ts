@@ -495,11 +495,13 @@ async function openRepoByPathImpl(
     ])
     if (requestId !== repoOpenRequestId) return
 
+    const currentHeadSha = refs.find((ref: RefSummary) => ref.isCurrent)?.targetSha ?? res.head.sha
+
     setRepoPathInUrl(res.rootPath)
     // Drop any CI watches/poller left over from a previously open repo.
     ciWatch.clear()
     stopCIPolling()
-    set({
+    set((s) => ({
       status: 'ready',
       repoId: res.repoId,
       repoPath: res.rootPath,
@@ -512,6 +514,12 @@ async function openRepoByPathImpl(
       commitCIStatus: {},
       openError: null,
       selectedRefName: null,
+      // `--all` history starts at the newest ref, which may be well above a
+      // local branch that is behind its upstream. Focus the actual checkout so
+      // HEAD — and the worktree node that floats directly above it — opens in
+      // the viewport.
+      scrollToSha: currentHeadSha,
+      scrollToKey: s.scrollToKey + 1,
       mergePreview: null,
       worktreeChanges: null,
       worktreeSelected: false,
@@ -519,7 +527,7 @@ async function openRepoByPathImpl(
       commitFileDiffs: {},
       reflog: null,
       reflogMaxCount: REFLOG_PAGE_SIZE,
-    })
+    }))
     if (get().viewMode === 'reflog') void get().loadReflog()
     // Worktree status can be slow in large repositories and is independent of
     // painting recent history, so let it fill in after the graph is visible.

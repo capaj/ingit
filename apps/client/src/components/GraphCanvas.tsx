@@ -362,7 +362,7 @@ type EdgeRoutePlan =
   | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
   | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
 
-function buildLayout(rows: CommitRow[], extraLeftGutter = 0) {
+export function buildLayout(rows: CommitRow[], extraLeftGutter = 0) {
   let minLane = Infinity
   let maxLane = -Infinity
   const nodes: LayoutNode[] = []
@@ -1214,14 +1214,30 @@ function edgeIntersectsRange(fromIdx: number, toIdx: number, firstIdx: number, l
   return bottom >= firstIdx && top <= lastIdx
 }
 
-function buildVisibleWindow(layout: GraphLayout, firstIdx: number, lastIdx: number) {
+export function buildVisibleWindow(layout: GraphLayout, firstIdx: number, lastIdx: number) {
   const visibleNodes = layout.nodes.slice(firstIdx, lastIdx + 1)
   const visibleEdges: VisibleEdge[] = []
 
   for (const node of layout.nodes) {
     for (let parentIndex = 0; parentIndex < node.row.parentShas.length; parentIndex++) {
-      const parent = layout.shaToNode.get(node.row.parentShas[parentIndex])
-      if (!parent) continue
+      const parentSha = node.row.parentShas[parentIndex]
+      const loadedParent = layout.shaToNode.get(parentSha)
+      // A parent beyond the loaded history prefix is still a real edge. Keep
+      // its rail running through the bottom of the loaded graph instead of
+      // making the child look like an unrelated root. Once pagination loads
+      // the parent, this synthetic endpoint is replaced by the real node while
+      // retaining the same edge key.
+      const parent: LayoutNode = loadedParent ?? {
+        row: {
+          ...node.row,
+          sha: parentSha,
+          parentShas: [],
+          refNames: [],
+        },
+        x: node.x,
+        y: layout.totalHeight,
+        idx: layout.nodes.length,
+      }
       if (!edgeIntersectsRange(node.idx, parent.idx, firstIdx, lastIdx)) continue
       visibleEdges.push({
         from: node,
@@ -1251,10 +1267,10 @@ function buildCurrentBranchEdgeKeys(layout: GraphLayout | null, currentBranch: s
     const firstParentSha = node?.row.parentShas[0]
     if (!node || !firstParentSha) break
 
+    keys.add(`${node.row.sha}-${firstParentSha}`)
     const parent = layout.shaToNode.get(firstParentSha)
     if (!parent) break
 
-    keys.add(`${node.row.sha}-${parent.row.sha}`)
     sha = parent.row.sha
   }
 
