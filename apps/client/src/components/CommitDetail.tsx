@@ -194,29 +194,25 @@ export function CommitDetail({ commit, diff, branchName, prs, authorAvatarUrl, c
 
         {/* PR links */}
         {prs && prs.length > 0 && (
-          <div style={{ marginTop: 6, marginBottom: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, marginTop: 6, marginBottom: 4 }}>
+            <span style={{ color: '#6c7086', fontSize: 12, marginRight: 4 }}>
+              {prs.length === 1 ? 'Pull request' : 'Pull requests'}
+            </span>
             {prs.map(pr => (
               <a
                 key={pr.number}
                 href={pr.url}
                 target="_blank"
                 rel="noopener noreferrer"
+                aria-label={`Open pull request #${pr.number}: ${pr.title}`}
+                title={`Open pull request #${pr.number}: ${pr.title}`}
                 style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '2px 8px',
-                  borderRadius: 4,
-                  background: pr.mergedAt ? '#a6e3a120' : '#89b4fa20',
-                  border: `1px solid ${pr.mergedAt ? '#a6e3a160' : '#89b4fa60'}`,
                   color: pr.mergedAt ? '#a6e3a1' : '#89b4fa',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  textDecoration: 'none',
-                  marginRight: 4,
+                  fontSize: 12,
+                  textDecoration: 'underline',
                 }}
               >
-                PR #{pr.number}: {pr.title.length > 40 ? pr.title.slice(0, 40) + '…' : pr.title}
+                PR #{pr.number} ↗{pr.title ? `: ${pr.title.length > 40 ? `${pr.title.slice(0, 40)}…` : pr.title}` : ''}
               </a>
             ))}
           </div>

@@ -287,6 +287,7 @@ export const contract = {
       body: z.string(),
       treeSha: z.string(),
       refs: z.array(z.string()),
+      isPushed: z.boolean(),
     })),
 
   getCommitAuthor: oc

@@ -5,7 +5,7 @@ import { contract } from '@ingit/rpc-contract'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
 import { getMergePreview } from './merge-handler.js'
-import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl } from './ci-status-handler.js'
+import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl, resolveGithubToken } from './ci-status-handler.js'
 import { fetchGithubCommitAuthor } from './github-author-handler.js'
 import { discoverRepos, listDirectory } from './discover-repos.js'
 import { listAgentSessions, focusAgentSession, installWindowCalls } from './agent-sessions.js'
@@ -142,22 +142,21 @@ export const router = os.router({
     const session = getSession(input.repoId)
     if (!session.githubUrl) return []
 
-    // Extract owner/repo from githubUrl like https://github.com/owner/repo
-    const match = session.githubUrl.match(/github\.com\/([^/]+\/[^/]+)/)
-    if (!match) return []
-    const ownerRepo = match[1]
+    const ownerRepo = extractOwnerRepoFromGithubUrl(session.githubUrl)
+    if (!ownerRepo) return []
 
     try {
-      const token = process.env.GITHUB_TOKEN ?? ''
+      const token = await resolveGithubToken()
       const headers: Record<string, string> = {
         'Accept': 'application/vnd.github+json',
         'User-Agent': 'ingit',
+        'X-GitHub-Api-Version': '2022-11-28',
       }
       if (token) headers['Authorization'] = `Bearer ${token}`
 
       const res = await fetch(
         `https://api.github.com/repos/${ownerRepo}/commits/${input.sha}/pulls`,
-        { headers },
+        { headers, signal: AbortSignal.timeout(5_000) },
       )
       if (!res.ok) return []
       const data = await res.json() as Array<{
