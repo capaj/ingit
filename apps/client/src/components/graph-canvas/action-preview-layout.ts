@@ -26,31 +26,27 @@ export interface PreviewCamera {
   translateY: number
 }
 
-/**
- * Place a newest-to-oldest preview chain entirely above the live graph.
- *
- * Long chains intentionally receive negative y positions so the temporary
- * preview camera can fit them without moving any live graph rows.
- */
-export function stackPreviewChainAboveGraph<T extends VerticalPosition>(
+/** Place a newest-to-oldest replay chain immediately above its rebase target. */
+export function stackPreviewChainAboveTarget<T extends VerticalPosition>(
   nodes: T[],
-  topNode: VerticalPosition,
+  targetNode: VerticalPosition,
   rowSpacing: number,
 ): T[] {
   return nodes.map((node, index) => {
-    const rowsAboveGraph = nodes.length - index
+    const rowsAboveTarget = nodes.length - index
     return {
       ...node,
-      y: topNode.y - rowsAboveGraph * rowSpacing,
-      idx: topNode.idx - rowsAboveGraph,
+      y: targetNode.y - rowsAboveTarget * rowSpacing,
+      idx: targetNode.idx - rowsAboveTarget,
     }
   })
 }
 
 /**
- * Fit preview bounds into the full graph viewport. The hovered action is
- * duplicated outside the graph, so the camera is free to reposition beneath
- * that fixed hover target.
+ * Fit preview bounds into the graph viewport with the smallest possible
+ * camera movement. Short previews that only cross one viewport edge should
+ * slide just far enough to become visible; only oversized previews zoom out.
+ * The hovered action is duplicated outside the graph and remains stationary.
  */
 export function fitPreviewCamera({
   baseZoom,
@@ -86,14 +82,25 @@ export function fitPreviewCamera({
     availableWidth / boundsWidth,
     availableHeight / boundsHeight,
   ))
-  const fittedWidth = boundsWidth * zoom
-  const fittedHeight = boundsHeight * zoom
-  const viewportLeft = (viewport.width - fittedWidth) / 2
-  const viewportTop = (viewport.height - fittedHeight) / 2
+
+  const fittedMinX = bounds.minX * zoom - scroll.x
+  const fittedMaxX = bounds.maxX * zoom - scroll.x
+  const fittedMinY = bounds.minY * zoom - scroll.y
+  const fittedMaxY = bounds.maxY * zoom - scroll.y
+
+  const minimalTranslation = (
+    fittedMin: number,
+    fittedMax: number,
+    viewportSize: number,
+  ) => {
+    const minTranslation = margin - fittedMin
+    const maxTranslation = viewportSize - margin - fittedMax
+    return Math.min(maxTranslation, Math.max(minTranslation, 0))
+  }
 
   return {
     zoom,
-    translateX: scroll.x + viewportLeft - bounds.minX * zoom,
-    translateY: scroll.y + viewportTop - bounds.minY * zoom,
+    translateX: minimalTranslation(fittedMinX, fittedMaxX, viewport.width),
+    translateY: minimalTranslation(fittedMinY, fittedMaxY, viewport.height),
   }
 }

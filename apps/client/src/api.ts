@@ -56,6 +56,10 @@ export function getRefs(repoId: string) {
   return ensureClient().getRefs({ repoId })
 }
 
+export function getWorktrees(repoId: string) {
+  return ensureClient().getWorktrees({ repoId })
+}
+
 export function getStatus(repoId: string) {
   return ensureClient().getStatus({ repoId })
 }

@@ -8,6 +8,7 @@ import type {
   WorktreeFileDiffResponse,
   WorktreeDiffArea,
   CommitFileDiffResponse,
+  WorktreeSummary,
 } from '@ingit/rpc-contract'
 import { runGit, GitCommandError } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
@@ -18,6 +19,7 @@ import { parseReflog } from './parsers/reflog-parser.js'
 import { parseStatus } from './parsers/status-parser.js'
 import { readWorktreeChanges } from './parsers/worktree-changes-parser.js'
 import { parseCommitDiff } from './parsers/diff-tree-parser.js'
+import { parseWorktreeList } from './parsers/worktree-list-parser.js'
 import { streamRevList, streamRevListWithMeta } from './parsers/rev-list-parser.js'
 import type { RevListEntry, RevListEntryWithMeta } from './parsers/rev-list-parser.js'
 import { ZiggitRepo } from './ziggit-ffi.js'
@@ -35,6 +37,18 @@ export interface ResolvedRef {
   kind: 'head' | 'remote' | 'tag' | 'other'
   remoteName?: string
   remoteBranch?: string
+}
+
+export class BranchCheckedOutError extends Error {
+  readonly branchRef: string
+  readonly worktreePath: string
+
+  constructor(branchRef: string, worktreePath: string) {
+    super(`Branch '${branchRef.slice('refs/heads/'.length)}' is already checked out at '${worktreePath}'`)
+    this.name = 'BranchCheckedOutError'
+    this.branchRef = branchRef
+    this.worktreePath = worktreePath
+  }
 }
 
 export class RepoSession {
@@ -173,6 +187,11 @@ export class RepoSession {
 
   getRefs(): Promise<RefSummary[]> {
     return parseRefs(this.rootPath)
+  }
+
+  async getWorktrees(): Promise<WorktreeSummary[]> {
+    const { stdout } = await runGit(['worktree', 'list', '--porcelain', '-z'], this.rootPath)
+    return parseWorktreeList(stdout, this.rootPath)
   }
 
   getStatus(): Promise<WorktreeStatusResponse> {
@@ -377,6 +396,20 @@ export class RepoSession {
 
   async checkout(ref: string): Promise<void> {
     const resolved = await this.resolveRef(ref)
+    const targetBranchRef = resolved?.kind === 'head'
+      ? resolved.fullName
+      : resolved?.kind === 'remote' && resolved.remoteBranch
+        ? `refs/heads/${resolved.remoteBranch}`
+        : null
+    if (targetBranchRef) {
+      const occupiedWorktree = (await this.getWorktrees()).find(
+        (worktree) => !worktree.isCurrent && worktree.branchRef === targetBranchRef,
+      )
+      if (occupiedWorktree) {
+        throw new BranchCheckedOutError(targetBranchRef, occupiedWorktree.path)
+      }
+    }
+
     if (resolved?.kind === 'remote') {
       const localBranchName = resolved.remoteBranch
       if (!localBranchName) {

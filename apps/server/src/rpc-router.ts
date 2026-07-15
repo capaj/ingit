@@ -1,6 +1,6 @@
 import assert from 'node:assert'
 import { implement, ORPCError } from '@orpc/server'
-import { GitCommandError } from '@ingit/git-core'
+import { BranchCheckedOutError, GitCommandError } from '@ingit/git-core'
 import { contract } from '@ingit/rpc-contract'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
@@ -60,6 +60,11 @@ export const router = os.router({
   getRefs: os.getRefs.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     return session.getRefs()
+  }),
+
+  getWorktrees: os.getWorktrees.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    return session.getWorktrees()
   }),
 
   getStatus: os.getStatus.handler(async ({ input }) => {
@@ -252,7 +257,21 @@ export const router = os.router({
     let message = ''
     switch (input.action) {
       case 'checkout': {
-        await session.checkout(input.refName)
+        try {
+          await session.checkout(input.refName)
+        } catch (err) {
+          if (err instanceof BranchCheckedOutError) {
+            throw new ORPCError('CONFLICT', {
+              message: err.message,
+              data: {
+                reason: 'branch-in-use',
+                branchRef: err.branchRef,
+                worktreePath: err.worktreePath,
+              },
+            })
+          }
+          throw err
+        }
         break
       }
       case 'push':

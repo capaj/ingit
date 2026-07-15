@@ -2,13 +2,13 @@ import { Fragment, useRef, useEffect, useCallback, useState, useMemo, useReducer
 import { createPortal } from 'react-dom'
 import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
-import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse } from '@ingit/rpc-contract'
+import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse, WorktreeSummary } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-canvas/CommitIcons'
-import { fitPreviewCamera, stackPreviewChainAboveGraph } from './graph-canvas/action-preview-layout'
+import { fitPreviewCamera, stackPreviewChainAboveTarget } from './graph-canvas/action-preview-layout'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
@@ -52,6 +52,9 @@ const PAD_LEFT = 40
 const COMMIT_MESSAGE_GUTTER = 260
 const LANE_ORIGIN_X_BASE = PAD_LEFT + GRAPH_LEFT_GUTTER
 const GRAPH_SPRING_CONFIG = { mass: 2.1, tension: 180, friction: 28 }
+const GRAPH_CAMERA_TRANSITION_MS = 220
+const REBASE_PREVIEW_CAMERA_TRANSITION_MS = 900
+const GRAPH_CAMERA_TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
 const REF_PILL_GAP = 6
 const REF_PILL_HORIZONTAL_PADDING = 14
 const REF_PILL_FONT = '600 11px system-ui, -apple-system, sans-serif'
@@ -117,13 +120,15 @@ interface VisibleCommitAction {
 }
 
 interface VisibleRefAction {
-  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
+  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'open-worktree'
   label: string
   tone: 'neutral' | 'warning' | 'danger'
   force?: boolean
+  worktreePath?: string
 }
 
-interface PendingRefAction extends VisibleRefAction {
+interface PendingRefAction extends Omit<VisibleRefAction, 'action' | 'worktreePath'> {
+  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
   refName: string
   sha: string
   force: boolean
@@ -184,6 +189,21 @@ function isNonFastForwardPushError(err: unknown): boolean {
   return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'CONFLICT'
 }
 
+function checkoutConflictWorktreePath(err: unknown): string | null {
+  if (!err || typeof err !== 'object') return null
+  const data = (err as { data?: unknown }).data
+  if (!data || typeof data !== 'object') return null
+  const detail = data as { reason?: unknown; worktreePath?: unknown }
+  return detail.reason === 'branch-in-use' && typeof detail.worktreePath === 'string'
+    ? detail.worktreePath
+    : null
+}
+
+function pathBaseName(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, '')
+  return normalized.split(/[\\/]+/).at(-1) || path
+}
+
 function parseVersionTag(name: string): ParsedVersionTag | null {
   const match = /^(v?)(\d+)\.(\d+)\.(\d+)$/.exec(name)
   if (!match) return null
@@ -228,6 +248,14 @@ interface RefPlacement {
   isCurrent: boolean
   isSelected: boolean
   isRemote: boolean
+  linkedWorktrees: WorktreeSummary[]
+}
+
+interface DetachedWorktreePlacement {
+  worktree: WorktreeSummary
+  nodeSha: string
+  x: number
+  y: number
 }
 
 interface VisibleEdgeItem {
@@ -509,16 +537,15 @@ function buildActionPreviewGeometry(
         row: { ...node.row, lane: targetNode.row.lane },
       }))
     : affectedNodes
-  const topNode = baseLayout.nodes[0]
-  if (!topNode) return null
+  const previewAnchor = targetNode ?? baseLayout.nodes[0]
+  if (!previewAnchor) return null
 
-  // Keep every live row stationary during hover. The oldest replayed commit
-  // sits just above the graph and newer commits continue upward. Long previews
-  // intentionally cross into negative canvas coordinates and are clipped by
-  // the viewport, visually continuing through its top edge.
-  const alignedNodes = stackPreviewChainAboveGraph(
+  // Keep the preview local to the operation: the oldest replayed commit sits
+  // directly above the target and newer commits continue upward from there.
+  // Long chains can still extend beyond the viewport for the camera to fit.
+  const alignedNodes = stackPreviewChainAboveTarget(
     laneAlignedNodes,
-    topNode,
+    previewAnchor,
     NODE_SPACING_Y,
   )
   const affectedShas = new Set(alignedNodes.map((node) => node.row.sha))
@@ -1144,8 +1171,17 @@ function measureRefPillText(text: string): number {
   return width
 }
 
-function estimateRefPillWidth(refName: string, isRemote: boolean, isCurrent: boolean) {
-  const text = refBadgePrefix(isRemote, isCurrent) + refName
+function linkedWorktreeSuffix(worktrees: WorktreeSummary[]) {
+  return worktrees.map((worktree) => `  ▣ ${pathBaseName(worktree.path)}`).join('')
+}
+
+function estimateRefPillWidth(
+  refName: string,
+  isRemote: boolean,
+  isCurrent: boolean,
+  linkedWorktrees: WorktreeSummary[],
+) {
+  const text = refBadgePrefix(isRemote, isCurrent) + refName + linkedWorktreeSuffix(linkedWorktrees)
   return REF_PILL_HORIZONTAL_PADDING + Math.ceil(measureRefPillText(text))
 }
 
@@ -1154,6 +1190,7 @@ function buildRefPlacements(
   currentBranch: string | null,
   selectedRefName: string | null,
   shaToColor: Map<string, string>,
+  worktrees: WorktreeSummary[],
 ) {
   const placements: RefPlacement[] = []
   const rowWidths = new Map<string, number>()
@@ -1166,6 +1203,12 @@ function buildRefPlacements(
     for (const refName of node.row.refNames) {
       const isCurrent = currentBranch !== null && refName === currentBranch
       const isRemote = isRemoteRef(refName)
+      const linkedWorktrees = worktrees.filter(
+        (worktree) => !worktree.isCurrent
+          && !worktree.bare
+          && !worktree.prunable
+          && worktree.branchShortName === refName,
+      )
       placements.push({
         refName,
         nodeSha: node.row.sha,
@@ -1175,8 +1218,9 @@ function buildRefPlacements(
         isCurrent,
         isSelected: refName === selectedRefName,
         isRemote,
+        linkedWorktrees,
       })
-      cursorX += estimateRefPillWidth(refName, isRemote, isCurrent) + REF_PILL_GAP
+      cursorX += estimateRefPillWidth(refName, isRemote, isCurrent, linkedWorktrees) + REF_PILL_GAP
     }
 
     rowWidths.set(
@@ -1447,8 +1491,10 @@ export function GraphCanvas() {
   const commitCIStatus = useAppStore((state) => state.commitCIStatus)
   const fetchCommitCIStatusesIfNeeded = useAppStore((state) => state.fetchCommitCIStatusesIfNeeded)
   const worktreeChanges = useAppStore((state) => state.worktreeChanges)
+  const worktrees = useAppStore((state) => state.worktrees)
   const worktreeSelected = useAppStore((state) => state.worktreeSelected)
   const selectWorktree = useAppStore((state) => state.selectWorktree)
+  const openRepoByPath = useAppStore((state) => state.openRepoByPath)
   const [pendingRefAction, setPendingRefAction] = useState<PendingRefAction | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -1468,6 +1514,7 @@ export function GraphCanvas() {
   const [mergePreviewVisible, setMergePreviewVisible] = useState(false)
   const [actionPreview, setActionPreview] = useState<ActionPreviewState | null>(null)
   const [rebaseHoverLock, setRebaseHoverLock] = useState<RebaseHoverLock | null>(null)
+  const [rebaseCameraTransitionActive, setRebaseCameraTransitionActive] = useState(false)
   const [hoveredAddRefSha, setHoveredAddRefSha] = useState<string | null>(null)
   const [openAddRefSha, setOpenAddRefSha] = useState<string | null>(null)
   const [createRefDialog, setCreateRefDialog] = useState<CreateRefDialogState | null>(null)
@@ -1503,10 +1550,37 @@ export function GraphCanvas() {
     [refs],
   )
 
+  const worktreesByBranch = useMemo(() => {
+    const result = new Map<string, WorktreeSummary[]>()
+    for (const worktree of worktrees) {
+      if (!worktree.branchShortName || worktree.bare || worktree.prunable) continue
+      const existing = result.get(worktree.branchShortName) ?? []
+      existing.push(worktree)
+      result.set(worktree.branchShortName, existing)
+    }
+    return result
+  }, [worktrees])
+
   const selectedRef = useMemo(
     () => (selectedRefName ? refMap.get(selectedRefName) ?? null : null),
     [refMap, selectedRefName],
   )
+
+  const selectedRefWorktree = useMemo(() => {
+    if (!selectedRef) return null
+    if (selectedRef.kind === 'head') {
+      return worktreesByBranch.get(selectedRef.shortName)?.find((worktree) => !worktree.isCurrent) ?? null
+    }
+    if (selectedRef.kind === 'remote') {
+      const trackingBranch = refs.find(
+        (ref) => ref.kind === 'head' && ref.upstream === selectedRef.name,
+      )
+      return trackingBranch
+        ? worktreesByBranch.get(trackingBranch.shortName)?.find((worktree) => !worktree.isCurrent) ?? null
+        : null
+    }
+    return null
+  }, [selectedRef, refs, worktreesByBranch])
 
   const currentBranch = useMemo(() => {
     const current = refs.find((ref) => ref.isCurrent)
@@ -1573,6 +1647,9 @@ export function GraphCanvas() {
   const renderedZoom = rebasePreviewCamera?.zoom ?? zoom
   const graphTranslateX = rebasePreviewCamera?.translateX ?? 0
   const graphTranslateY = rebasePreviewCamera?.translateY ?? 0
+  const cameraTransition = `${rebaseCameraTransitionActive
+    ? REBASE_PREVIEW_CAMERA_TRANSITION_MS
+    : GRAPH_CAMERA_TRANSITION_MS}ms ${GRAPH_CAMERA_TRANSITION_EASING}`
 
   // The working-tree / in-progress operation node floats one row above HEAD,
   // in HEAD's lane. Merge conflicts also draw a dashed second-parent edge.
@@ -1731,6 +1808,18 @@ export function GraphCanvas() {
     setRebaseHoverLock(null)
     setOpenAddRefSha(null)
   }, [selectedRefName, selectedSha])
+
+  // Keep the slower timing in place while the graph returns from a rebase
+  // preview. Dropping it together with the hover lock would make the return
+  // transition use the normal, much faster camera duration.
+  useEffect(() => {
+    if (rebaseHoverLock || !rebaseCameraTransitionActive) return
+    const timeout = window.setTimeout(
+      () => setRebaseCameraTransitionActive(false),
+      REBASE_PREVIEW_CAMERA_TRANSITION_MS,
+    )
+    return () => window.clearTimeout(timeout)
+  }, [rebaseHoverLock, rebaseCameraTransitionActive])
 
   useEffect(() => () => {
     clearAddRefHoverTimer()
@@ -1966,10 +2055,42 @@ export function GraphCanvas() {
     [visibleEdges, occupiedLanes],
   )
 
-  const { placements: visibleRefPlacements, rowWidths: rowRefWidths } = useMemo(
-    () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName, layout?.shaToColor ?? EMPTY_SHA_COLOR),
-    [visibleNodes, currentBranch, selectedRefName, layout],
+  const { placements: visibleRefPlacements, rowWidths: refRowWidths } = useMemo(
+    () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName, layout?.shaToColor ?? EMPTY_SHA_COLOR, worktrees),
+    [visibleNodes, currentBranch, selectedRefName, layout, worktrees],
   )
+
+  const { detachedWorktreePlacements, rowWidths: rowRefWidths } = useMemo(() => {
+    const placements: DetachedWorktreePlacement[] = []
+    const rowWidths = new Map(refRowWidths)
+    const detachedBySha = new Map<string, WorktreeSummary[]>()
+
+    for (const worktree of worktrees) {
+      if (!worktree.detached || !worktree.headSha || worktree.bare || worktree.prunable) continue
+      const existing = detachedBySha.get(worktree.headSha) ?? []
+      existing.push(worktree)
+      detachedBySha.set(worktree.headSha, existing)
+    }
+
+    for (const node of visibleNodes) {
+      const detached = detachedBySha.get(node.row.sha) ?? []
+      if (detached.length === 0) continue
+      const baseX = node.x + NODE_RADIUS + 8
+      let width = rowWidths.get(node.row.sha) ?? 0
+      let cursorX = baseX + width + (width > 0 ? REF_PILL_GAP : 0)
+
+      for (const worktree of detached) {
+        const text = `▣ ${pathBaseName(worktree.path)}`
+        placements.push({ worktree, nodeSha: node.row.sha, x: cursorX, y: node.y - 10 })
+        const chipWidth = REF_PILL_HORIZONTAL_PADDING + Math.ceil(measureRefPillText(text))
+        width = cursorX - baseX + chipWidth
+        cursorX += chipWidth + REF_PILL_GAP
+      }
+      rowWidths.set(node.row.sha, width)
+    }
+
+    return { detachedWorktreePlacements: placements, rowWidths }
+  }, [visibleNodes, refRowWidths, worktrees])
 
   const visibleEdgeItems = useMemo(
     () => buildVisibleEdgeItems(visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys, layout?.shaToColor ?? EMPTY_SHA_COLOR),
@@ -2013,12 +2134,14 @@ export function GraphCanvas() {
       graphAnimation.fromCurrentBranch,
       selectedRefName,
       graphAnimation.fromLayout.shaToColor,
+      worktrees,
     ).placements
     const toRefPlacements = buildRefPlacements(
       toWindow.visibleNodes,
       graphAnimation.toCurrentBranch,
       selectedRefName,
       graphAnimation.toLayout.shaToColor,
+      worktrees,
     ).placements
     const fromLaneHighlight = buildCurrentLaneHighlight(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch)
     const toLaneHighlight = buildCurrentLaneHighlight(graphAnimation.toLayout, graphAnimation.toCurrentBranch)
@@ -2153,7 +2276,7 @@ export function GraphCanvas() {
       : null
 
     return { nodes, edges, refs, lane }
-  }, [graphAnimation, selectedRefName, zoom])
+  }, [graphAnimation, selectedRefName, zoom, worktrees])
 
   const renderedNodeItems = useMemo(
     () => graphAnimationRenderData?.nodes ?? visibleNodes.map((node) => ({
@@ -2275,6 +2398,18 @@ export function GraphCanvas() {
         ]
       }
 
+      if (selectedRefWorktree) {
+        return [
+          {
+            action: 'open-worktree' as const,
+            label: 'Open worktree',
+            tone: 'neutral' as const,
+            worktreePath: selectedRefWorktree.path,
+          },
+          ...(canPushSelectedRef ? [pushAction] : []),
+        ]
+      }
+
       return [
         { action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const },
         ...(canPushSelectedRef ? [pushAction] : []),
@@ -2285,7 +2420,14 @@ export function GraphCanvas() {
 
     if (selectedRef.kind === 'remote') {
       return [
-        { action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const },
+        ...(selectedRefWorktree
+          ? [{
+              action: 'open-worktree' as const,
+              label: 'Open worktree',
+              tone: 'neutral' as const,
+              worktreePath: selectedRefWorktree.path,
+            }]
+          : [{ action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const }]),
         { action: 'delete' as const, label: 'Delete', tone: 'danger' as const },
       ]
     }
@@ -2293,12 +2435,12 @@ export function GraphCanvas() {
     return [
       { action: 'push' as const, label: 'Push', tone: 'neutral' as const },
     ]
-  }, [selectedRef, canPushSelectedRef, canResetSelectedRef])
+  }, [selectedRef, selectedRefWorktree, canPushSelectedRef, canResetSelectedRef])
 
   const movableBranchRefName = useMemo(() => {
-    if (!selectedRef || selectedRef.kind !== 'head' || selectedRef.isCurrent) return null
+    if (!selectedRef || selectedRef.kind !== 'head' || selectedRef.isCurrent || selectedRefWorktree) return null
     return selectedRef.shortName
-  }, [selectedRef])
+  }, [selectedRef, selectedRefWorktree])
 
   const showMergeButton = useMemo(() => (
     !!currentHeadNode
@@ -2395,10 +2537,17 @@ export function GraphCanvas() {
     if (!selectedRefName || !selectedRef) return
     if (pendingMutation) return
     setMergePreviewVisible(false)
+    if (refAction.action === 'open-worktree') {
+      if (refAction.worktreePath) void openRepoByPath(refAction.worktreePath)
+      return
+    }
+    const gitAction: PendingRefAction['action'] = refAction.action
     const sha = selectedRef.targetSha
     const refName = selectedRefName
     const pendingAction: PendingRefAction = {
-      ...refAction,
+      action: gitAction,
+      label: refAction.label,
+      tone: refAction.tone,
       refName,
       sha,
       force: !!refAction.force,
@@ -2421,10 +2570,20 @@ export function GraphCanvas() {
           },
         })
       } else {
+        const worktreePath = refAction.action === 'checkout'
+          ? checkoutConflictWorktreePath(err)
+          : null
+        if (worktreePath) {
+          showError('Branch is already checked out', err, {
+            label: 'Open worktree',
+            run: () => { void openRepoByPath(worktreePath) },
+          })
+          return
+        }
         showError(`${refAction.action} failed`, err)
       }
     })
-  }, [selectedRefName, selectedRef, runRefAction, showError, pendingMutation])
+  }, [selectedRefName, selectedRef, runRefAction, showError, pendingMutation, openRepoByPath])
 
   const handleMoveBranch = useCallback((targetSha: string) => {
     if (!movableBranchRefName) return
@@ -2501,6 +2660,7 @@ export function GraphCanvas() {
     const baseZoom = zoomRef.current
 
     setMergePreviewVisible(false)
+    setRebaseCameraTransitionActive(true)
     setRebaseHoverLock({
       targetRefName,
       buttonRect: {
@@ -2924,7 +3084,7 @@ export function GraphCanvas() {
               pointerEvents: 'auto',
               transform: `scale(${Math.min(renderedZoom, 1)})`,
               transformOrigin: 'top left',
-              transition: 'left 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+              transition: `left ${cameraTransition}, transform ${cameraTransition}`,
               cursor: 'pointer',
               boxShadow: selectedRefName === label.name ? `0 0 8px ${label.color}40` : 'none',
             }}
@@ -2986,7 +3146,7 @@ export function GraphCanvas() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
-                transition: 'top 220ms cubic-bezier(0.22, 1, 0.36, 1), max-width 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+                transition: `top ${cameraTransition}, max-width ${cameraTransition}`,
               }}
             >
               <span style={{
@@ -3035,7 +3195,7 @@ export function GraphCanvas() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  transition: 'top 220ms cubic-bezier(0.22, 1, 0.36, 1), max-width 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+                  transition: `top ${cameraTransition}, max-width ${cameraTransition}`,
                 }}
               >
                 {dot && (
@@ -3072,7 +3232,7 @@ export function GraphCanvas() {
                 whiteSpace: 'nowrap',
                 pointerEvents: 'none',
                 userSelect: 'none',
-                transition: 'top 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+                transition: `top ${cameraTransition}`,
               }}
             >
               <span style={{
@@ -3100,7 +3260,7 @@ export function GraphCanvas() {
         height: fullHeight,
         transform: `translate(${graphTranslateX}px, ${graphTranslateY}px) scale(${renderedZoom})`,
         transformOrigin: 'top left',
-        transition: 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+        transition: `transform ${cameraTransition}`,
         willChange: rebaseHoverLock ? 'transform' : undefined,
       }}>
         <svg
@@ -3563,7 +3723,62 @@ export function GraphCanvas() {
               }}
             >
               {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
+              {placement.linkedWorktrees.map((worktree) => (
+                <span
+                  key={worktree.path}
+                  title={`Open linked worktree\n${worktree.path}${worktree.lockedReason ? `\nLocked: ${worktree.lockedReason}` : ''}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void openRepoByPath(worktree.path)
+                  }}
+                  style={{
+                    display: 'inline-block',
+                    marginLeft: 7,
+                    paddingLeft: 7,
+                    borderLeft: `1px solid ${placement.color}55`,
+                    color: '#a6adc8',
+                  }}
+                >
+                  ▣ {pathBaseName(worktree.path)}
+                </span>
+              ))}
             </animated.div>
+          )
+        })}
+        {!isGraphAnimating && detachedWorktreePlacements.map((placement) => {
+          const { worktree } = placement
+          return (
+            <div
+              key={`detached-worktree:${worktree.path}`}
+              title={`${worktree.isCurrent ? 'Current detached worktree' : 'Open detached worktree'}\n${worktree.path}\n${worktree.headSha?.slice(0, 12) ?? ''}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                if (!worktree.isCurrent) void openRepoByPath(worktree.path)
+              }}
+              onPointerEnter={() => showAddRefControls(placement.nodeSha)}
+              onPointerLeave={() => scheduleHideAddRefControls(placement.nodeSha)}
+              style={{
+                position: 'absolute',
+                left: placement.x,
+                top: placement.y,
+                zIndex: 20,
+                height: 20,
+                padding: '0 7px',
+                borderRadius: 4,
+                border: `1px solid ${worktree.isCurrent ? '#f9e2af99' : '#6c708666'}`,
+                background: worktree.isCurrent ? '#f9e2af18' : 'rgba(24,24,37,0.72)',
+                color: worktree.isCurrent ? '#f9e2af' : '#a6adc8',
+                fontSize: 11,
+                fontWeight: 600,
+                lineHeight: '20px',
+                whiteSpace: 'nowrap',
+                cursor: worktree.isCurrent ? 'default' : 'pointer',
+                userSelect: 'none',
+                boxShadow: '0 2px 5px rgba(0,0,0,0.18)',
+              }}
+            >
+              ▣ {pathBaseName(worktree.path)}
+            </div>
           )
         })}
         {visibleNodes.map((node) => {

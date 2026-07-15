@@ -16,12 +16,14 @@ import type {
   WorktreeFile,
   WorktreeDiffArea,
   InProgressOperationKind,
+  WorktreeSummary,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
   getRecentRepos,
   discoverRepos,
   getRefs,
+  getWorktrees,
   queryHistory,
   getCommitDetail,
   getCommitAuthor,
@@ -222,7 +224,7 @@ function fetchRefsAndHistory(repoId: string): Promise<[RefSummary[], HistoryWind
   ])
 }
 
-function fetchRepositoryState(repoId: string): Promise<[RefSummary[], HistoryWindowResponse, WorktreeChangesResponse]> {
+function fetchRepositoryState(repoId: string): Promise<[RefSummary[], HistoryWindowResponse, WorktreeChangesResponse, WorktreeSummary[]]> {
   return Promise.all([
     getRefs(repoId),
     queryHistory(repoId, {
@@ -235,6 +237,7 @@ function fetchRepositoryState(repoId: string): Promise<[RefSummary[], HistoryWin
       topoOrder: true,
     }),
     getWorktreeChanges(repoId),
+    getWorktrees(repoId),
   ])
 }
 
@@ -360,11 +363,13 @@ interface AppState {
   status: AppStatus
   repoId: string | null
   repoPath: string | null
+  currentWorktreePath: string | null
   totalCommitCount: number
   recentRepos: string[]
   discoveredFolder: string | null
   discoveredRepos: string[]
   refs: RefSummary[]
+  worktrees: WorktreeSummary[]
   historyWindow: HistoryWindowResponse | null
   viewMode: ViewMode
   reflog: ReflogResponse | null
@@ -405,6 +410,7 @@ interface AppState {
   setShowGutterColors: (value: boolean) => void
   setWorktreeCommitMessage: (message: string) => void
   reloadFromServer: () => Promise<void>
+  loadWorktrees: () => Promise<void>
   loadWorktreeChanges: () => Promise<void>
   selectWorktree: () => void
   /** Run a staging action and report whether it succeeded. */
@@ -453,8 +459,10 @@ async function openRepoByPathImpl(
     status: 'loading',
     repoId: null,
     repoPath: null,
+    currentWorktreePath: null,
     totalCommitCount: 0,
     refs: [],
+    worktrees: [],
     historyWindow: null,
     selectedSha: null,
     selectedRefName: null,
@@ -481,7 +489,7 @@ async function openRepoByPathImpl(
     const res = await openRepo({ path })
     if (requestId !== repoOpenRequestId) return
 
-    const [refs, hist] = await Promise.all([
+    const [refs, hist, worktrees] = await Promise.all([
       getRefs(res.repoId),
       queryHistory(res.repoId, {
         repoId: res.repoId,
@@ -492,23 +500,26 @@ async function openRepoByPathImpl(
         firstParent: false,
         topoOrder: true,
       }),
+      getWorktrees(res.repoId),
     ])
     if (requestId !== repoOpenRequestId) return
 
     const currentHeadSha = refs.find((ref: RefSummary) => ref.isCurrent)?.targetSha ?? res.head.sha
 
-    setRepoPathInUrl(res.rootPath)
+    setRepoPathInUrl(res.currentWorktreePath)
     // Drop any CI watches/poller left over from a previously open repo.
     ciWatch.clear()
     stopCIPolling()
     set((s) => ({
       status: 'ready',
       repoId: res.repoId,
-      repoPath: res.rootPath,
+      repoPath: res.currentWorktreePath,
+      currentWorktreePath: res.currentWorktreePath,
       totalCommitCount: Math.max(res.totalCommitCount, hist.rows.length),
-      recentRepos: prependRecentRepo(get().recentRepos, res.rootPath),
+      recentRepos: prependRecentRepo(get().recentRepos, res.currentWorktreePath),
       githubUrl: res.githubUrl,
       refs,
+      worktrees,
       historyWindow: hist,
       commitAuthorAvatars: {},
       commitCIStatus: {},
@@ -625,11 +636,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   status: 'no-repo',
   repoId: null,
   repoPath: null,
+  currentWorktreePath: null,
   totalCommitCount: 0,
   recentRepos: [],
   discoveredFolder: null,
   discoveredRepos: [],
   refs: [],
+  worktrees: [],
   historyWindow: null,
   viewMode: 'history',
   reflog: null,
@@ -694,8 +707,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       let refs: RefSummary[]
       let hist: HistoryWindowResponse
       let changes: WorktreeChangesResponse
+      let worktrees: WorktreeSummary[]
       try {
-        [refs, hist, changes] = await fetchRepositoryState(repoId)
+        [refs, hist, changes, worktrees] = await fetchRepositoryState(repoId)
       } catch (err) {
         if (isSessionError(err) || isConnectionLostError(err)) {
           const res = await openRepo({ path: repoPath })
@@ -705,6 +719,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           refs = fresh[0]
           hist = fresh[1]
           changes = fresh[2]
+          worktrees = fresh[3]
         } else {
           throw err
         }
@@ -712,6 +727,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set((s) => ({
         refs,
+        worktrees,
         historyWindow: hist,
         totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
         mergePreview: null,
@@ -726,6 +742,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (get().viewMode === 'reflog') void get().loadReflog()
     } catch (err) {
       console.error('Failed to reload repository state:', err)
+    }
+  },
+
+  loadWorktrees: async () => {
+    const { repoId } = get()
+    if (!repoId) return
+    try {
+      const worktrees = await getWorktrees(repoId)
+      if (get().repoId === repoId) set({ worktrees })
+    } catch (err) {
+      console.error('Failed to load linked worktrees:', err)
     }
   },
 
@@ -1040,8 +1067,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       status: 'no-repo',
       repoId: null,
       repoPath: null,
+      currentWorktreePath: null,
       totalCommitCount: 0,
       refs: [],
+      worktrees: [],
       historyWindow: null,
       selectedSha: null,
       selectedRefName: null,
@@ -1332,6 +1361,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // animation only when we already animated to a prediction.
     const [refs, hist] = await fetchRefsAndHistory(repoId)
     void get().loadWorktreeChanges()
+    void get().loadWorktrees()
     if (action === 'fetch') {
       const targetSha = fetchVisibleTipSha(refs)
       const visibleTargetSha = targetSha && historyContainsSha(hist, targetSha) ? targetSha : null

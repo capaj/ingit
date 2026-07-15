@@ -26,6 +26,20 @@ export const RefSummary = z.object({
   isCurrent: z.boolean().optional(),
 })
 
+export const WorktreeSummary = z.object({
+  path: z.string(),
+  headSha: CommitSha.nullable(),
+  branchRef: z.string().optional(),
+  branchShortName: z.string().optional(),
+  isCurrent: z.boolean(),
+  detached: z.boolean(),
+  bare: z.boolean(),
+  locked: z.boolean(),
+  lockedReason: z.string().optional(),
+  prunable: z.boolean(),
+  prunableReason: z.string().optional(),
+})
+
 export const CommitRow = z.object({
   row: z.number(),
   sha: CommitSha,
@@ -189,6 +203,10 @@ export const contract = {
   getRefs: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RefSummary)),
+
+  getWorktrees: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.array(WorktreeSummary)),
 
   getStatus: oc
     .input(z.object({ repoId: RepoId }))

@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { RepoSession } from './repo-session.js'
+import { BranchCheckedOutError, RepoSession } from './repo-session.js'
 import { runGit } from './git-command.js'
 
 let repoDir: string
@@ -130,6 +130,37 @@ describe('RepoSession.checkout', () => {
     const mainRef2 = refs2.find(r => r.shortName === 'main')
     expect(mainRef2?.isCurrent).toBe(true)
     expect(devRef2?.isCurrent).toBeUndefined()
+  })
+
+  test('lists linked worktrees and reports an occupied branch before checkout', async () => {
+    const worktreeParent = await mkdtemp(join(tmpdir(), 'ingit-linked-worktree-'))
+    const worktreePath = join(worktreeParent, 'dev tree')
+
+    try {
+      await runGit(['worktree', 'add', worktreePath, 'dev'], repoDir)
+
+      const worktrees = await session.getWorktrees()
+      expect(worktrees).toHaveLength(2)
+      expect(worktrees.find((worktree) => worktree.path === repoDir)).toMatchObject({
+        branchShortName: 'main',
+        isCurrent: true,
+      })
+      expect(worktrees.find((worktree) => worktree.path === worktreePath)).toMatchObject({
+        branchRef: 'refs/heads/dev',
+        branchShortName: 'dev',
+        isCurrent: false,
+      })
+
+      await expect(session.checkout('dev')).rejects.toMatchObject({
+        name: 'BranchCheckedOutError',
+        branchRef: 'refs/heads/dev',
+        worktreePath,
+      } satisfies Partial<BranchCheckedOutError>)
+      expect(await currentBranch(repoDir)).toBe('main')
+    } finally {
+      await runGit(['worktree', 'remove', '--force', worktreePath], repoDir, { okCodes: [128] })
+      await rm(worktreeParent, { recursive: true, force: true })
+    }
   })
 
   test('checking out a remote branch creates a local tracking branch', async () => {

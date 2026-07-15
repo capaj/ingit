@@ -47,6 +47,20 @@ export interface RefSummary {
   isCurrent?: boolean
 }
 
+export interface WorktreeSummary {
+  path: string
+  headSha: CommitSha | null
+  branchRef?: string
+  branchShortName?: string
+  isCurrent: boolean
+  detached: boolean
+  bare: boolean
+  locked: boolean
+  lockedReason?: string
+  prunable: boolean
+  prunableReason?: string
+}
+
 export interface HistoryAnchor {
   kind: 'head' | 'ref' | 'sha' | 'row' | 'mergeBase'
   value?: string

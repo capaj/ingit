@@ -65,7 +65,7 @@ export function App() {
   } | null>(null)
   const repoPathInputRef = useRef<HTMLInputElement>(null)
   const {
-    status, repoPath, recentRepos, discoveredFolder, discoveredRepos, refs, historyWindow, selectedSha,
+    status, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, refs, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, commitAuthorAvatars, commitCIStatus, githubUrl, openError,
     errorDialog, dismissError, showError,
     openRepoByPath, closeRepo, openFromUrl, selectRef,
@@ -381,6 +381,44 @@ export function App() {
               Time Machine
             </button>
           </div>
+          {worktrees.filter((worktree) => !worktree.bare).length > 1 && (
+            <>
+              <span style={{ color: '#45475a', marginLeft: 8 }}>worktree</span>
+              <select
+                value={currentWorktreePath ?? ''}
+                onChange={(event) => {
+                  if (event.target.value && event.target.value !== currentWorktreePath) {
+                    void openRepoByPath(event.target.value)
+                  }
+                }}
+                title="Switch linked worktree"
+                aria-label="Current linked worktree"
+                style={{
+                  maxWidth: 220,
+                  flexShrink: 1,
+                  minWidth: 90,
+                  padding: '3px 5px',
+                  border: '1px solid #313244',
+                  borderRadius: 4,
+                  outline: 'none',
+                  background: '#1e1e2e',
+                  color: '#a6adc8',
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                }}
+              >
+                {worktrees.filter((worktree) => !worktree.bare).map((worktree) => (
+                  <option
+                    key={worktree.path}
+                    value={worktree.path}
+                    disabled={worktree.prunable}
+                  >
+                    {pathBaseName(worktree.path)} — {worktree.branchShortName ?? (worktree.detached ? `detached ${worktree.headSha?.slice(0, 8) ?? ''}` : 'no branch')}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           <span style={{ color: '#45475a', marginLeft: 8 }}>repo</span>
           <form
             onSubmit={handleRepoPathSubmit}
