@@ -189,6 +189,9 @@ describe('RepoSession.checkout', () => {
       await runGit(['clone', remoteDir, localDir], tmpdir())
       await runGit(['config', 'user.email', 'test@test.com'], localDir)
       await runGit(['config', 'user.name', 'Test'], localDir)
+      await Bun.write(join(localDir, 'base.txt'), 'base\nstaged before checkout\n')
+      await runGit(['add', 'base.txt'], localDir)
+      await Bun.write(join(localDir, 'untracked.txt'), 'untracked before checkout\n')
 
       const checkoutSession = await RepoSession.open(localDir)
 
@@ -198,6 +201,10 @@ describe('RepoSession.checkout', () => {
         expect(await currentBranch(localDir)).toBe('dev')
         expect(await currentHeadSha(localDir)).toBe((await runGit(['rev-parse', 'origin/dev'], localDir)).stdout.trim())
         expect((await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], localDir)).stdout.trim()).toBe('origin/dev')
+        expect(await Bun.file(join(localDir, 'base.txt')).text()).toBe('base\nstaged before checkout\n')
+        expect(await Bun.file(join(localDir, 'untracked.txt')).text()).toBe('untracked before checkout\n')
+        expect(await workingTreeStatus(localDir)).toContain('base.txt')
+        expect((await runGit(['stash', 'list'], localDir)).stdout.trim()).toBe('')
       } finally {
         checkoutSession.close()
       }
@@ -234,6 +241,102 @@ describe('RepoSession.checkout', () => {
         const shared = await Bun.file(join(migrateDir, 'shared.txt')).text()
         expect(shared).toBe('base\nlocal edit\n')
         expect(await workingTreeStatus(migrateDir)).toContain('shared.txt')
+      } finally {
+        migrateSession.close()
+      }
+    } finally {
+      await rm(migrateDir, { recursive: true, force: true })
+    }
+  })
+
+  test('carries staged changes across a local branch switch', async () => {
+    const migrateDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-staged-'))
+
+    try {
+      await runGit(['init', '--initial-branch=main'], migrateDir)
+      await runGit(['config', 'user.email', 'test@test.com'], migrateDir)
+      await runGit(['config', 'user.name', 'Test'], migrateDir)
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\n')
+      await runGit(['add', '.'], migrateDir)
+      await runGit(['commit', '-m', 'initial'], migrateDir)
+      await runGit(['branch', 'feature'], migrateDir)
+
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\nolder stashed edit\n')
+      await runGit(['stash', 'push', '-m', 'existing user stash'], migrateDir)
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\nstaged edit\n')
+      await runGit(['add', 'shared.txt'], migrateDir)
+
+      const migrateSession = await RepoSession.open(migrateDir)
+      try {
+        await migrateSession.checkout('feature')
+
+        expect(await currentBranch(migrateDir)).toBe('feature')
+        expect(await Bun.file(join(migrateDir, 'shared.txt')).text()).toBe('base\nstaged edit\n')
+        expect(await workingTreeStatus(migrateDir)).toContain('shared.txt')
+        const stashList = (await runGit(['stash', 'list'], migrateDir)).stdout.trim()
+        expect(stashList).toContain('existing user stash')
+        expect(stashList).not.toContain('ingit auto-stash')
+      } finally {
+        migrateSession.close()
+      }
+    } finally {
+      await rm(migrateDir, { recursive: true, force: true })
+    }
+  })
+
+  test('restores staged changes when checkout itself fails', async () => {
+    const migrateDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-restore-'))
+
+    try {
+      await runGit(['init', '--initial-branch=main'], migrateDir)
+      await runGit(['config', 'user.email', 'test@test.com'], migrateDir)
+      await runGit(['config', 'user.name', 'Test'], migrateDir)
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\n')
+      await runGit(['add', '.'], migrateDir)
+      await runGit(['commit', '-m', 'initial'], migrateDir)
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\nstaged edit\n')
+      await runGit(['add', 'shared.txt'], migrateDir)
+
+      const migrateSession = await RepoSession.open(migrateDir)
+      try {
+        await expect(migrateSession.checkout('missing-branch')).rejects.toThrow()
+
+        expect(await currentBranch(migrateDir)).toBe('main')
+        expect(await Bun.file(join(migrateDir, 'shared.txt')).text()).toBe('base\nstaged edit\n')
+        expect(await workingTreeStatus(migrateDir)).toContain('shared.txt')
+        expect((await runGit(['stash', 'list'], migrateDir)).stdout.trim()).toBe('')
+      } finally {
+        migrateSession.close()
+      }
+    } finally {
+      await rm(migrateDir, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps the temporary stash when changes conflict on the destination branch', async () => {
+    const migrateDir = await mkdtemp(join(tmpdir(), 'ingit-checkout-conflict-'))
+
+    try {
+      await runGit(['init', '--initial-branch=main'], migrateDir)
+      await runGit(['config', 'user.email', 'test@test.com'], migrateDir)
+      await runGit(['config', 'user.name', 'Test'], migrateDir)
+      await Bun.write(join(migrateDir, 'shared.txt'), 'base\n')
+      await runGit(['add', '.'], migrateDir)
+      await runGit(['commit', '-m', 'initial'], migrateDir)
+      await runGit(['checkout', '-b', 'feature'], migrateDir)
+      await Bun.write(join(migrateDir, 'shared.txt'), 'feature edit\n')
+      await runGit(['commit', '-am', 'feature edit'], migrateDir)
+      await runGit(['checkout', 'main'], migrateDir)
+      await Bun.write(join(migrateDir, 'shared.txt'), 'staged main edit\n')
+      await runGit(['add', 'shared.txt'], migrateDir)
+
+      const migrateSession = await RepoSession.open(migrateDir)
+      try {
+        await expect(migrateSession.checkout('feature')).rejects.toThrow(/remain safe in stash/)
+
+        expect(await currentBranch(migrateDir)).toBe('feature')
+        expect(await workingTreeStatus(migrateDir)).toContain('UU shared.txt')
+        expect((await runGit(['stash', 'list'], migrateDir)).stdout).toContain('ingit auto-stash before checkout feature')
       } finally {
         migrateSession.close()
       }

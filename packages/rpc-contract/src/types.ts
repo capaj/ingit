@@ -47,6 +47,32 @@ export interface RefSummary {
   isCurrent?: boolean
 }
 
+export interface StashSummary {
+  /** Reflog selector shown by Git, for example `stash@{0}`. */
+  selector: string
+  /** Commit created to hold the stashed worktree state. */
+  sha: CommitSha
+  /** Commit that was checked out when the stash was created. */
+  parentSha: CommitSha
+  message: string
+  /** Stash creation time as Unix seconds. */
+  createdAt: number
+}
+
+export interface StashDiffResponse {
+  sha: CommitSha
+  changedPaths: ChangedPath[]
+  additions: number
+  deletions: number
+}
+
+export interface StashFileDiffResponse {
+  sha: CommitSha
+  path: string
+  patchText: string
+  isBinary: boolean
+}
+
 export interface WorktreeSummary {
   path: string
   headSha: CommitSha | null
@@ -319,6 +345,15 @@ export interface WorktreeChangesResponse {
 }
 
 export type StageActionKind = 'stage' | 'unstage' | 'stage-all' | 'unstage-all'
+
+export type StashActionKind = 'create' | 'apply' | 'drop'
+
+export interface StashActionResponse {
+  ok: boolean
+  message: string
+  stashes: StashSummary[]
+  changes: WorktreeChangesResponse
+}
 
 export type WorktreeDiffArea = 'staged' | 'unstaged'
 

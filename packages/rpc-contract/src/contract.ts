@@ -26,6 +26,14 @@ export const RefSummary = z.object({
   isCurrent: z.boolean().optional(),
 })
 
+export const StashSummary = z.object({
+  selector: z.string(),
+  sha: CommitSha,
+  parentSha: CommitSha,
+  message: z.string(),
+  createdAt: z.number(),
+})
+
 export const WorktreeSummary = z.object({
   path: z.string(),
   headSha: CommitSha.nullable(),
@@ -222,6 +230,58 @@ export const contract = {
   getWorktreeChanges: oc
     .input(z.object({ repoId: RepoId }))
     .output(WorktreeChanges),
+
+  getStashes: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.array(StashSummary)),
+
+  getStashDiff: oc
+    .input(z.object({ repoId: RepoId, stashSha: CommitSha }))
+    .output(z.object({
+      sha: CommitSha,
+      changedPaths: z.array(ChangedPath),
+      additions: z.number(),
+      deletions: z.number(),
+    })),
+
+  getStashFileDiff: oc
+    .input(z.object({
+      repoId: RepoId,
+      stashSha: CommitSha,
+      path: z.string(),
+      oldPath: z.string().optional(),
+    }))
+    .output(z.object({
+      sha: CommitSha,
+      path: z.string(),
+      patchText: z.string(),
+      isBinary: z.boolean(),
+    })),
+
+  stashAction: oc
+    .input(z.discriminatedUnion('action', [
+      z.object({
+        repoId: RepoId,
+        action: z.literal('create'),
+        message: z.string().optional(),
+      }),
+      z.object({
+        repoId: RepoId,
+        action: z.literal('apply'),
+        stashSha: CommitSha,
+      }),
+      z.object({
+        repoId: RepoId,
+        action: z.literal('drop'),
+        stashSha: CommitSha,
+      }),
+    ]))
+    .output(z.object({
+      ok: z.boolean(),
+      message: z.string(),
+      stashes: z.array(StashSummary),
+      changes: WorktreeChanges,
+    })),
 
   stageAction: oc
     .input(z.object({

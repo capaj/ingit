@@ -41,6 +41,37 @@ export async function parseCommitDiff(cwd: string, sha: string): Promise<{
     ),
   ])
 
+  return parseDiffOutput(rawLines, numstatLines)
+}
+
+/** Parse Git's stash-aware diff, including the stash's untracked-file parent. */
+export async function parseStashDiff(cwd: string, sha: string): Promise<{
+  changedPaths: ChangedPath[]
+  additions: number
+  deletions: number
+}> {
+  const [rawLines, numstatLines] = await Promise.all([
+    runGitLines(
+      ['stash', 'show', '--include-untracked', '--raw', '--format=', '-M', '-C', sha],
+      cwd,
+    ),
+    runGitLines(
+      ['stash', 'show', '--include-untracked', '--numstat', '--format=', '-M', '-C', sha],
+      cwd,
+    ),
+  ])
+
+  return parseDiffOutput(rawLines, numstatLines)
+}
+
+function parseDiffOutput(
+  rawLines: string[],
+  numstatLines: string[],
+): {
+  changedPaths: ChangedPath[]
+  additions: number
+  deletions: number
+} {
   const result: ChangedPath[] = []
 
   for (const line of rawLines) {

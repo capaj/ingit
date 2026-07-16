@@ -1,6 +1,13 @@
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
-import type { HistoryQuery, InProgressOperationKind, StageActionKind, WorktreeDiffArea } from '@ingit/rpc-contract'
+import type {
+  HistoryQuery,
+  InProgressOperationKind,
+  StageActionKind,
+  StashActionResponse,
+  StashSummary,
+  WorktreeDiffArea,
+} from '@ingit/rpc-contract'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any = null
@@ -66,6 +73,30 @@ export function getStatus(repoId: string) {
 
 export function getWorktreeChanges(repoId: string) {
   return ensureClient().getWorktreeChanges({ repoId })
+}
+
+export function getStashes(repoId: string): Promise<StashSummary[]> {
+  return ensureClient().getStashes({ repoId })
+}
+
+export function getStashDiff(repoId: string, stashSha: string) {
+  return ensureClient().getStashDiff({ repoId, stashSha })
+}
+
+export function getStashFileDiff(repoId: string, stashSha: string, path: string, oldPath?: string) {
+  return ensureClient().getStashFileDiff({ repoId, stashSha, path, oldPath })
+}
+
+export function createStash(repoId: string, message?: string): Promise<StashActionResponse> {
+  return ensureClient().stashAction({ repoId, action: 'create', message })
+}
+
+export function applyStash(repoId: string, stashSha: string): Promise<StashActionResponse> {
+  return ensureClient().stashAction({ repoId, action: 'apply', stashSha })
+}
+
+export function dropStash(repoId: string, stashSha: string): Promise<StashActionResponse> {
+  return ensureClient().stashAction({ repoId, action: 'drop', stashSha })
 }
 
 export function stageAction(repoId: string, action: StageActionKind, paths: string[]) {

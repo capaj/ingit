@@ -72,6 +72,51 @@ describe('RepoSession staging', () => {
   })
 })
 
+describe('RepoSession stashes', () => {
+  test('stashes tracked and untracked files and safely applies them again', async () => {
+    const parentSha = (await runGit(['rev-parse', 'HEAD'], repoDir)).stdout.trim()
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nstashed edit\n')
+    await Bun.write(join(repoDir, 'untracked.txt'), 'new work\n')
+
+    const created = await session.stash('pause this work')
+
+    expect(created.changes.staged).toEqual([])
+    expect(created.changes.unstaged).toEqual([])
+    expect(created.stashes).toHaveLength(1)
+    expect(created.stashes[0]).toMatchObject({
+      selector: 'stash@{0}',
+      parentSha,
+    })
+    expect(created.stashes[0]?.message).toContain('pause this work')
+
+    const stash = created.stashes[0]!
+    const diff = await session.getStashDiff(stash.sha)
+    expect(diff.changedPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'file.txt', status: 'M' }),
+      expect.objectContaining({ path: 'untracked.txt', status: 'A' }),
+    ]))
+    expect(diff.additions).toBe(2)
+    expect(diff.deletions).toBe(0)
+
+    const trackedPatch = await session.getStashFileDiff(stash.sha, 'file.txt')
+    expect(trackedPatch.patchText).toContain('+stashed edit')
+    const untrackedPatch = await session.getStashFileDiff(stash.sha, 'untracked.txt')
+    expect(untrackedPatch.patchText).toContain('+new work')
+
+    const applied = await session.applyStash(stash.sha)
+
+    // Apply intentionally keeps the stash, so a conflict can never discard it.
+    expect(applied.stashes.map((entry) => entry.sha)).toContain(stash.sha)
+    expect(paths(applied.changes.unstaged)).toEqual(['file.txt', 'untracked.txt'])
+    expect(await Bun.file(join(repoDir, 'file.txt')).text()).toBe('hello\nstashed edit\n')
+    expect(await Bun.file(join(repoDir, 'untracked.txt')).text()).toBe('new work\n')
+
+    const dropped = await session.dropStash(stash.sha)
+    expect(dropped.stashes).toEqual([])
+    expect((await runGit(['stash', 'list'], repoDir)).stdout.trim()).toBe('')
+  })
+})
+
 describe('RepoSession worktree file diffs', () => {
   test('unstaged diff of a modified tracked file', async () => {
     await Bun.write(join(repoDir, 'file.txt'), 'hello\nworld\n')

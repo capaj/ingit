@@ -9,6 +9,8 @@ import type {
   WorktreeDiffArea,
   CommitFileDiffResponse,
   WorktreeSummary,
+  StashSummary,
+  StashFileDiffResponse,
 } from '@ingit/rpc-contract'
 import { runGit, GitCommandError } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
@@ -18,7 +20,7 @@ import { parseRefs } from './parsers/ref-parser.js'
 import { parseReflog } from './parsers/reflog-parser.js'
 import { parseStatus } from './parsers/status-parser.js'
 import { readWorktreeChanges } from './parsers/worktree-changes-parser.js'
-import { parseCommitDiff } from './parsers/diff-tree-parser.js'
+import { parseCommitDiff, parseStashDiff } from './parsers/diff-tree-parser.js'
 import { parseWorktreeList } from './parsers/worktree-list-parser.js'
 import { streamRevList, streamRevListWithMeta } from './parsers/rev-list-parser.js'
 import type { RevListEntry, RevListEntryWithMeta } from './parsers/rev-list-parser.js'
@@ -200,6 +202,152 @@ export class RepoSession {
 
   getWorktreeChanges(): Promise<WorktreeChangesResponse> {
     return readWorktreeChanges(this.rootPath)
+  }
+
+  async getStashes(): Promise<StashSummary[]> {
+    const fieldSeparator = '\x1f'
+    const recordSeparator = '\x1e'
+    const format = [
+      '%gd',
+      '%H',
+      '%P',
+      '%ct',
+      '%gs',
+    ].join('%x1f') + '%x1e'
+    const { stdout } = await runGit(['stash', 'list', `--format=${format}`], this.rootPath)
+
+    return stdout
+      .split(recordSeparator)
+      .map((record) => record.trim())
+      .filter((record) => record.length > 0)
+      .flatMap((record) => {
+        const [selector, sha, parents, createdAtText, ...messageParts] = record.split(fieldSeparator)
+        const parentSha = parents?.split(' ')[0]
+        const createdAt = Number(createdAtText)
+        if (!selector || !sha || !parentSha || !Number.isFinite(createdAt)) return []
+        return [{
+          selector,
+          sha,
+          parentSha,
+          message: messageParts.join(fieldSeparator).trim(),
+          createdAt,
+        }]
+      })
+  }
+
+  async getStashDiff(stashSha: string): Promise<{
+    changedPaths: Array<{ path: string; oldPath?: string; status: 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U' }>
+    additions: number
+    deletions: number
+  }> {
+    const stash = (await this.getStashes()).find((entry) => entry.sha === stashSha)
+    if (!stash) throw new Error('Stash not found')
+    return parseStashDiff(this.rootPath, stash.sha)
+  }
+
+  /** Patch for one file across both the tracked and untracked parts of a stash. */
+  async getStashFileDiff(
+    stashSha: string,
+    path: string,
+    oldPath?: string,
+  ): Promise<StashFileDiffResponse> {
+    const stash = (await this.getStashes()).find((entry) => entry.sha === stashSha)
+    if (!stash) throw new Error('Stash not found')
+
+    const pathspec = oldPath ? [oldPath, path] : [path]
+    const [{ stdout: trackedPatch }, untrackedParent] = await Promise.all([
+      runGit(
+        ['diff', '-r', '--no-ext-diff', '-M', '-C', '-p', `${stash.sha}^1`, stash.sha, '--', ...pathspec],
+        this.rootPath,
+      ),
+      runGit(
+        ['rev-parse', '--verify', `${stash.sha}^3`],
+        this.rootPath,
+        { okCodes: [1, 128] },
+      ),
+    ])
+
+    let untrackedPatch = ''
+    if (untrackedParent.code === 0) {
+      const { stdout } = await runGit(
+        ['diff-tree', '-r', '--root', '--no-commit-id', '-M', '-C', '-p', untrackedParent.stdout.trim(), '--', ...pathspec],
+        this.rootPath,
+      )
+      untrackedPatch = stdout
+    }
+
+    const patchText = [trackedPatch, untrackedPatch]
+      .filter((patch) => patch.length > 0)
+      .join('\n')
+    return {
+      sha: stash.sha,
+      path,
+      patchText,
+      isBinary: /^Binary files .* differ$/m.test(patchText),
+    }
+  }
+
+  /** Stash tracked and untracked worktree changes, then return fresh sidebar state. */
+  async stash(message?: string): Promise<{
+    message: string
+    stashes: StashSummary[]
+    changes: WorktreeChangesResponse
+  }> {
+    const args = ['stash', 'push', '--include-untracked']
+    const trimmedMessage = message?.trim()
+    if (trimmedMessage) args.push('-m', trimmedMessage)
+    const { stdout, stderr } = await runGit(args, this.rootPath)
+    const [stashes, changes] = await Promise.all([
+      this.getStashes(),
+      this.getWorktreeChanges(),
+    ])
+    return {
+      message: (stdout + stderr).trim(),
+      stashes,
+      changes,
+    }
+  }
+
+  /** Restore a stash without dropping it, matching Ungit's safe apply behavior. */
+  async applyStash(stashSha: string): Promise<{
+    message: string
+    stashes: StashSummary[]
+    changes: WorktreeChangesResponse
+  }> {
+    const stash = (await this.getStashes()).find((entry) => entry.sha === stashSha)
+    if (!stash) throw new Error('Stash not found')
+
+    const { stdout, stderr } = await runGit(['stash', 'apply', stash.sha], this.rootPath)
+    const [stashes, changes] = await Promise.all([
+      this.getStashes(),
+      this.getWorktreeChanges(),
+    ])
+    return {
+      message: (stdout + stderr).trim(),
+      stashes,
+      changes,
+    }
+  }
+
+  /** Permanently remove a stash after resolving its current reflog selector. */
+  async dropStash(stashSha: string): Promise<{
+    message: string
+    stashes: StashSummary[]
+    changes: WorktreeChangesResponse
+  }> {
+    const stash = (await this.getStashes()).find((entry) => entry.sha === stashSha)
+    if (!stash) throw new Error('Stash not found')
+
+    const { stdout, stderr } = await runGit(['stash', 'drop', stash.selector], this.rootPath)
+    const [stashes, changes] = await Promise.all([
+      this.getStashes(),
+      this.getWorktreeChanges(),
+    ])
+    return {
+      message: (stdout + stderr).trim(),
+      stashes,
+      changes,
+    }
   }
 
   /** Stage the given paths into the index. Returns the fresh worktree state. */
@@ -394,6 +542,53 @@ export class RepoSession {
     }
   }
 
+  private async getStashTip(): Promise<string | null> {
+    const { stdout, code } = await runGit(
+      ['rev-parse', '--verify', 'refs/stash'],
+      this.rootPath,
+      { okCodes: [1, 128] },
+    )
+    return code === 0 ? stdout.trim() || null : null
+  }
+
+  /**
+   * Move the complete worktree aside before checkout. Git's `checkout -m`
+   * refuses to run when the index contains staged changes, while Ungit's
+   * stash/checkout/pop flow handles staged and unstaged work uniformly.
+   */
+  private async createCheckoutAutoStash(ref: string): Promise<string | null> {
+    const previousTip = await this.getStashTip()
+    await runGit([
+      'stash',
+      'push',
+      '--include-untracked',
+      '-m',
+      `ingit auto-stash before checkout ${ref}`,
+    ], this.rootPath)
+    const nextTip = await this.getStashTip()
+    return nextTip && nextTip !== previousTip ? nextTip : null
+  }
+
+  private async restoreCheckoutAutoStash(stashSha: string): Promise<void> {
+    const stash = (await this.getStashes()).find((entry) => entry.sha === stashSha)
+    if (!stash) {
+      throw new Error(`Temporary checkout stash ${stashSha.slice(0, 8)} was not found`)
+    }
+    // Match Ungit: a normal pop migrates the file changes without requiring
+    // the destination branch's index to have the same shape as the source.
+    await runGit(['stash', 'pop', stash.selector], this.rootPath)
+  }
+
+  private gitErrorDetail(err: unknown): string {
+    if (!(err instanceof GitCommandError)) {
+      return err instanceof Error ? err.message : String(err)
+    }
+    return [err.stdout, err.stderr]
+      .map((text) => text.trim())
+      .filter((text) => text.length > 0)
+      .join('\n') || err.message
+  }
+
   async checkout(ref: string): Promise<void> {
     const resolved = await this.resolveRef(ref)
     const targetBranchRef = resolved?.kind === 'head'
@@ -410,20 +605,50 @@ export class RepoSession {
       }
     }
 
-    if (resolved?.kind === 'remote') {
-      const localBranchName = resolved.remoteBranch
-      if (!localBranchName) {
-        throw new Error(`Cannot checkout remote ref ${ref}`)
-      }
+    const autoStashSha = await this.createCheckoutAutoStash(ref)
+    let switched = false
 
-      await runGit(['checkout', '-m', '-B', localBranchName, ref], this.rootPath)
-      await runGit(['branch', `--set-upstream-to=${ref}`, localBranchName], this.rootPath)
-      return
+    try {
+      if (resolved?.kind === 'remote') {
+        const localBranchName = resolved.remoteBranch
+        if (!localBranchName) {
+          throw new Error(`Cannot checkout remote ref ${ref}`)
+        }
+
+        await runGit(['checkout', '-B', localBranchName, ref], this.rootPath)
+        switched = true
+        await runGit(['branch', `--set-upstream-to=${ref}`, localBranchName], this.rootPath)
+      } else {
+        // Use git CLI — ziggit FFI only does tree checkout without switching HEAD.
+        // The worktree is clean while the auto-stash is held, so checkout can
+        // switch branches even when the user originally had staged files.
+        await runGit(['checkout', ref], this.rootPath)
+        switched = true
+      }
+    } catch (checkoutErr) {
+      if (autoStashSha) {
+        try {
+          await this.restoreCheckoutAutoStash(autoStashSha)
+        } catch (restoreErr) {
+          throw new Error(
+            `${switched ? `Switched to ${ref}, but checkout setup failed` : `Checkout of ${ref} failed`}: ${this.gitErrorDetail(checkoutErr)}\n`
+            + `The original changes could not be restored automatically and remain safe in stash ${autoStashSha.slice(0, 8)}: ${this.gitErrorDetail(restoreErr)}`,
+          )
+        }
+      }
+      throw checkoutErr
     }
 
-    // Use git CLI — ziggit FFI only does tree checkout without switching HEAD
-    // `-m` does a 3-way merge so uncommitted changes migrate to the target branch
-    await runGit(['checkout', '-m', ref], this.rootPath)
+    if (autoStashSha) {
+      try {
+        await this.restoreCheckoutAutoStash(autoStashSha)
+      } catch (restoreErr) {
+        throw new Error(
+          `Switched to ${ref}, but the original changes could not be restored automatically. `
+          + `They remain safe in stash ${autoStashSha.slice(0, 8)}: ${this.gitErrorDetail(restoreErr)}`,
+        )
+      }
+    }
   }
 
   async cherryPick(sha: string): Promise<{ message: string; headSha: string }> {

@@ -77,6 +77,33 @@ export const router = os.router({
     return session.getWorktreeChanges()
   }),
 
+  getStashes: os.getStashes.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    return session.getStashes()
+  }),
+
+  getStashDiff: os.getStashDiff.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    const diff = await session.getStashDiff(input.stashSha)
+    return { sha: input.stashSha, ...diff }
+  }),
+
+  getStashFileDiff: os.getStashFileDiff.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    return session.getStashFileDiff(input.stashSha, input.path, input.oldPath)
+  }),
+
+  stashAction: os.stashAction.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    const operation = input.action === 'create'
+      ? session.stash(input.message)
+      : input.action === 'apply'
+        ? session.applyStash(input.stashSha)
+        : session.dropStash(input.stashSha)
+    const result = await operation.catch(rethrowWithDetail)
+    return { ok: true, ...result }
+  }),
+
   stageAction: os.stageAction.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     switch (input.action) {
@@ -270,7 +297,7 @@ export const router = os.router({
               },
             })
           }
-          throw err
+          rethrowWithDetail(err)
         }
         break
       }
