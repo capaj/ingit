@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RepoSession } from './repo-session.js'
@@ -69,6 +69,58 @@ describe('RepoSession staging', () => {
     const unstaged = await session.unstageAll()
     expect(unstaged.staged).toEqual([])
     expect(paths(unstaged.unstaged)).toEqual(['another.txt', 'file.txt'])
+  })
+
+  test('discards all staged and unstaged changes to one file', async () => {
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nstaged\n')
+    await session.stageFiles(['file.txt'])
+    await Bun.write(join(repoDir, 'file.txt'), 'hello\nstaged\nunstaged\n')
+
+    const discarded = await session.discardFiles(['file.txt'])
+
+    expect(discarded.staged).toEqual([])
+    expect(discarded.unstaged).toEqual([])
+    expect(await Bun.file(join(repoDir, 'file.txt')).text()).toBe('hello\n')
+  })
+
+  test('discard removes untracked and staged new files', async () => {
+    await Bun.write(join(repoDir, 'untracked.txt'), 'untracked\n')
+    await Bun.write(join(repoDir, 'staged-new.txt'), 'staged\n')
+    await session.stageFiles(['staged-new.txt'])
+
+    const discarded = await session.discardFiles(['untracked.txt', 'staged-new.txt'])
+
+    expect(discarded.staged).toEqual([])
+    expect(discarded.unstaged).toEqual([])
+    expect(await Bun.file(join(repoDir, 'untracked.txt')).exists()).toBe(false)
+    expect(await Bun.file(join(repoDir, 'staged-new.txt')).exists()).toBe(false)
+  })
+
+  test('discard-all restores tracked files and removes untracked files', async () => {
+    await Bun.write(join(repoDir, 'file.txt'), 'changed\n')
+    await session.stageFiles(['file.txt'])
+    await Bun.write(join(repoDir, 'new.txt'), 'new\n')
+
+    const discarded = await session.discardAll()
+
+    expect(discarded.staged).toEqual([])
+    expect(discarded.unstaged).toEqual([])
+    expect(await Bun.file(join(repoDir, 'file.txt')).text()).toBe('hello\n')
+    expect(await Bun.file(join(repoDir, 'new.txt')).exists()).toBe(false)
+  })
+
+  test('discard restores both sides of a staged rename', async () => {
+    await rename(join(repoDir, 'file.txt'), join(repoDir, 'renamed.txt'))
+    const staged = await session.stageAll()
+    const renamed = staged.staged.find((file) => file.status === 'R')
+
+    expect(renamed).toMatchObject({ path: 'renamed.txt', oldPath: 'file.txt' })
+    const discarded = await session.discardFiles([renamed!.path, renamed!.oldPath!])
+
+    expect(discarded.staged).toEqual([])
+    expect(discarded.unstaged).toEqual([])
+    expect(await Bun.file(join(repoDir, 'file.txt')).text()).toBe('hello\n')
+    expect(await Bun.file(join(repoDir, 'renamed.txt')).exists()).toBe(false)
   })
 })
 

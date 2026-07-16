@@ -61,6 +61,8 @@ interface NativeTextInputDialogProps {
   label: string
   initialValue?: string
   confirmLabel: string
+  allowEmpty?: boolean
+  placeholder?: string
   onSubmit: (value: string) => void
   onClose: () => void
 }
@@ -71,6 +73,8 @@ export function NativeTextInputDialog({
   label,
   initialValue = '',
   confirmLabel,
+  allowEmpty = false,
+  placeholder,
   onSubmit,
   onClose,
 }: NativeTextInputDialogProps) {
@@ -98,7 +102,7 @@ export function NativeTextInputDialog({
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const trimmed = value.trim()
-    if (!trimmed) {
+    if (!allowEmpty && !trimmed) {
       inputRef.current?.focus()
       return
     }
@@ -124,7 +128,8 @@ export function NativeTextInputDialog({
             ref={inputRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            required
+            required={!allowEmpty}
+            placeholder={placeholder}
             autoComplete="off"
             spellCheck={false}
             style={{

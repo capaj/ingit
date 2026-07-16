@@ -115,6 +115,10 @@ export const router = os.router({
         return session.stageAll()
       case 'unstage-all':
         return session.unstageAll()
+      case 'discard':
+        return session.discardFiles(input.paths)
+      case 'discard-all':
+        return session.discardAll()
     }
   }),
 

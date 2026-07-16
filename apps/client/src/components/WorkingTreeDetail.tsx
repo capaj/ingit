@@ -4,6 +4,7 @@ import { useAppStore, worktreeDiffKey } from '../store'
 import { getCommitDetail } from '../api'
 import { RefActionButton } from './graph-canvas/ActionButtons'
 import { DiffView } from './DiffView'
+import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
 const STATUS_COLOR: Record<string, string> = {
   A: '#a6e3a1',
@@ -32,11 +33,13 @@ function FileRow({
   area,
   actionLabel,
   onAction,
+  onDiscard,
 }: {
   file: WorktreeFile
   area: WorktreeDiffArea
   actionLabel: string
   onAction: () => void
+  onDiscard: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const loadWorktreeFileDiff = useAppStore((s) => s.loadWorktreeFileDiff)
@@ -121,8 +124,9 @@ function FileRow({
           <span style={{ color: '#6c7086' }}>{dir}</span>
           <span style={{ color: '#cdd6f4' }}>{base}</span>
         </span>
-        <span onClick={(e) => e.stopPropagation()}>
+        <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
           <RefActionButton label={actionLabel} tone="neutral" size="compact" variant="ghost" onClick={onAction} />
+          <RefActionButton label="Discard" tone="danger" size="compact" variant="ghost" onClick={onDiscard} />
         </span>
       </div>
       {expanded && diffEntry && <DiffView entry={diffEntry} path={file.path} />}
@@ -136,16 +140,22 @@ function Section({
   area,
   bulkLabel,
   onBulk,
+  secondaryBulkLabel,
+  onSecondaryBulk,
   rowActionLabel,
   onRowAction,
+  onDiscard,
 }: {
   title: string
   files: WorktreeFile[]
   area: WorktreeDiffArea
   bulkLabel: string
   onBulk: () => void
+  secondaryBulkLabel?: string
+  onSecondaryBulk?: () => void
   rowActionLabel: string | ((file: WorktreeFile) => string)
   onRowAction: (file: WorktreeFile) => void
+  onDiscard: (file: WorktreeFile) => void
 }) {
   if (files.length === 0) return null
   return (
@@ -154,7 +164,18 @@ function Section({
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#a6adc8' }}>
           {title} <span style={{ color: '#6c7086' }}>({files.length})</span>
         </span>
-        <RefActionButton label={bulkLabel} tone="neutral" size="compact" variant="ghost" onClick={onBulk} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <RefActionButton label={bulkLabel} tone="neutral" size="compact" variant="ghost" onClick={onBulk} />
+          {secondaryBulkLabel && onSecondaryBulk && (
+            <RefActionButton
+              label={secondaryBulkLabel}
+              tone="neutral"
+              size="compact"
+              variant="ghost"
+              onClick={onSecondaryBulk}
+            />
+          )}
+        </div>
       </div>
       {files.map((file) => (
         <FileRow
@@ -163,6 +184,7 @@ function Section({
           area={area}
           actionLabel={typeof rowActionLabel === 'function' ? rowActionLabel(file) : rowActionLabel}
           onAction={() => onRowAction(file)}
+          onDiscard={() => onDiscard(file)}
         />
       ))}
     </div>
@@ -542,10 +564,22 @@ function OperationBanner({
 export function WorkingTreeDetail() {
   const changes = useAppStore((s) => s.worktreeChanges)
   const runStageAction = useAppStore((s) => s.runStageAction)
+  const createStash = useAppStore((s) => s.createStash)
+  const pendingMutation = useAppStore((s) => s.pendingMutation)
+  const [stashDialogOpen, setStashDialogOpen] = useState(false)
+  const [discardDialog, setDiscardDialog] = useState<{
+    title: string
+    message: string
+    paths: string[]
+    all: boolean
+  } | null>(null)
 
   const staged = changes?.staged ?? []
   const unstaged = changes?.unstaged ?? []
-  const total = staged.length + unstaged.length
+  const total = useMemo(
+    () => new Set([...staged, ...unstaged].map((file) => file.path)).size,
+    [staged, unstaged],
+  )
   const operation: InProgressOperationKind | null = changes?.mergeHeadShas?.length
     ? 'merge'
     : changes?.rebaseHeadSha
@@ -555,6 +589,30 @@ export function WorkingTreeDetail() {
     () => new Set(unstaged.filter((file) => file.status === 'U').map((file) => file.path)).size,
     [unstaged],
   )
+
+  const requestDiscardFile = (file: WorktreeFile) => {
+    setDiscardDialog({
+      title: 'Discard file changes?',
+      message: `Discard all staged and unstaged changes to “${file.path}”? This cannot be undone.`,
+      paths: file.oldPath ? [file.path, file.oldPath] : [file.path],
+      all: false,
+    })
+  }
+
+  const requestDiscardAll = () => {
+    setDiscardDialog({
+      title: 'Discard all changes?',
+      message: `Permanently discard changes in ${total} file${total === 1 ? '' : 's'}, including untracked files? This cannot be undone.`,
+      paths: [],
+      all: true,
+    })
+  }
+
+  const confirmDiscard = () => {
+    const request = discardDialog
+    setDiscardDialog(null)
+    if (request) void runStageAction(request.all ? 'discard-all' : 'discard', request.paths)
+  }
 
   return (
     <div
@@ -569,11 +627,46 @@ export function WorkingTreeDetail() {
         overflow: 'hidden',
       }}
     >
+      <NativeTextInputDialog
+        open={stashDialogOpen}
+        title="Stash changes"
+        label="Message (optional)"
+        placeholder="Describe these changes"
+        confirmLabel="Stash"
+        allowEmpty
+        onSubmit={(message) => {
+          setStashDialogOpen(false)
+          void createStash(message || undefined)
+        }}
+        onClose={() => setStashDialogOpen(false)}
+      />
+      <NativeConfirmDialog
+        open={!!discardDialog}
+        title={discardDialog?.title ?? ''}
+        message={discardDialog?.message ?? ''}
+        confirmLabel="Discard"
+        onConfirm={confirmDiscard}
+        onClose={() => setDiscardDialog(null)}
+      />
       <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #313244' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: '#cdd6f4' }}>Working tree</span>
-          {changes?.branch && (
-            <span style={{ fontSize: 12, color: '#89b4fa', fontFamily: 'monospace' }}>⎇ {changes.branch}</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: '#cdd6f4', flexShrink: 0 }}>Working tree</span>
+            {changes?.branch && (
+              <span style={{ fontSize: 12, color: '#89b4fa', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                ⎇ {changes.branch}
+              </span>
+            )}
+          </div>
+          {total > 0 && (
+            <RefActionButton
+              label="Discard all"
+              tone="danger"
+              size="compact"
+              variant="ghost"
+              disabled={pendingMutation}
+              onClick={requestDiscardAll}
+            />
           )}
         </div>
         <div style={{ fontSize: 11, color: '#6c7086', marginTop: 2 }}>
@@ -604,6 +697,7 @@ export function WorkingTreeDetail() {
               onBulk={() => runStageAction('unstage-all', [])}
               rowActionLabel="Unstage"
               onRowAction={(file) => runStageAction('unstage', [file.path])}
+              onDiscard={requestDiscardFile}
             />
             <Section
               title="Changes"
@@ -611,8 +705,11 @@ export function WorkingTreeDetail() {
               area="unstaged"
               bulkLabel="Stage all"
               onBulk={() => runStageAction('stage-all', [])}
+              secondaryBulkLabel="Stash"
+              onSecondaryBulk={() => setStashDialogOpen(true)}
               rowActionLabel={(file) => (file.status === 'U' ? 'Mark resolved' : 'Stage')}
               onRowAction={(file) => runStageAction('stage', [file.path])}
+              onDiscard={requestDiscardFile}
             />
           </>
         )}

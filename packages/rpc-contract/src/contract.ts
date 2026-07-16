@@ -96,7 +96,14 @@ export const WorktreeChanges = z.object({
   unstaged: z.array(WorktreeFile),
 })
 
-export const StageActionKind = z.enum(['stage', 'unstage', 'stage-all', 'unstage-all'])
+export const StageActionKind = z.enum([
+  'stage',
+  'unstage',
+  'stage-all',
+  'unstage-all',
+  'discard',
+  'discard-all',
+])
 
 export const WorktreeDiffArea = z.enum(['staged', 'unstaged'])
 

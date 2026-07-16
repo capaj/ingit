@@ -11,6 +11,7 @@ type ActionIconName =
   | 'rebase'
   | 'reset'
   | 'revert'
+  | 'stash'
   | 'tag'
   | 'uncommit'
 
@@ -26,6 +27,8 @@ function iconForLabel(label: string): ActionIconName {
   if (normalized.includes('fetch')) return 'fetch'
   if (normalized.includes('push')) return 'push'
   if (normalized.includes('delete')) return 'delete'
+  if (normalized.includes('discard')) return 'reset'
+  if (normalized.includes('stash')) return 'stash'
   if (normalized.includes('move')) return 'move'
   if (normalized.includes('reset')) return 'reset'
   if (normalized.includes('branch')) return 'branch'
@@ -135,6 +138,13 @@ function ActionIcon({ name, size = 14 }: { name: ActionIconName; size?: number }
         <>
           <path {...common} d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.7 2.7L3 8" />
           <path {...common} d="M3 3v5h5" />
+        </>
+      )}
+      {name === 'stash' && (
+        <>
+          <path {...common} d="M4 4h16v6H4z" />
+          <path {...common} d="M6 10v10h12V10" />
+          <path {...common} d="M9 14h6" />
         </>
       )}
       {name === 'tag' && (

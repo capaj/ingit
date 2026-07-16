@@ -344,7 +344,13 @@ export interface WorktreeChangesResponse {
   unstaged: WorktreeFile[]
 }
 
-export type StageActionKind = 'stage' | 'unstage' | 'stage-all' | 'unstage-all'
+export type StageActionKind =
+  | 'stage'
+  | 'unstage'
+  | 'stage-all'
+  | 'unstage-all'
+  | 'discard'
+  | 'discard-all'
 
 export type StashActionKind = 'create' | 'apply' | 'drop'
 

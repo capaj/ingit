@@ -75,7 +75,6 @@ export function App() {
     viewMode, setViewMode,
     worktreeSelected,
     worktreeChanges,
-    createStash,
     applyStash,
     dropStash,
     selectStash,
@@ -311,12 +310,8 @@ export function App() {
           refs={refs}
           stashes={stashes}
           onSelectRef={selectRef}
-          onCreateStash={createStash}
-          onApplyStash={applyStash}
           onSelectStash={selectStash}
           onSelectStashParent={(sha) => { void navigateTo(sha) }}
-          canStash={uncommittedFileCount(worktreeChanges) > 0}
-          stashBusy={pendingMutation}
           selectedStashSha={selectedStashSha}
           selectedSha={selectedSha}
           onClose={() => setRefsSidebarOpen(false)}

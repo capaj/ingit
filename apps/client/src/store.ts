@@ -1158,11 +1158,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         changes = await stageAction(repoId, action, paths)
       }
 
-      // A file's diff moves between the staged/unstaged areas, so drop the cache.
+      // A file's diff may move between areas or disappear, so drop the cache.
       set({ worktreeChanges: changes, worktreeFileDiffs: {} })
       return true
     } catch (err) {
-      get().showError('Staging action failed', err)
+      get().showError(action.startsWith('discard') ? 'Discard changes failed' : 'Staging action failed', err)
       return false
     }
   },

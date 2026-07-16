@@ -379,6 +379,45 @@ export class RepoSession {
     return this.getWorktreeChanges()
   }
 
+  /** Permanently restore paths to HEAD, removing additions that are not in HEAD. */
+  async discardFiles(paths: string[]): Promise<WorktreeChangesResponse> {
+    const requested = [...new Set(paths.filter((path) => path.length > 0))]
+    if (requested.length === 0) return this.getWorktreeChanges()
+
+    // Literal pathspecs prevent filenames containing glob metacharacters from
+    // causing changes in any neighboring files.
+    const pathspecs = requested.map((path) => `:(literal)${path}`)
+
+    // First put the index back at HEAD. Staged additions become untracked,
+    // while tracked files can then be restored from the reset index.
+    await runGit(['reset', '--quiet', 'HEAD', '--', ...pathspecs], this.rootPath)
+
+    const { stdout: trackedOutput } = await runGit(
+      ['ls-files', '-z', '--', ...pathspecs],
+      this.rootPath,
+    )
+    const trackedPaths = trackedOutput.split('\0').filter(Boolean)
+    if (trackedPaths.length > 0) {
+      await runGit(
+        ['restore', '--worktree', '--', ...trackedPaths.map((path) => `:(literal)${path}`)],
+        this.rootPath,
+      )
+    }
+
+    // Anything left under the requested paths is an untracked addition.
+    // Ignored files remain untouched.
+    await runGit(['clean', '-f', '-d', '--', ...pathspecs], this.rootPath)
+    return this.getWorktreeChanges()
+  }
+
+  /** Permanently discard every staged, unstaged, and untracked worktree change. */
+  async discardAll(): Promise<WorktreeChangesResponse> {
+    const changes = await this.getWorktreeChanges()
+    const paths = [...changes.staged, ...changes.unstaged]
+      .flatMap((file) => file.oldPath ? [file.path, file.oldPath] : [file.path])
+    return this.discardFiles(paths)
+  }
+
   /** Patch for a single worktree file, either its staged or its unstaged half. */
   async getWorktreeFileDiff(
     path: string,

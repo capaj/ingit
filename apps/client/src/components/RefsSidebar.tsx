@@ -1,16 +1,12 @@
-import { useRef, useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import type { RefSummary, StashSummary } from '@ingit/rpc-contract'
 
 interface RefsSidebarProps {
   refs: RefSummary[]
   stashes: StashSummary[]
   onSelectRef: (ref: RefSummary) => void
-  onCreateStash: (message?: string) => Promise<boolean>
-  onApplyStash: (stashSha: string) => Promise<boolean>
   onSelectStash: (stashSha: string) => void
   onSelectStashParent: (parentSha: string) => void
-  canStash: boolean
-  stashBusy?: boolean
   selectedStashSha?: string | null
   selectedSha?: string | null
   onClose: () => void
@@ -32,12 +28,8 @@ export function RefsSidebar({
   refs,
   stashes,
   onSelectRef,
-  onCreateStash,
-  onApplyStash,
   onSelectStash,
   onSelectStashParent,
-  canStash,
-  stashBusy = false,
   selectedStashSha,
   selectedSha,
   onClose,
@@ -47,10 +39,6 @@ export function RefsSidebar({
   const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({ head: true, remote: true, tag: true })
   const [filter, setFilter] = useState('')
   const [stashesExpanded, setStashesExpanded] = useState(false)
-  const [stashMessage, setStashMessage] = useState('')
-  const [creatingStash, setCreatingStash] = useState(false)
-  const [applyingSha, setApplyingSha] = useState<string | null>(null)
-  const stashMessageRef = useRef<HTMLInputElement>(null)
 
   const filterLower = filter.toLowerCase()
   const groups: Record<RefKind, RefSummary[]> = { head: [], remote: [], tag: [] }
@@ -61,36 +49,6 @@ export function RefsSidebar({
 
   function toggleGroup(kind: RefKind) {
     setCollapsed((prev) => ({ ...prev, [kind]: !prev[kind] }))
-  }
-
-  function openStashComposer() {
-    setStashesExpanded(true)
-    requestAnimationFrame(() => stashMessageRef.current?.focus())
-  }
-
-  async function handleCreateStash(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!canStash || stashBusy) return
-    setCreatingStash(true)
-    try {
-      const ok = await onCreateStash(stashMessage.trim() || undefined)
-      if (ok) {
-        setStashMessage('')
-        setStashesExpanded(true)
-      }
-    } finally {
-      setCreatingStash(false)
-    }
-  }
-
-  async function handleApplyStash(stashSha: string) {
-    if (stashBusy) return
-    setApplyingSha(stashSha)
-    try {
-      await onApplyStash(stashSha)
-    } finally {
-      setApplyingSha(null)
-    }
   }
 
   return (
@@ -222,26 +180,6 @@ export function RefsSidebar({
               {stashes.length}
             </span>
           </button>
-          <button
-            type="button"
-            onClick={openStashComposer}
-            disabled={!canStash || stashBusy}
-            title={canStash ? 'Stash all changes, including untracked files' : 'No changes to stash'}
-            aria-label="Stash changes"
-            style={{
-              width: 34,
-              border: 'none',
-              borderLeft: '1px solid #704752',
-              background: 'transparent',
-              color: canStash && !stashBusy ? '#f5e0dc' : '#8b626c',
-              cursor: canStash && !stashBusy ? 'pointer' : 'default',
-              fontFamily: 'inherit',
-              fontSize: 18,
-              lineHeight: 1,
-            }}
-          >
-            +
-          </button>
         </div>
 
         {stashesExpanded && (
@@ -254,7 +192,6 @@ export function RefsSidebar({
               <div>
                 {stashes.map((stash) => {
                   const display = stashDisplayMessage(stash.message)
-                  const applying = applyingSha === stash.sha
                   return (
                     <div
                       key={stash.sha}
@@ -300,29 +237,6 @@ export function RefsSidebar({
                             {stash.selector}{display.context ? ` · ${display.context}` : ''} · {formatStashDate(stash.createdAt)}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void handleApplyStash(stash.sha)
-                          }}
-                          disabled={stashBusy}
-                          title="Apply this stash and keep it in the list"
-                          style={{
-                            flexShrink: 0,
-                            padding: '3px 7px',
-                            border: '1px solid #b87b89',
-                            borderRadius: 4,
-                            background: '#311f2577',
-                            color: stashBusy ? '#8b626c' : '#f5c2e7',
-                            fontFamily: 'inherit',
-                            fontSize: 10,
-                            fontWeight: 700,
-                            cursor: stashBusy ? 'default' : 'pointer',
-                          }}
-                        >
-                          {applying ? 'Applying…' : 'Apply'}
-                        </button>
                       </div>
                       <button
                         type="button"
@@ -351,52 +265,6 @@ export function RefsSidebar({
                 })}
               </div>
             )}
-
-            <form
-              onSubmit={(event) => void handleCreateStash(event)}
-              style={{ display: 'flex', gap: 5, padding: '7px 8px 8px' }}
-            >
-              <input
-                ref={stashMessageRef}
-                value={stashMessage}
-                onChange={(event) => setStashMessage(event.target.value)}
-                disabled={!canStash || stashBusy}
-                placeholder="Message (optional)"
-                aria-label="Stash message"
-                style={{
-                  minWidth: 0,
-                  flex: 1,
-                  height: 27,
-                  padding: '0 7px',
-                  border: '1px solid #704752',
-                  borderRadius: 4,
-                  outline: 'none',
-                  background: '#311f25',
-                  color: '#f5e0dc',
-                  fontFamily: 'inherit',
-                  fontSize: 10.5,
-                  userSelect: 'text',
-                }}
-              />
-              <button
-                type="submit"
-                disabled={!canStash || stashBusy}
-                style={{
-                  flexShrink: 0,
-                  padding: '0 8px',
-                  border: '1px solid #b87b89',
-                  borderRadius: 4,
-                  background: canStash && !stashBusy ? '#f5c2e7' : '#704752',
-                  color: canStash && !stashBusy ? '#311f25' : '#a77b86',
-                  fontFamily: 'inherit',
-                  fontSize: 10,
-                  fontWeight: 800,
-                  cursor: canStash && !stashBusy ? 'pointer' : 'default',
-                }}
-              >
-                {creatingStash ? 'Stashing…' : 'Stash'}
-              </button>
-            </form>
           </div>
         )}
       </div>
