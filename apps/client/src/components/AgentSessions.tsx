@@ -132,7 +132,7 @@ export function AgentSessions() {
           {canInstallWindowCalls && (
             <div style={{ padding: '8px 8px 10px', borderBottom: '1px solid #313244', marginBottom: 4 }}>
               <div style={{ color: '#a6adc8', fontSize: 11, marginBottom: 6, lineHeight: 1.4 }}>
-                Focusing terminal windows needs the “Window Calls” GNOME&nbsp;Shell extension.
+                Focusing terminal windows needs the “Activate Window By Title” GNOME&nbsp;Shell extension.
               </div>
               <button
                 onClick={() => void install()}
@@ -164,7 +164,7 @@ export function AgentSessions() {
             const focusTitle = focusDisabled
               ? session.kind === 'terminal'
                 ? capabilities?.displayServer === 'wayland'
-                  ? "Can't focus terminal windows on Wayland — install the 'Window Calls' GNOME Shell extension"
+                  ? "Can't focus terminal windows on Wayland — install the 'Activate Window By Title' GNOME Shell extension"
                   : 'Can\'t focus terminal windows — install wmctrl'
                 : 'This session has no window to focus'
               : `Focus ${session.agent} window · ${agentSessionKindLabel(session)} (pid ${session.pid})`

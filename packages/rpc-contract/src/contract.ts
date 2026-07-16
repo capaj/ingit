@@ -157,8 +157,8 @@ export const FocusCapabilities = z.object({
   /** True when a terminal-window activation backend is available. */
   canFocusTerminals: z.boolean(),
   /**
-   * True when terminal focus is unavailable but installing the "Window Calls"
-   * GNOME Shell extension (via installWindowCalls) would enable it.
+   * True when terminal focus is unavailable but installing the GNOME window
+   * activation extension (via the legacy-named installWindowCalls RPC) would enable it.
    */
   canInstallWindowCalls: z.boolean(),
 })
@@ -489,15 +489,15 @@ export const contract = {
     }))
     .output(z.object({
       ok: z.boolean(),
-      /** How the focus was performed ('ide-cli', 'window-calls', 'wmctrl'). */
+      /** How the focus was performed ('ide-cli', 'activate-by-title', 'window-calls', 'wmctrl'). */
       method: z.string().optional(),
       error: z.string().optional(),
     })),
 
   /**
    * Prompt the user (via GNOME's native consent dialog) to install the
-   * "Window Calls" shell extension that terminal-window focusing needs on
-   * GNOME Wayland.
+   * "Activate Window By Title" shell extension that terminal-window focusing
+   * needs on GNOME Wayland. The RPC name is retained for compatibility.
    */
   installWindowCalls: oc
     .input(z.object({}))

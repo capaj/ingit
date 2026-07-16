@@ -334,7 +334,20 @@ export const router = os.router({
   }),
 
   focusAgentSession: os.focusAgentSession.handler(async ({ input }) => {
-    return focusAgentSession(input.pid, input.cwd)
+    const startedAt = performance.now()
+    console.info(`[agent-focus] request pid=${input.pid} cwd=${input.cwd ?? '(process cwd)'}`)
+    try {
+      const result = await focusAgentSession(input.pid, input.cwd)
+      const elapsedMs = Math.round(performance.now() - startedAt)
+      console.info(
+        `[agent-focus] result pid=${input.pid} ok=${result.ok} method=${result.method ?? 'none'} duration=${elapsedMs}ms${result.error ? ` error=${result.error}` : ''}`,
+      )
+      return result
+    } catch (err) {
+      const elapsedMs = Math.round(performance.now() - startedAt)
+      console.error(`[agent-focus] unhandled failure pid=${input.pid} duration=${elapsedMs}ms`, err)
+      throw err
+    }
   }),
 
   installWindowCalls: os.installWindowCalls.handler(async () => {

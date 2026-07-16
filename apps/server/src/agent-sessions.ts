@@ -608,6 +608,132 @@ async function commandExists(cmd: string): Promise<boolean> {
   }
 }
 
+/**
+ * AT-SPI can focus native Wayland GTK widgets without going through GNOME
+ * Shell. GNOME Terminal exposes each terminal tab as an accessible terminal
+ * widget whose process id is the gnome-terminal-server pid. The script walks
+ * only applications owned by the target process tree, then finds the unique
+ * title marker written to the session's tty below.
+ */
+const AT_SPI_FOCUS_SCRIPT = String.raw`
+const Atspi = imports.gi.Atspi;
+const GLib = imports.gi.GLib;
+const System = imports.system;
+
+const targetPids = new Set(
+  ARGV[0].split(',').map(Number).filter(Number.isFinite),
+);
+const marker = ARGV[1];
+
+try {
+  Atspi.init();
+  const desktop = Atspi.get_desktop(0);
+
+  function requestAndVerifyFocus(node) {
+    if (!node.grab_focus()) return false;
+    // grab_focus() only reports that the request was accepted. GNOME may
+    // still reject activation as focus stealing, so verify the resulting
+    // widget state before reporting success to the client.
+    for (let check = 0; check < 3; check++) {
+      GLib.usleep(50000);
+      if (node.get_state_set().contains(Atspi.StateType.FOCUSED)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function focusTerminalUnder(root) {
+    const queue = [root];
+    while (queue.length > 0) {
+      const node = queue.shift();
+      try {
+        if (node.get_role() === Atspi.Role.TERMINAL && requestAndVerifyFocus(node)) {
+          return true;
+        }
+        const childCount = node.get_child_count();
+        for (let index = 0; index < childCount; index++) {
+          queue.push(node.get_child_at_index(index));
+        }
+      } catch (_) {
+        // Accessible objects can disappear while a window is closing.
+      }
+    }
+    return false;
+  }
+
+  function focusMarkedWidget(root) {
+    const queue = [root];
+    let visited = 0;
+    while (queue.length > 0 && visited++ < 3000) {
+      const node = queue.shift();
+      try {
+        const name = node.get_name() || '';
+        const description = node.get_description() || '';
+        if (name.includes(marker) || description.includes(marker)) {
+          if (requestAndVerifyFocus(node)) return true;
+
+          // GNOME Terminal may expose an OSC title on its frame or tab label;
+          // those nodes cannot accept keyboard focus. Walk to the nearest tab
+          // or frame and focus the terminal widget contained by it instead.
+          let container = node;
+          while (container) {
+            const role = container.get_role();
+            if (role === Atspi.Role.PAGE_TAB || role === Atspi.Role.FRAME) break;
+            container = container.get_parent();
+          }
+          if (container && focusTerminalUnder(container)) return true;
+        }
+        const childCount = node.get_child_count();
+        for (let index = 0; index < childCount; index++) {
+          queue.push(node.get_child_at_index(index));
+        }
+      } catch (_) {
+        // Accessible objects can disappear while a window is closing.
+      }
+    }
+    return false;
+  }
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    GLib.usleep(120000);
+    for (let index = 0; index < desktop.get_child_count(); index++) {
+      const app = desktop.get_child_at_index(index);
+      try {
+        if (targetPids.has(app.get_process_id()) && focusMarkedWidget(app)) {
+          print('focused');
+          System.exit(0);
+        }
+      } catch (_) {
+        // An application may leave the accessibility bus during traversal.
+      }
+    }
+  }
+} catch (_) {
+  // A missing/disabled accessibility bus is simply an unavailable backend.
+}
+
+System.exit(1);
+`
+
+async function probeAtSpi(): Promise<boolean> {
+  if (process.platform !== 'linux') return false
+  try {
+    const [{ stdout }, hasGjs] = await Promise.all([
+      execFile('gdbus', [
+        'call', '--session',
+        '--dest', 'org.a11y.Bus',
+        '--object-path', '/org/a11y/bus',
+        '--method', 'org.a11y.Bus.GetAddress',
+      ]),
+      commandExists('gjs'),
+    ])
+    return hasGjs && stdout.includes('unix:')
+  } catch {
+    return false
+  }
+}
+
 const WINDOW_CALLS_ARGS = [
   'call', '--session',
   '--dest', 'org.gnome.Shell',
@@ -616,6 +742,13 @@ const WINDOW_CALLS_ARGS = [
 ]
 
 const WINDOW_CALLS_UUID = 'window-calls@domandoman.xyz'
+const ACTIVATE_BY_TITLE_UUID = 'activate-window-by-title@lucaswerkmeister.de'
+const ACTIVATE_BY_TITLE_ARGS = [
+  'call', '--session',
+  '--dest', 'org.gnome.Shell',
+  '--object-path', '/de/lucaswerkmeister/ActivateWindowByTitle',
+  '--method', 'de.lucaswerkmeister.ActivateWindowByTitle.activateByTitle',
+]
 const GNOME_EXTENSIONS_ARGS = [
   'call', '--session',
   '--dest', 'org.gnome.Shell',
@@ -663,26 +796,44 @@ async function probeWindowCalls(attempts = 3): Promise<boolean> {
   return false
 }
 
-async function getWindowCallsExtensionInfo(): Promise<WindowCallsExtensionInfo | null> {
+async function activateWindowByTitle(title: string): Promise<boolean> {
+  const { stdout } = await execFile('gdbus', [...ACTIVATE_BY_TITLE_ARGS, title])
+  return stdout.includes('(true,')
+}
+
+async function probeActivateByTitle(attempts = 3): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      // A unique nonexistent title makes this a side-effect-free endpoint probe.
+      await activateWindowByTitle(`ingit-window-probe-${process.pid}-${Date.now()}`)
+      return true
+    } catch {
+      if (attempt + 1 < attempts) await sleep(100)
+    }
+  }
+  return false
+}
+
+async function getExtensionInfo(uuid: string): Promise<WindowCallsExtensionInfo | null> {
   try {
     const { stdout } = await execFile('gdbus', [
       ...GNOME_EXTENSIONS_ARGS,
       'org.gnome.Shell.Extensions.GetExtensionInfo',
-      WINDOW_CALLS_UUID,
+      uuid,
     ])
-    return parseWindowCallsExtensionInfo(stdout, WINDOW_CALLS_UUID)
+    return parseWindowCallsExtensionInfo(stdout, uuid)
   } catch {
     return null
   }
 }
 
-async function setWindowCallsEnabled(enabled: boolean): Promise<boolean> {
+async function setExtensionEnabled(uuid: string, enabled: boolean): Promise<boolean> {
   try {
     const method = enabled ? 'EnableExtension' : 'DisableExtension'
     const { stdout } = await execFile('gdbus', [
       ...GNOME_EXTENSIONS_ARGS,
       `org.gnome.Shell.Extensions.${method}`,
-      WINDOW_CALLS_UUID,
+      uuid,
     ])
     return stdout.includes('true')
   } catch {
@@ -698,9 +849,17 @@ async function repairWindowCalls(info: WindowCallsExtensionInfo): Promise<boolea
   // When GNOME thinks it is enabled but its D-Bus object is absent, toggle it
   // cleanly. This calls the old instance's disable() before exporting a new
   // object and avoids InstallRemoteExtension's duplicate-export failure.
-  if (info.enabled) await setWindowCallsEnabled(false)
-  if (!await setWindowCallsEnabled(true)) return false
+  if (info.enabled) await setExtensionEnabled(WINDOW_CALLS_UUID, false)
+  if (!await setExtensionEnabled(WINDOW_CALLS_UUID, true)) return false
   return probeWindowCalls(8)
+}
+
+async function repairActivateByTitle(info: WindowCallsExtensionInfo): Promise<boolean> {
+  if (!info.installed) return false
+  if (await probeActivateByTitle(1)) return true
+  if (info.enabled) await setExtensionEnabled(ACTIVATE_BY_TITLE_UUID, false)
+  if (!await setExtensionEnabled(ACTIVATE_BY_TITLE_UUID, true)) return false
+  return probeActivateByTitle(8)
 }
 
 /** X11/XWayland windows via wmctrl. Blind to native Wayland windows. */
@@ -726,6 +885,45 @@ interface FocusTarget {
 /** Set the terminal's title through its own pty (OSC 2). */
 async function setTtyTitle(tty: string, title: string): Promise<void> {
   await writeFile(tty, `\x1b]2;${title}\x07`)
+}
+
+/** Focus a terminal widget through the desktop accessibility bus. */
+async function focusViaAtSpi(pids: Set<number>, target: FocusTarget): Promise<boolean> {
+  if (!target.tty || pids.size === 0) return false
+  const marker = `ingit-focus-${process.pid}-${target.tty.replace(/\D/g, '')}`
+  try {
+    await setTtyTitle(target.tty, marker)
+    const { stdout } = await execFile('gjs', [
+      '-c', AT_SPI_FOCUS_SCRIPT, [...pids].join(','), marker,
+    ], { timeout: 4_000 })
+    return stdout.includes('focused')
+  } catch (err) {
+    const processError = err as Error & { stdout?: string; stderr?: string }
+    const detail = processError.stderr?.trim().split('\n').at(-1)
+      ?? processError.message.split('\n')[0]
+    console.warn(`[agent-focus] AT-SPI failed for ${target.tty}: ${detail}`)
+    return false
+  } finally {
+    setTtyTitle(target.tty, basename(target.cwd)).catch(() => {})
+  }
+}
+
+/** Activate the exact terminal window through GNOME Shell using an OSC marker. */
+async function focusViaActivateByTitle(target: FocusTarget): Promise<boolean> {
+  if (!target.tty) return false
+  const marker = `ingit-focus-${process.pid}-${target.tty.replace(/\D/g, '')}`
+  try {
+    await setTtyTitle(target.tty, marker)
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await sleep(120)
+      if (await activateWindowByTitle(marker)) return true
+    }
+    return false
+  } catch {
+    return false
+  } finally {
+    setTtyTitle(target.tty, basename(target.cwd)).catch(() => {})
+  }
 }
 
 /**
@@ -803,19 +1001,21 @@ async function focusViaWindowCalls(pids: Set<number>, target: FocusTarget): Prom
 /** Try each backend to raise a window owned by any of `pids`. */
 async function focusWindowOfPids(pids: Set<number>, target: FocusTarget): Promise<string | null> {
   if (process.platform !== 'linux') return null
+  if (target.tty && await focusViaActivateByTitle(target)) return 'activate-by-title'
   try {
     if (await focusViaWindowCalls(pids, target)) return 'window-calls'
   } catch {
     // The extension can be installed/enabled while its D-Bus export is stale
     // (notably after GNOME tried to reinstall an already-active copy). Repair
     // it only in response to an explicit focus request, then retry once.
-    const info = await getWindowCallsExtensionInfo()
+    const info = await getExtensionInfo(WINDOW_CALLS_UUID)
     if (info?.installed && await repairWindowCalls(info)) {
       try {
         if (await focusViaWindowCalls(pids, target)) return 'window-calls'
       } catch { /* fall through */ }
     }
   }
+  if (target.tty && await focusViaAtSpi(pids, target)) return 'at-spi'
   try {
     if (await focusViaWmctrl(pids)) return 'wmctrl'
   } catch { /* fall through */ }
@@ -828,30 +1028,40 @@ async function focusWindowOfPids(pids: Set<number>, target: FocusTarget): Promis
 
 interface ProbedCapabilities {
   displayServer: string
+  hasAtSpi: boolean
+  hasActivateByTitle: boolean
   hasWmctrl: boolean
   hasWindowCalls: boolean
+  activateByTitleInfo: WindowCallsExtensionInfo | null
   windowCallsInfo: WindowCallsExtensionInfo | null
   ideClis: Map<string, boolean>
 }
 
-// Tool presence on PATH won't change mid-run, but the Window Calls GNOME
-// extension can be installed while we're running — probe that one fresh so a
-// just-installed extension works without a server restart.
-let staticCapsPromise: Promise<Omit<ProbedCapabilities, 'hasWindowCalls' | 'windowCallsInfo'>> | null = null
+// Tool presence on PATH won't change mid-run, but GNOME extensions can be
+// installed while we're running — probe their endpoints fresh so a newly
+// installed activation backend works without a server restart.
+let staticCapsPromise: Promise<Omit<
+  ProbedCapabilities,
+  'hasActivateByTitle' | 'activateByTitleInfo' | 'hasWindowCalls' | 'windowCallsInfo'
+>> | null = null
 
 async function getCapabilities(): Promise<ProbedCapabilities> {
   if (process.platform === 'win32') {
     return {
       displayServer: 'windows',
+      hasAtSpi: false,
+      hasActivateByTitle: false,
       hasWmctrl: false,
       hasWindowCalls: false,
+      activateByTitleInfo: null,
       windowCallsInfo: null,
       ideClis: new Map(),
     }
   }
 
   staticCapsPromise ??= (async () => {
-    const [hasWmctrl, ideCliChecks] = await Promise.all([
+    const [hasAtSpi, hasWmctrl, ideCliChecks] = await Promise.all([
+      probeAtSpi(),
       process.platform === 'darwin' ? false : commandExists('wmctrl'),
       Promise.all(IDE_MARKERS.map(async (m) => [m.cli, await commandExists(m.cli)] as const)),
     ])
@@ -859,22 +1069,35 @@ async function getCapabilities(): Promise<ProbedCapabilities> {
       displayServer: process.platform === 'darwin'
         ? 'aqua'
         : process.env.XDG_SESSION_TYPE ?? 'unknown',
+      hasAtSpi,
       hasWmctrl,
       ideClis: new Map(ideCliChecks),
     }
   })()
-  const [staticCaps, hasWindowCalls] = await Promise.all([
+  const [staticCaps, hasActivateByTitle, hasWindowCalls] = await Promise.all([
     staticCapsPromise,
+    process.platform === 'darwin' ? false : probeActivateByTitle(),
     process.platform === 'darwin'
       ? false
       : probeWindowCalls(),
   ])
+  const activateByTitleInfo = process.platform === 'darwin'
+    ? null
+    : hasActivateByTitle
+      ? { installed: true, enabled: true }
+      : await getExtensionInfo(ACTIVATE_BY_TITLE_UUID)
   const windowCallsInfo = process.platform === 'darwin'
     ? null
     : hasWindowCalls
       ? { installed: true, enabled: true }
-      : await getWindowCallsExtensionInfo()
-  return { ...staticCaps, hasWindowCalls, windowCallsInfo }
+      : await getExtensionInfo(WINDOW_CALLS_UUID)
+  return {
+    ...staticCaps,
+    hasActivateByTitle,
+    activateByTitleInfo,
+    hasWindowCalls,
+    windowCallsInfo,
+  }
 }
 
 function ideCliFor(ide: string): string | null {
@@ -893,10 +1116,12 @@ export async function listAgentSessions(): Promise<{
   // On Wayland wmctrl only reaches XWayland windows — modern terminals are
   // native Wayland, so don't advertise focus support from wmctrl alone there.
   const isGnome = (process.env.XDG_CURRENT_DESKTOP ?? '').toLowerCase().includes('gnome')
-  const windowCalls = assessWindowCalls(caps.hasWindowCalls, caps.windowCallsInfo, isGnome)
-  const canFocusTerminals = windowCalls.canUseOrRepair
+  const activateByTitle = assessWindowCalls(
+    caps.hasActivateByTitle, caps.activateByTitleInfo, isGnome)
+  const canFocusTerminals = caps.hasActivateByTitle
+    || caps.hasWindowCalls
     || (caps.hasWmctrl && caps.displayServer !== 'wayland')
-  const canInstallWindowCalls = windowCalls.canInstall
+  const canInstallWindowCalls = activateByTitle.canInstall
 
   const cpuByPid = new Map(
     [...procs.map(({ info }) => info), ...codexAppServers].map((info) => [info.pid, info.cpuTicks]))
@@ -975,30 +1200,30 @@ export async function listAgentSessions(): Promise<{
 }
 
 /**
- * Ask GNOME Shell to install the Window Calls extension. Shell shows its own
+ * Ask GNOME Shell to install Activate Window By Title. Shell shows its own
  * consent dialog, so this blocks until the user answers it. The extension
  * loads immediately on approval — no shell restart or re-login needed.
  */
 export async function installWindowCalls(): Promise<{ ok: boolean; error?: string }> {
   try {
-    const info = await getWindowCallsExtensionInfo()
+    const info = await getExtensionInfo(ACTIVATE_BY_TITLE_UUID)
     if (info?.installed) {
-      if (await repairWindowCalls(info)) return { ok: true }
-      return { ok: false, error: 'Window Calls is installed but GNOME could not activate it' }
+      if (await repairActivateByTitle(info)) return { ok: true }
+      return { ok: false, error: 'Activate Window By Title is installed but GNOME could not activate it' }
     }
     if (info === null) {
-      return { ok: false, error: 'Could not determine whether Window Calls is already installed' }
+      return { ok: false, error: 'Could not determine whether the window activation extension is installed' }
     }
 
     const { stdout } = await execFile('gdbus', [
       ...GNOME_EXTENSIONS_ARGS, 'org.gnome.Shell.Extensions.InstallRemoteExtension',
-      WINDOW_CALLS_UUID,
+      ACTIVATE_BY_TITLE_UUID,
     ], { timeout: 120_000 })
     const result = parseGVariantString(stdout)
     if (result === 'successful') {
-      return await probeWindowCalls(8)
+      return await probeActivateByTitle(8)
         ? { ok: true }
-        : { ok: false, error: 'Window Calls was installed but its D-Bus endpoint did not start' }
+        : { ok: false, error: 'Activate Window By Title was installed but its D-Bus endpoint did not start' }
     }
     return {
       ok: false,
@@ -1108,10 +1333,10 @@ export async function focusAgentSession(pid: number, cwdOverride?: string): Prom
     ok: false,
     error: process.platform === 'darwin'
       ? 'Terminal window focusing is not yet implemented on macOS'
-      : caps.hasWindowCalls || caps.windowCallsInfo?.installed || caps.hasWmctrl
-      ? 'No window found for this session (terminal may be on another display)'
+      : caps.hasActivateByTitle || caps.hasAtSpi || caps.hasWindowCalls || caps.hasWmctrl
+      ? 'No matching terminal window found for this session'
       : caps.displayServer === 'wayland'
-        ? "No window-activation backend. Install the 'Window Calls' GNOME Shell extension (extensions.gnome.org/extension/4724)."
+        ? "No window-activation backend. Install the 'Activate Window By Title' GNOME Shell extension (extensions.gnome.org/extension/5021)."
         : 'No window-activation backend. Install wmctrl.',
   }
 }
