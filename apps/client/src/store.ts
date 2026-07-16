@@ -17,6 +17,8 @@ import type {
   WorktreeDiffArea,
   InProgressOperationKind,
   WorktreeSummary,
+  StashSummary,
+  StashDiffResponse,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -39,6 +41,12 @@ import {
   refAction,
   getReflog,
   getWorktreeChanges,
+  getStashes,
+  getStashDiff,
+  getStashFileDiff,
+  createStash as createStashApi,
+  applyStash as applyStashApi,
+  dropStash as dropStashApi,
   stageAction,
   getWorktreeFileDiff,
   getCommitFileDiff,
@@ -224,7 +232,13 @@ function fetchRefsAndHistory(repoId: string): Promise<[RefSummary[], HistoryWind
   ])
 }
 
-function fetchRepositoryState(repoId: string): Promise<[RefSummary[], HistoryWindowResponse, WorktreeChangesResponse, WorktreeSummary[]]> {
+function fetchRepositoryState(repoId: string): Promise<[
+  RefSummary[],
+  HistoryWindowResponse,
+  WorktreeChangesResponse,
+  WorktreeSummary[],
+  StashSummary[],
+]> {
   return Promise.all([
     getRefs(repoId),
     queryHistory(repoId, {
@@ -238,6 +252,7 @@ function fetchRepositoryState(repoId: string): Promise<[RefSummary[], HistoryWin
     }),
     getWorktreeChanges(repoId),
     getWorktrees(repoId),
+    getStashes(repoId),
   ])
 }
 
@@ -359,6 +374,10 @@ export function commitFileDiffKey(sha: string, path: string): string {
   return `${sha}:${path}`
 }
 
+export function stashFileDiffKey(sha: string, path: string): string {
+  return `${sha}:${path}`
+}
+
 interface AppState {
   status: AppStatus
   repoId: string | null
@@ -369,6 +388,10 @@ interface AppState {
   discoveredFolder: string | null
   discoveredRepos: string[]
   refs: RefSummary[]
+  stashes: StashSummary[]
+  selectedStashSha: string | null
+  stashDiff: StashDiffResponse | null
+  stashFileDiffs: Record<string, WorktreeDiffEntry>
   worktrees: WorktreeSummary[]
   historyWindow: HistoryWindowResponse | null
   viewMode: ViewMode
@@ -412,6 +435,14 @@ interface AppState {
   reloadFromServer: () => Promise<void>
   loadWorktrees: () => Promise<void>
   loadWorktreeChanges: () => Promise<void>
+  /** Stash all tracked and untracked changes. */
+  createStash: (message?: string) => Promise<boolean>
+  /** Apply a stash while keeping it in the stash list. */
+  applyStash: (stashSha: string) => Promise<boolean>
+  /** Permanently remove a stash. */
+  dropStash: (stashSha: string) => Promise<boolean>
+  selectStash: (stashSha: string) => void
+  loadStashFileDiff: (stashSha: string, file: ChangedPath) => Promise<void>
   selectWorktree: () => void
   /** Run a staging action and report whether it succeeded. */
   runStageAction: (action: StageActionKind, paths: string[]) => Promise<boolean>
@@ -462,6 +493,10 @@ async function openRepoByPathImpl(
     currentWorktreePath: null,
     totalCommitCount: 0,
     refs: [],
+    stashes: [],
+    selectedStashSha: null,
+    stashDiff: null,
+    stashFileDiffs: {},
     worktrees: [],
     historyWindow: null,
     selectedSha: null,
@@ -489,7 +524,7 @@ async function openRepoByPathImpl(
     const res = await openRepo({ path })
     if (requestId !== repoOpenRequestId) return
 
-    const [refs, hist, worktrees] = await Promise.all([
+    const [refs, hist, worktrees, stashes] = await Promise.all([
       getRefs(res.repoId),
       queryHistory(res.repoId, {
         repoId: res.repoId,
@@ -501,6 +536,7 @@ async function openRepoByPathImpl(
         topoOrder: true,
       }),
       getWorktrees(res.repoId),
+      getStashes(res.repoId),
     ])
     if (requestId !== repoOpenRequestId) return
 
@@ -519,6 +555,7 @@ async function openRepoByPathImpl(
       recentRepos: prependRecentRepo(get().recentRepos, res.currentWorktreePath),
       githubUrl: res.githubUrl,
       refs,
+      stashes,
       worktrees,
       historyWindow: hist,
       commitAuthorAvatars: {},
@@ -642,6 +679,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   discoveredFolder: null,
   discoveredRepos: [],
   refs: [],
+  stashes: [],
+  selectedStashSha: null,
+  stashDiff: null,
+  stashFileDiffs: {},
   worktrees: [],
   historyWindow: null,
   viewMode: 'history',
@@ -708,8 +749,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       let hist: HistoryWindowResponse
       let changes: WorktreeChangesResponse
       let worktrees: WorktreeSummary[]
+      let stashes: StashSummary[]
       try {
-        [refs, hist, changes, worktrees] = await fetchRepositoryState(repoId)
+        [refs, hist, changes, worktrees, stashes] = await fetchRepositoryState(repoId)
       } catch (err) {
         if (isSessionError(err) || isConnectionLostError(err)) {
           const res = await openRepo({ path: repoPath })
@@ -720,6 +762,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           hist = fresh[1]
           changes = fresh[2]
           worktrees = fresh[3]
+          stashes = fresh[4]
         } else {
           throw err
         }
@@ -727,6 +770,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set((s) => ({
         refs,
+        stashes,
+        selectedStashSha: s.selectedStashSha && stashes.some((stash) => stash.sha === s.selectedStashSha)
+          ? s.selectedStashSha
+          : null,
+        stashDiff: s.selectedStashSha && stashes.some((stash) => stash.sha === s.selectedStashSha)
+          ? s.stashDiff
+          : null,
+        stashFileDiffs: s.selectedStashSha && stashes.some((stash) => stash.sha === s.selectedStashSha)
+          ? s.stashFileDiffs
+          : {},
         worktrees,
         historyWindow: hist,
         totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
@@ -774,6 +827,163 @@ export const useAppStore = create<AppState>((set, get) => ({
       }))
     } catch (err) {
       console.error('Failed to load worktree changes:', err)
+    }
+  },
+
+  createStash: async (message) => {
+    const { repoId } = get()
+    if (!repoId || get().pendingMutation) return false
+
+    set({ pendingMutation: true })
+    try {
+      const result = await withTimeout(
+        createStashApi(repoId, message?.trim() || undefined),
+        MUTATION_TIMEOUT_MS,
+      )
+      if (get().repoId !== repoId) return false
+      set((s) => ({
+        pendingMutation: false,
+        stashes: result.stashes,
+        worktreeChanges: result.changes,
+        worktreeFileDiffs: {},
+        worktreeSelected: worktreeFileCount(result.changes) > 0
+          ? s.worktreeSelected
+          : false,
+      }))
+      return true
+    } catch (err) {
+      if (get().repoId === repoId) set({ pendingMutation: false })
+      get().showError('Stash failed', err)
+      return false
+    }
+  },
+
+  applyStash: async (stashSha) => {
+    const { repoId } = get()
+    if (!repoId || get().pendingMutation) return false
+
+    set({ pendingMutation: true })
+    try {
+      const result = await withTimeout(applyStashApi(repoId, stashSha), MUTATION_TIMEOUT_MS)
+      if (get().repoId !== repoId) return false
+      set({
+        pendingMutation: false,
+        stashes: result.stashes,
+        selectedStashSha: null,
+        stashDiff: null,
+        stashFileDiffs: {},
+        worktreeChanges: result.changes,
+        worktreeFileDiffs: {},
+        worktreeSelected: worktreeFileCount(result.changes) > 0,
+      })
+      return true
+    } catch (err) {
+      // A conflicted `stash apply` can update the index and worktree even
+      // though Git exits non-zero. Refresh both panels before surfacing it.
+      try {
+        const [stashes, changes] = await Promise.all([
+          getStashes(repoId),
+          getWorktreeChanges(repoId),
+        ])
+        if (get().repoId === repoId) {
+          set({
+            pendingMutation: false,
+            stashes,
+            selectedStashSha: null,
+            stashDiff: null,
+            stashFileDiffs: {},
+            worktreeChanges: changes,
+            worktreeFileDiffs: {},
+            worktreeSelected: worktreeFileCount(changes) > 0,
+          })
+        }
+      } catch {
+        if (get().repoId === repoId) set({ pendingMutation: false })
+      }
+      get().showError('Apply stash failed', err)
+      return false
+    }
+  },
+
+  dropStash: async (stashSha) => {
+    const { repoId } = get()
+    if (!repoId || get().pendingMutation) return false
+
+    set({ pendingMutation: true })
+    try {
+      const result = await withTimeout(dropStashApi(repoId, stashSha), MUTATION_TIMEOUT_MS)
+      if (get().repoId !== repoId) return false
+      set((s) => ({
+        pendingMutation: false,
+        stashes: result.stashes,
+        worktreeChanges: result.changes,
+        selectedStashSha: s.selectedStashSha === stashSha ? null : s.selectedStashSha,
+        stashDiff: s.selectedStashSha === stashSha ? null : s.stashDiff,
+        stashFileDiffs: s.selectedStashSha === stashSha ? {} : s.stashFileDiffs,
+      }))
+      return true
+    } catch (err) {
+      if (get().repoId === repoId) set({ pendingMutation: false })
+      get().showError('Drop stash failed', err)
+      return false
+    }
+  },
+
+  selectStash: (stashSha) => {
+    const { repoId } = get()
+    set({
+      selectedStashSha: stashSha,
+      stashDiff: null,
+      stashFileDiffs: {},
+      worktreeSelected: false,
+      selectedSha: null,
+      selectedRefName: null,
+      commitDetail: null,
+      commitDiff: null,
+      commitPRs: [],
+      commitFileDiffs: {},
+      mergePreview: null,
+    })
+    if (!repoId) return
+
+    getStashDiff(repoId, stashSha).then((diff: StashDiffResponse) => {
+      if (get().repoId === repoId && get().selectedStashSha === stashSha) {
+        set({ stashDiff: diff })
+      }
+    }).catch((err: unknown) => {
+      if (get().repoId === repoId && get().selectedStashSha === stashSha) {
+        get().showError('Load stash details failed', err)
+      }
+    })
+  },
+
+  loadStashFileDiff: async (stashSha, file) => {
+    const { repoId } = get()
+    if (!repoId) return
+    const key = stashFileDiffKey(stashSha, file.path)
+    const existing = get().stashFileDiffs[key]
+    if (existing && (existing.loading || existing.patchText !== undefined)) return
+    set((s) => ({ stashFileDiffs: { ...s.stashFileDiffs, [key]: { loading: true } } }))
+    try {
+      const res = await getStashFileDiff(repoId, stashSha, file.path, file.oldPath)
+      if (get().repoId !== repoId || get().selectedStashSha !== stashSha) return
+      set((s) => ({
+        stashFileDiffs: {
+          ...s.stashFileDiffs,
+          [key]: { loading: false, patchText: res.patchText, isBinary: res.isBinary },
+        },
+      }))
+    } catch (err) {
+      if (get().repoId !== repoId || get().selectedStashSha !== stashSha) return
+      set((s) => ({
+        stashFileDiffs: {
+          ...s.stashFileDiffs,
+          [key]: {
+            loading: false,
+            error: err instanceof Error ? err.message : 'Failed to load diff',
+          },
+        },
+      }))
     }
   },
 
@@ -917,6 +1127,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectWorktree: () => {
     set({
       worktreeSelected: true,
+      selectedStashSha: null,
+      stashDiff: null,
+      stashFileDiffs: {},
       selectedSha: null,
       selectedRefName: null,
       commitDetail: null,
@@ -1070,6 +1283,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       currentWorktreePath: null,
       totalCommitCount: 0,
       refs: [],
+      stashes: [],
+      selectedStashSha: null,
+      stashDiff: null,
+      stashFileDiffs: {},
       worktrees: [],
       historyWindow: null,
       selectedSha: null,
@@ -1128,6 +1345,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectCommit: (sha) => {
     set({
       selectedSha: sha,
+      selectedStashSha: null,
+      stashDiff: null,
+      stashFileDiffs: {},
       worktreeSelected: false,
       scrollToSha: null,
       scrollToKey: get().scrollToKey,
@@ -1165,6 +1385,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { repoId } = get()
     set({
       selectedSha: null,
+      selectedStashSha: null,
+      stashDiff: null,
+      stashFileDiffs: {},
       worktreeSelected: false,
       selectedRefName: refName,
       commitDetail: null,
@@ -1185,6 +1408,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearGraphRefSelection: () => {
     set({
       selectedSha: null,
+      selectedStashSha: null,
+      stashDiff: null,
+      stashFileDiffs: {},
       worktreeSelected: false,
       selectedRefName: null,
       commitDetail: null,
@@ -1212,12 +1438,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const loaded = historyWindow?.rows.some(r => r.sha === sha)
     if (loaded) {
       set((s) => ({
+        viewMode: 'history',
         selectedSha: sha,
+        selectedStashSha: null,
+        stashDiff: null,
+        stashFileDiffs: {},
+        selectedRefName: null,
+        worktreeSelected: false,
         scrollToSha: sha,
         scrollToKey: s.scrollToKey + 1,
         commitDetail: null,
         commitDiff: null,
+        commitPRs: [],
         commitFileDiffs: {},
+        mergePreview: null,
       }))
     } else if (repoId) {
       // Load enough history from --all to include the target SHA.
@@ -1238,13 +1472,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           })
           found = result.rows.some((r: CommitRow) => r.sha === sha || r.sha.startsWith(sha))
           set((s) => ({
+            viewMode: 'history',
             historyWindow: found ? result : mergeHistory(s.historyWindow, result),
             selectedSha: sha,
+            selectedStashSha: null,
+            stashDiff: null,
+            stashFileDiffs: {},
+            selectedRefName: null,
+            worktreeSelected: false,
             scrollToSha: found ? sha : null,
             scrollToKey: found ? s.scrollToKey + 1 : s.scrollToKey,
             commitDetail: null,
             commitDiff: null,
+            commitPRs: [],
             commitFileDiffs: {},
+            mergePreview: null,
           }))
           if (!found && !result.hasMoreAfter) break // no more history
         } catch (err) {
@@ -1252,8 +1494,47 @@ export const useAppStore = create<AppState>((set, get) => ({
           break
         }
       }
+
+      // A stash can outlive a branch rewrite, leaving its parent unreachable
+      // from --all once refs/stash is excluded from the normal graph. Anchor a
+      // temporary history projection directly at the commit in that case.
       if (!found) {
-        console.warn(`Commit ${sha} not found in reachable history`)
+        try {
+          const result = await queryHistory(repoId, {
+            repoId,
+            scope: { kind: 'all' },
+            anchor: { kind: 'sha', value: sha },
+            beforeRows: 0,
+            afterRows: INITIAL_ROWS,
+            firstParent: false,
+            topoOrder: true,
+          })
+          found = result.rows.some((row: CommitRow) => row.sha === sha || row.sha.startsWith(sha))
+          if (found) {
+            set((s) => ({
+              viewMode: 'history',
+              historyWindow: result,
+              selectedSha: sha,
+              selectedStashSha: null,
+              stashDiff: null,
+              stashFileDiffs: {},
+              selectedRefName: null,
+              worktreeSelected: false,
+              scrollToSha: sha,
+              scrollToKey: s.scrollToKey + 1,
+              commitDetail: null,
+              commitDiff: null,
+              commitPRs: [],
+              commitFileDiffs: {},
+              mergePreview: null,
+            }))
+          }
+        } catch (err) {
+          console.error('Failed to load history anchored at commit:', err)
+        }
+      }
+      if (!found) {
+        console.warn(`Commit ${sha} not found in history`)
       }
     }
     // Also load detail
@@ -1340,9 +1621,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         try {
           await refAction(repoId, action, refName, sha, force)
         } catch (err) {
-          // Ref actions are idempotent, so they are also safe to retry after
-          // the connection dropped mid-call (e.g. dev server restart).
-          if (isSessionError(err) || isConnectionLostError(err)) {
+          // Most ref actions are safe to retry after the connection dropped.
+          // Checkout may be between its temporary stash and restore phases,
+          // so retrying could strand that stash; reconcile filesystem state
+          // in the outer catch instead.
+          if (action !== 'checkout' && (isSessionError(err) || isConnectionLostError(err))) {
             const res = await openRepo({ path: repoPath })
             repoId = res.repoId
             set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
@@ -1353,7 +1636,60 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       })(), MUTATION_TIMEOUT_MS)
     } catch (err) {
-      set({ ...snapshot, pendingMutation: false })
+      if (action === 'checkout') {
+        try {
+          // Checkout can succeed before the temporary stash conflicts while
+          // being restored. Reconcile the real branch/worktree instead of
+          // rolling the optimistic graph back to a branch Git already left.
+          if (isSessionError(err) || isConnectionLostError(err)) {
+            const reopened = await openRepo({ path: repoPath })
+            repoId = reopened.repoId
+            set({
+              repoId,
+              githubUrl: reopened.githubUrl,
+              totalCommitCount: reopened.totalCommitCount,
+            })
+          }
+          const [refs, hist, changes, worktrees, stashes] = await fetchRepositoryState(repoId)
+          const previousCurrent = snapshot.refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+          const current = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+          const moved = current?.shortName !== previousCurrent?.shortName
+            || current?.targetSha !== previousCurrent?.targetSha
+          const currentSha = current?.targetSha ?? changes.headSha
+
+          set((s) => ({
+            ...(moved
+              ? {
+                  selectedSha: currentSha,
+                  selectedRefName: null,
+                  scrollToSha: currentSha,
+                  scrollToKey: s.scrollToKey + 1,
+                  commitDetail: null,
+                  commitDiff: null,
+                  commitPRs: [],
+                  commitFileDiffs: {},
+                  mergePreview: null,
+                }
+              : snapshot),
+            pendingMutation: false,
+            refs,
+            stashes,
+            worktrees,
+            historyWindow: hist,
+            totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+            worktreeChanges: changes,
+            worktreeFileDiffs: {},
+            worktreeSelected: worktreeFileCount(changes) > 0
+              ? moved || s.worktreeSelected
+              : false,
+          }))
+          if (moved) loadSelectedCommitExtras(repoId, currentSha)
+        } catch {
+          set({ ...snapshot, pendingMutation: false })
+        }
+      } else {
+        set({ ...snapshot, pendingMutation: false })
+      }
       throw err
     }
 

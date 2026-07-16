@@ -1,9 +1,17 @@
-import { useState } from 'react'
-import type { RefSummary } from '@ingit/rpc-contract'
+import { useRef, useState, type FormEvent } from 'react'
+import type { RefSummary, StashSummary } from '@ingit/rpc-contract'
 
 interface RefsSidebarProps {
   refs: RefSummary[]
+  stashes: StashSummary[]
   onSelectRef: (ref: RefSummary) => void
+  onCreateStash: (message?: string) => Promise<boolean>
+  onApplyStash: (stashSha: string) => Promise<boolean>
+  onSelectStash: (stashSha: string) => void
+  onSelectStashParent: (parentSha: string) => void
+  canStash: boolean
+  stashBusy?: boolean
+  selectedStashSha?: string | null
   selectedSha?: string | null
   onClose: () => void
   onOpenSettings: () => void
@@ -22,7 +30,15 @@ const KIND_ORDER: RefKind[] = ['head', 'remote', 'tag']
 
 export function RefsSidebar({
   refs,
+  stashes,
   onSelectRef,
+  onCreateStash,
+  onApplyStash,
+  onSelectStash,
+  onSelectStashParent,
+  canStash,
+  stashBusy = false,
+  selectedStashSha,
   selectedSha,
   onClose,
   onOpenSettings,
@@ -30,6 +46,11 @@ export function RefsSidebar({
 }: RefsSidebarProps) {
   const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({ head: true, remote: true, tag: true })
   const [filter, setFilter] = useState('')
+  const [stashesExpanded, setStashesExpanded] = useState(false)
+  const [stashMessage, setStashMessage] = useState('')
+  const [creatingStash, setCreatingStash] = useState(false)
+  const [applyingSha, setApplyingSha] = useState<string | null>(null)
+  const stashMessageRef = useRef<HTMLInputElement>(null)
 
   const filterLower = filter.toLowerCase()
   const groups: Record<RefKind, RefSummary[]> = { head: [], remote: [], tag: [] }
@@ -40,6 +61,36 @@ export function RefsSidebar({
 
   function toggleGroup(kind: RefKind) {
     setCollapsed((prev) => ({ ...prev, [kind]: !prev[kind] }))
+  }
+
+  function openStashComposer() {
+    setStashesExpanded(true)
+    requestAnimationFrame(() => stashMessageRef.current?.focus())
+  }
+
+  async function handleCreateStash(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canStash || stashBusy) return
+    setCreatingStash(true)
+    try {
+      const ok = await onCreateStash(stashMessage.trim() || undefined)
+      if (ok) {
+        setStashMessage('')
+        setStashesExpanded(true)
+      }
+    } finally {
+      setCreatingStash(false)
+    }
+  }
+
+  async function handleApplyStash(stashSha: string) {
+    if (stashBusy) return
+    setApplyingSha(stashSha)
+    try {
+      await onApplyStash(stashSha)
+    } finally {
+      setApplyingSha(null)
+    }
   }
 
   return (
@@ -108,6 +159,246 @@ export function RefsSidebar({
           onFocus={(e) => { e.currentTarget.style.borderColor = '#89b4fa' }}
           onBlur={(e) => { e.currentTarget.style.borderColor = '#45475a' }}
         />
+      </div>
+
+      <div
+        style={{
+          margin: '8px 10px 4px',
+          border: '1px solid #704752',
+          borderRadius: 7,
+          background: '#55323c',
+          overflow: 'hidden',
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'stretch' }}>
+          <button
+            type="button"
+            onClick={() => setStashesExpanded((expanded) => !expanded)}
+            aria-expanded={stashesExpanded}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 7,
+              padding: '7px 9px',
+              border: 'none',
+              background: 'transparent',
+              color: '#f5e0dc',
+              fontFamily: 'inherit',
+              fontSize: 12,
+              fontWeight: 700,
+              textAlign: 'left',
+              cursor: 'pointer',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                display: 'inline-block',
+                transform: stashesExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                transition: 'transform 0.15s',
+                color: '#d7a6b2',
+                fontSize: 9,
+              }}
+            >
+              ▶
+            </span>
+            Stashes
+            <span
+              style={{
+                marginLeft: 'auto',
+                minWidth: 16,
+                padding: '1px 5px',
+                borderRadius: 8,
+                background: '#311f25aa',
+                color: '#d7a6b2',
+                fontSize: 10,
+                fontWeight: 600,
+                textAlign: 'center',
+              }}
+            >
+              {stashes.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={openStashComposer}
+            disabled={!canStash || stashBusy}
+            title={canStash ? 'Stash all changes, including untracked files' : 'No changes to stash'}
+            aria-label="Stash changes"
+            style={{
+              width: 34,
+              border: 'none',
+              borderLeft: '1px solid #704752',
+              background: 'transparent',
+              color: canStash && !stashBusy ? '#f5e0dc' : '#8b626c',
+              cursor: canStash && !stashBusy ? 'pointer' : 'default',
+              fontFamily: 'inherit',
+              fontSize: 18,
+              lineHeight: 1,
+            }}
+          >
+            +
+          </button>
+        </div>
+
+        {stashesExpanded && (
+          <div style={{ borderTop: '1px solid #704752' }}>
+            {stashes.length === 0 ? (
+              <div style={{ padding: '9px 10px 5px', color: '#c4939f', fontSize: 11 }}>
+                No stashed changes
+              </div>
+            ) : (
+              <div>
+                {stashes.map((stash) => {
+                  const display = stashDisplayMessage(stash.message)
+                  const applying = applyingSha === stash.sha
+                  return (
+                    <div
+                      key={stash.sha}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={selectedStashSha === stash.sha}
+                      onClick={() => onSelectStash(stash.sha)}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget) return
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          onSelectStash(stash.sha)
+                        }
+                      }}
+                      style={{
+                        padding: '8px 9px',
+                        borderBottom: '1px solid #704752',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 5,
+                        background: selectedStashSha === stash.sha ? '#f5c2e71a' : 'transparent',
+                        boxShadow: selectedStashSha === stash.sha ? 'inset 3px 0 #f5c2e7' : 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div
+                            title={stash.message}
+                            style={{
+                              color: '#f5e0dc',
+                              fontSize: 11,
+                              fontWeight: 650,
+                              lineHeight: 1.35,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {display.message || stash.selector}
+                          </div>
+                          <div style={{ marginTop: 2, color: '#c4939f', fontSize: 9.5 }}>
+                            {stash.selector}{display.context ? ` · ${display.context}` : ''} · {formatStashDate(stash.createdAt)}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void handleApplyStash(stash.sha)
+                          }}
+                          disabled={stashBusy}
+                          title="Apply this stash and keep it in the list"
+                          style={{
+                            flexShrink: 0,
+                            padding: '3px 7px',
+                            border: '1px solid #b87b89',
+                            borderRadius: 4,
+                            background: '#311f2577',
+                            color: stashBusy ? '#8b626c' : '#f5c2e7',
+                            fontFamily: 'inherit',
+                            fontSize: 10,
+                            fontWeight: 700,
+                            cursor: stashBusy ? 'default' : 'pointer',
+                          }}
+                        >
+                          {applying ? 'Applying…' : 'Apply'}
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onSelectStashParent(stash.parentSha)
+                        }}
+                        title={`Go to ${stash.parentSha}`}
+                        style={{
+                          alignSelf: 'flex-start',
+                          padding: 0,
+                          border: 'none',
+                          background: 'none',
+                          color: '#89b4fa',
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          textUnderlineOffset: 2,
+                        }}
+                      >
+                        parent {stash.parentSha.slice(0, 8)}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <form
+              onSubmit={(event) => void handleCreateStash(event)}
+              style={{ display: 'flex', gap: 5, padding: '7px 8px 8px' }}
+            >
+              <input
+                ref={stashMessageRef}
+                value={stashMessage}
+                onChange={(event) => setStashMessage(event.target.value)}
+                disabled={!canStash || stashBusy}
+                placeholder="Message (optional)"
+                aria-label="Stash message"
+                style={{
+                  minWidth: 0,
+                  flex: 1,
+                  height: 27,
+                  padding: '0 7px',
+                  border: '1px solid #704752',
+                  borderRadius: 4,
+                  outline: 'none',
+                  background: '#311f25',
+                  color: '#f5e0dc',
+                  fontFamily: 'inherit',
+                  fontSize: 10.5,
+                  userSelect: 'text',
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!canStash || stashBusy}
+                style={{
+                  flexShrink: 0,
+                  padding: '0 8px',
+                  border: '1px solid #b87b89',
+                  borderRadius: 4,
+                  background: canStash && !stashBusy ? '#f5c2e7' : '#704752',
+                  color: canStash && !stashBusy ? '#311f25' : '#a77b86',
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  fontWeight: 800,
+                  cursor: canStash && !stashBusy ? 'pointer' : 'default',
+                }}
+              >
+                {creatingStash ? 'Stashing…' : 'Stash'}
+              </button>
+            </form>
+          </div>
+        )}
       </div>
 
       {KIND_ORDER.map((kind) => {
@@ -246,6 +537,24 @@ export function RefsSidebar({
       </div>
     </div>
   )
+}
+
+function stashDisplayMessage(message: string): { message: string; context: string } {
+  const match = /^(?:WIP )?on ([^:]+):\s*(.*)$/i.exec(message)
+  if (!match) return { message, context: '' }
+  return {
+    message: match[2] ?? message,
+    context: `on ${match[1]}`,
+  }
+}
+
+function formatStashDate(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function RefIcon({ kind, isCurrent }: { kind: RefKind; isCurrent?: boolean }) {

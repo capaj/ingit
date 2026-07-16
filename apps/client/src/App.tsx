@@ -7,6 +7,7 @@ import { GraphCanvas } from './components/GraphCanvas'
 import { ReflogGraph } from './components/ReflogGraph'
 import { CommitDetail } from './components/CommitDetail'
 import { WorkingTreeDetail } from './components/WorkingTreeDetail'
+import { StashDetail } from './components/StashDetail'
 import { ErrorDialog } from './components/ErrorDialog'
 import { AgentSessions } from './components/AgentSessions'
 import type { DirectoryEntry, DirectoryListing, WorktreeChangesResponse } from '@ingit/rpc-contract'
@@ -65,7 +66,7 @@ export function App() {
   } | null>(null)
   const repoPathInputRef = useRef<HTMLInputElement>(null)
   const {
-    status, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, refs, historyWindow, selectedSha,
+    status, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, refs, stashes, selectedStashSha, stashDiff, historyWindow, selectedSha,
     commitDetail, commitDiff, commitPRs, commitAuthorAvatars, commitCIStatus, githubUrl, openError,
     errorDialog, dismissError, showError,
     openRepoByPath, closeRepo, openFromUrl, selectRef,
@@ -74,6 +75,11 @@ export function App() {
     viewMode, setViewMode,
     worktreeSelected,
     worktreeChanges,
+    createStash,
+    applyStash,
+    dropStash,
+    selectStash,
+    pendingMutation,
     reloadFromServer,
   } = useAppStore()
 
@@ -89,6 +95,9 @@ export function App() {
 
   const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
   const selectedCIRuns = selectedCIStatus?.runs ?? []
+  const selectedStash = selectedStashSha
+    ? stashes.find((stash) => stash.sha === selectedStashSha) ?? null
+    : null
 
   useEffect(() => {
     const handleHashChange = () => openFromUrl()
@@ -300,7 +309,15 @@ export function App() {
       {refsSidebarOpen && (
         <RefsSidebar
           refs={refs}
+          stashes={stashes}
           onSelectRef={selectRef}
+          onCreateStash={createStash}
+          onApplyStash={applyStash}
+          onSelectStash={selectStash}
+          onSelectStashParent={(sha) => { void navigateTo(sha) }}
+          canStash={uncommittedFileCount(worktreeChanges) > 0}
+          stashBusy={pendingMutation}
+          selectedStashSha={selectedStashSha}
           selectedSha={selectedSha}
           onClose={() => setRefsSidebarOpen(false)}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -611,7 +628,16 @@ export function App() {
         {viewMode === 'reflog' ? <ReflogGraph /> : <GraphCanvas />}
       </div>
 
-      {worktreeSelected ? (
+      {selectedStash ? (
+        <StashDetail
+          stash={selectedStash}
+          diff={stashDiff}
+          busy={pendingMutation}
+          onApply={applyStash}
+          onDrop={dropStash}
+          onNavigate={(sha) => { void navigateTo(sha) }}
+        />
+      ) : worktreeSelected ? (
         <WorkingTreeDetail />
       ) : (
         <CommitDetail
