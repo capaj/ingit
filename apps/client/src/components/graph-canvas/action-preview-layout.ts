@@ -28,13 +28,15 @@ export interface PreviewCamera {
 
 /**
  * Reuse the leftmost graph gutter that is empty across the preview's rows.
- * When every existing gutter is occupied, reserve a new one on the right.
+ * When every existing gutter is occupied, reserve a new one beyond the graph
+ * on the same side as the branch being merged.
  */
 export function mergePreviewGutterX(
   nodes: Array<{ x: number; idx: number }>,
   fromIdx: number,
   toIdx: number,
   laneWidth: number,
+  fallbackSide: 'left' | 'right',
 ): number | null {
   if (nodes.length === 0) return null
 
@@ -51,7 +53,9 @@ export function mergePreviewGutterX(
     if (!occupiedXs.has(gutterX)) return gutterX
   }
 
-  return gutterXs[gutterXs.length - 1] + laneWidth
+  return fallbackSide === 'left'
+    ? gutterXs[0] - laneWidth
+    : gutterXs[gutterXs.length - 1] + laneWidth
 }
 
 /** Place a newest-to-oldest replay chain immediately above its rebase target. */

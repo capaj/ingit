@@ -13,10 +13,23 @@ describe('mergePreviewGutterX', () => {
       { x: 580, idx: 12 },
     ]
 
-    const gutterX = mergePreviewGutterX(branchNodes, -1, 12, 80)
+    const gutterX = mergePreviewGutterX(branchNodes, -1, 12, 80, 'right')
 
     expect(gutterX).toBe(660)
     expect(branchNodes.every((node) => gutterX! > node.x)).toBe(true)
+  })
+
+  test('creates a left-side gutter when the source is left of the target', () => {
+    const branchNodes = [
+      { x: 420, idx: 4 },
+      { x: 500, idx: 8 },
+      { x: 580, idx: 12 },
+    ]
+
+    const gutterX = mergePreviewGutterX(branchNodes, -1, 12, 80, 'left')
+
+    expect(gutterX).toBe(340)
+    expect(branchNodes.every((node) => gutterX! < node.x)).toBe(true)
   })
 
   test('reuses the leftmost gutter when it is empty across the preview rows', () => {
@@ -30,11 +43,11 @@ describe('mergePreviewGutterX', () => {
       { x: 740, idx: 24 },
     ]
 
-    expect(mergePreviewGutterX(branchNodes, -1, 24, 80)).toBe(420)
+    expect(mergePreviewGutterX(branchNodes, -1, 24, 80, 'right')).toBe(420)
   })
 
   test('does not invent a gutter when no graph nodes exist', () => {
-    expect(mergePreviewGutterX([], -1, 20, 80)).toBeNull()
+    expect(mergePreviewGutterX([], -1, 20, 80, 'left')).toBeNull()
   })
 })
 

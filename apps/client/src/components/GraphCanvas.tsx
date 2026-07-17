@@ -2494,11 +2494,13 @@ export function GraphCanvas() {
     const targetKey = `${previewNode.row.sha}-${targetNode.row.sha}`
     const sourceKey = `${previewNode.row.sha}-${sourceNode.row.sha}`
     const targetPlan = planEdgeRoute(previewNode, targetNode, targetKey, occupiedLanes)
+    const sourceSide = sourceNode.x < previewNode.x ? 'left' : 'right'
     const sourceGutterX = mergePreviewGutterX(
       layout.nodes,
       previewNode.idx,
       sourceNode.idx,
       LANE_WIDTH,
+      sourceSide,
     )
     const sourceGutterNode = layout.nodes.find((node) => node.x === sourceGutterX)
     const sourceGutterSide = sourceGutterX !== null
