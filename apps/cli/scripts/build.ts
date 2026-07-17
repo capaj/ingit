@@ -185,7 +185,13 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  rmSync(RELEASE_DIR, { recursive: true, force: true })
+  // A targeted local build should replace only the requested platform
+  // artifacts. Keeping the others lets a linked launcher continue using the
+  // last host build after, for example, cross-building the Windows binary.
+  // Full release builds still start from a clean directory.
+  if (requested.length === 0) {
+    rmSync(RELEASE_DIR, { recursive: true, force: true })
+  }
   mkdirSync(RELEASE_DIR, { recursive: true })
 
   await buildSharedPackages()
