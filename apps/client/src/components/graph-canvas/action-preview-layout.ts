@@ -26,6 +26,34 @@ export interface PreviewCamera {
   translateY: number
 }
 
+/**
+ * Reuse the leftmost graph gutter that is empty across the preview's rows.
+ * When every existing gutter is occupied, reserve a new one on the right.
+ */
+export function mergePreviewGutterX(
+  nodes: Array<{ x: number; idx: number }>,
+  fromIdx: number,
+  toIdx: number,
+  laneWidth: number,
+): number | null {
+  if (nodes.length === 0) return null
+
+  const topIdx = Math.min(fromIdx, toIdx)
+  const bottomIdx = Math.max(fromIdx, toIdx)
+  const gutterXs = [...new Set(nodes.map((node) => node.x))].sort((left, right) => left - right)
+  const occupiedXs = new Set(
+    nodes
+      .filter((node) => node.idx >= topIdx && node.idx <= bottomIdx)
+      .map((node) => node.x),
+  )
+
+  for (const gutterX of gutterXs) {
+    if (!occupiedXs.has(gutterX)) return gutterX
+  }
+
+  return gutterXs[gutterXs.length - 1] + laneWidth
+}
+
 /** Place a newest-to-oldest replay chain immediately above its rebase target. */
 export function stackPreviewChainAboveTarget<T extends VerticalPosition>(
   nodes: T[],

@@ -1,5 +1,42 @@
 import { describe, expect, test } from 'bun:test'
-import { fitPreviewCamera, stackPreviewChainAboveTarget } from './action-preview-layout'
+import {
+  fitPreviewCamera,
+  mergePreviewGutterX,
+  stackPreviewChainAboveTarget,
+} from './action-preview-layout'
+
+describe('mergePreviewGutterX', () => {
+  test('creates a right-side gutter when every existing gutter is occupied', () => {
+    const branchNodes = [
+      { x: 420, idx: 4 },
+      { x: 500, idx: 8 },
+      { x: 580, idx: 12 },
+    ]
+
+    const gutterX = mergePreviewGutterX(branchNodes, -1, 12, 80)
+
+    expect(gutterX).toBe(660)
+    expect(branchNodes.every((node) => gutterX! > node.x)).toBe(true)
+  })
+
+  test('reuses the leftmost gutter when it is empty across the preview rows', () => {
+    const branchNodes = [
+      // This lane is used only below the source, so the preview can safely
+      // occupy it from its ghost node through source row 24.
+      { x: 420, idx: 30 },
+      { x: 500, idx: 6 },
+      { x: 580, idx: 0 },
+      { x: 660, idx: 14 },
+      { x: 740, idx: 24 },
+    ]
+
+    expect(mergePreviewGutterX(branchNodes, -1, 24, 80)).toBe(420)
+  })
+
+  test('does not invent a gutter when no graph nodes exist', () => {
+    expect(mergePreviewGutterX([], -1, 20, 80)).toBeNull()
+  })
+})
 
 describe('stackPreviewChainAboveTarget', () => {
   test('anchors the oldest replayed commit one row above the rebase target', () => {

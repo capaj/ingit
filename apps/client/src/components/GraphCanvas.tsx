@@ -8,7 +8,11 @@ import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../his
 import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-canvas/CommitIcons'
-import { fitPreviewCamera, stackPreviewChainAboveTarget } from './graph-canvas/action-preview-layout'
+import {
+  fitPreviewCamera,
+  mergePreviewGutterX,
+  stackPreviewChainAboveTarget,
+} from './graph-canvas/action-preview-layout'
 import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
@@ -2490,7 +2494,31 @@ export function GraphCanvas() {
     const targetKey = `${previewNode.row.sha}-${targetNode.row.sha}`
     const sourceKey = `${previewNode.row.sha}-${sourceNode.row.sha}`
     const targetPlan = planEdgeRoute(previewNode, targetNode, targetKey, occupiedLanes)
-    const sourcePlan = planEdgeRoute(previewNode, sourceNode, sourceKey, occupiedLanes, { adjacentTrack: 'to' })
+    const sourceGutterX = mergePreviewGutterX(
+      layout.nodes,
+      previewNode.idx,
+      sourceNode.idx,
+      LANE_WIDTH,
+    )
+    const sourceGutterNode = layout.nodes.find((node) => node.x === sourceGutterX)
+    const sourceGutterSide = sourceGutterX !== null
+      && sourceGutterX < Math.min(previewNode.x, sourceNode.x)
+      ? 'left'
+      : 'right'
+    const sourcePlan: EdgeRoutePlan = sourceGutterX === null
+      ? planEdgeRoute(previewNode, sourceNode, sourceKey, occupiedLanes, { adjacentTrack: 'to' })
+      : {
+          mode: 'outer-rail',
+          side: sourceGutterSide,
+          anchorLane: sourceGutterNode?.row.lane
+            ?? (sourceGutterSide === 'left'
+              ? Math.min(...occupiedLanes) - 1
+              : Math.max(...occupiedLanes) + 1),
+          innerLane: sourceGutterSide === 'left'
+            ? Math.max(previewNode.row.lane, sourceNode.row.lane)
+            : Math.min(previewNode.row.lane, sourceNode.row.lane),
+          outerRailX: sourceGutterX,
+        }
 
     return {
       previewNode,
