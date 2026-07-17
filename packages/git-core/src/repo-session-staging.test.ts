@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdtemp, rename, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RepoSession } from './repo-session.js'
@@ -29,6 +29,11 @@ afterEach(async () => {
 function paths(files: { path: string }[]): string[] {
   return files.map((f) => f.path).sort()
 }
+
+const ONE_PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+)
 
 describe('RepoSession staging', () => {
   test('stages and unstages a modified file plus an untracked file', async () => {
@@ -69,6 +74,19 @@ describe('RepoSession staging', () => {
     const unstaged = await session.unstageAll()
     expect(unstaged.staged).toEqual([])
     expect(paths(unstaged.unstaged)).toEqual(['another.txt', 'file.txt'])
+  })
+
+  test('lists files inside untracked directories separately', async () => {
+    await mkdir(join(repoDir, 'screenshots'))
+    await Bun.write(join(repoDir, 'screenshots', 'first.png'), ONE_PIXEL_PNG)
+    await Bun.write(join(repoDir, 'screenshots', 'second.png'), ONE_PIXEL_PNG)
+
+    const changes = await session.getWorktreeChanges()
+
+    expect(paths(changes.unstaged)).toEqual([
+      'screenshots/first.png',
+      'screenshots/second.png',
+    ])
   })
 
   test('discards all staged and unstaged changes to one file', async () => {
@@ -167,6 +185,18 @@ describe('RepoSession stashes', () => {
     expect(dropped.stashes).toEqual([])
     expect((await runGit(['stash', 'list'], repoDir)).stdout.trim()).toBe('')
   })
+
+  test('serves image previews from an untracked-file stash parent', async () => {
+    await Bun.write(join(repoDir, 'stashed.png'), ONE_PIXEL_PNG)
+    const created = await session.stash('image work')
+
+    const diff = await session.getStashFileDiff(created.stashes[0]!.sha, 'stashed.png')
+
+    expect(diff.imageDiff?.before).toBeNull()
+    expect(diff.imageDiff?.after?.dataUrl).toBe(
+      `data:image/png;base64,${ONE_PIXEL_PNG.toString('base64')}`,
+    )
+  })
 })
 
 describe('RepoSession worktree file diffs', () => {
@@ -208,6 +238,52 @@ describe('RepoSession worktree file diffs', () => {
     const diff = await session.getWorktreeFileDiff('blob.bin', 'unstaged')
     expect(diff.isBinary).toBe(true)
   })
+
+  test('untracked image includes a renderable added-image preview', async () => {
+    await Bun.write(join(repoDir, 'screenshot.png'), ONE_PIXEL_PNG)
+
+    const diff = await session.getWorktreeFileDiff('screenshot.png', 'unstaged')
+
+    expect(diff.isBinary).toBe(true)
+    expect(diff.imageDiff?.before).toBeNull()
+    expect(diff.imageDiff?.after).toEqual({
+      dataUrl: `data:image/png;base64,${ONE_PIXEL_PNG.toString('base64')}`,
+      byteSize: ONE_PIXEL_PNG.length,
+    })
+  })
+
+  test('staged image preview comes from the index, not a later worktree edit', async () => {
+    const stagedPng = Buffer.concat([ONE_PIXEL_PNG, Buffer.from('staged')])
+    const worktreePng = Buffer.concat([ONE_PIXEL_PNG, Buffer.from('worktree')])
+    await Bun.write(join(repoDir, 'screenshot.png'), stagedPng)
+    await session.stageFiles(['screenshot.png'])
+    await Bun.write(join(repoDir, 'screenshot.png'), worktreePng)
+
+    const diff = await session.getWorktreeFileDiff('screenshot.png', 'staged')
+
+    expect(diff.imageDiff?.before).toBeNull()
+    expect(diff.imageDiff?.after?.dataUrl).toBe(
+      `data:image/png;base64,${stagedPng.toString('base64')}`,
+    )
+  })
+
+  test('modified image includes the index and worktree versions', async () => {
+    const committedPng = Buffer.concat([ONE_PIXEL_PNG, Buffer.from('committed')])
+    const changedPng = Buffer.concat([ONE_PIXEL_PNG, Buffer.from('changed')])
+    await Bun.write(join(repoDir, 'screenshot.png'), committedPng)
+    await session.stageFiles(['screenshot.png'])
+    await session.commit('add screenshot')
+    await Bun.write(join(repoDir, 'screenshot.png'), changedPng)
+
+    const diff = await session.getWorktreeFileDiff('screenshot.png', 'unstaged')
+
+    expect(diff.imageDiff?.before?.dataUrl).toBe(
+      `data:image/png;base64,${committedPng.toString('base64')}`,
+    )
+    expect(diff.imageDiff?.after?.dataUrl).toBe(
+      `data:image/png;base64,${changedPng.toString('base64')}`,
+    )
+  })
 })
 
 describe('RepoSession commit', () => {
@@ -225,6 +301,19 @@ describe('RepoSession commit', () => {
     // Only the staged file was committed; the untracked one is still pending.
     expect(result.changes.staged).toEqual([])
     expect(paths(result.changes.unstaged)).toEqual(['other.txt'])
+  })
+
+  test('serves an image preview from a commit tree', async () => {
+    await Bun.write(join(repoDir, 'committed.png'), ONE_PIXEL_PNG)
+    await session.stageFiles(['committed.png'])
+    const result = await session.commit('add image')
+
+    const diff = await session.getCommitFileDiff(result.headSha, 'committed.png')
+
+    expect(diff.imageDiff?.before).toBeNull()
+    expect(diff.imageDiff?.after?.dataUrl).toBe(
+      `data:image/png;base64,${ONE_PIXEL_PNG.toString('base64')}`,
+    )
   })
 
   test('fails with the hook output when a pre-commit hook rejects', async () => {

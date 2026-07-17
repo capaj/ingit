@@ -66,11 +66,22 @@ export interface StashDiffResponse {
   deletions: number
 }
 
+export interface ImagePreview {
+  dataUrl: string
+  byteSize: number
+}
+
+export interface ImageDiff {
+  before: ImagePreview | null
+  after: ImagePreview | null
+}
+
 export interface StashFileDiffResponse {
   sha: CommitSha
   path: string
   patchText: string
   isBinary: boolean
+  imageDiff?: ImageDiff
 }
 
 export interface WorktreeSummary {
@@ -199,6 +210,7 @@ export interface CommitFileDiffResponse {
   path: string
   patchText: string
   isBinary: boolean
+  imageDiff?: ImageDiff
 }
 
 export type CommitActionKind = 'cherry-pick' | 'revert' | 'uncommit'
@@ -368,6 +380,7 @@ export interface WorktreeFileDiffResponse {
   area: WorktreeDiffArea
   patchText: string
   isBinary: boolean
+  imageDiff?: ImageDiff
 }
 
 export interface CommitRequest {

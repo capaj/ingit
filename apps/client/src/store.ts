@@ -19,6 +19,7 @@ import type {
   WorktreeSummary,
   StashSummary,
   StashDiffResponse,
+  ImageDiff,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -361,6 +362,7 @@ export interface WorktreeDiffEntry {
   loading: boolean
   patchText?: string
   isBinary?: boolean
+  imageDiff?: ImageDiff
   error?: string
 }
 
@@ -970,7 +972,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({
         stashFileDiffs: {
           ...s.stashFileDiffs,
-          [key]: { loading: false, patchText: res.patchText, isBinary: res.isBinary },
+          [key]: {
+            loading: false,
+            patchText: res.patchText,
+            isBinary: res.isBinary,
+            imageDiff: res.imageDiff,
+          },
         },
       }))
     } catch (err) {
@@ -999,7 +1006,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({
         worktreeFileDiffs: {
           ...s.worktreeFileDiffs,
-          [key]: { loading: false, patchText: res.patchText, isBinary: res.isBinary },
+          [key]: {
+            loading: false,
+            patchText: res.patchText,
+            isBinary: res.isBinary,
+            imageDiff: res.imageDiff,
+          },
         },
       }))
     } catch (err) {
@@ -1024,7 +1036,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({
         commitFileDiffs: {
           ...s.commitFileDiffs,
-          [key]: { loading: false, patchText: res.patchText, isBinary: res.isBinary },
+          [key]: {
+            loading: false,
+            patchText: res.patchText,
+            isBinary: res.isBinary,
+            imageDiff: res.imageDiff,
+          },
         },
       }))
     } catch (err) {

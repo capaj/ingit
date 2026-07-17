@@ -86,7 +86,9 @@ export function parseWorktreeChanges(lines: string[]): WorktreeChangesResponse {
 
 export async function readWorktreeChanges(cwd: string): Promise<WorktreeChangesResponse> {
   const [{ stdout }, { stdout: mergeHeadOut }, { stdout: rebaseHeadOut }, { stdout: rebaseDirsOut }] = await Promise.all([
-    runGit(['status', '--porcelain=v2', '--branch'], cwd),
+    // `all` prevents Git from collapsing a new directory into one untracked
+    // row. The staging UI needs real file paths for per-file diffs/previews.
+    runGit(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], cwd),
     runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD^{commit}'], cwd, { okCodes: [1] }),
     runGit(['rev-parse', '-q', '--verify', 'REBASE_HEAD^{commit}'], cwd, { okCodes: [1] }),
     runGit(['rev-parse', '--git-path', 'rebase-merge', '--git-path', 'rebase-apply'], cwd),

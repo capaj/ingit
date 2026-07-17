@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { highlightText } from '@speed-highlight/core'
 import type { ShjLanguage } from '@speed-highlight/core'
+import type { ImageDiff, ImagePreview } from '@ingit/rpc-contract'
 
 export interface FileDiffEntry {
   loading: boolean
   patchText?: string
   isBinary?: boolean
+  imageDiff?: ImageDiff
   error?: string
 }
 
@@ -125,6 +127,9 @@ export function DiffView({ entry, path }: { entry: FileDiffEntry; path: string }
   if (entry.error) {
     return <DiffNote text={entry.error} color="#f38ba8" />
   }
+  if (entry.imageDiff) {
+    return <ImageDiffView imageDiff={entry.imageDiff} path={path} />
+  }
   if (entry.isBinary) {
     return <DiffNote text="Binary file" />
   }
@@ -181,6 +186,96 @@ export function DiffView({ entry, path }: { entry: FileDiffEntry; path: string }
           )
         })}
       </div>
+    </div>
+  )
+}
+
+function ImageDiffView({ imageDiff, path }: { imageDiff: ImageDiff; path: string }) {
+  const images: Array<{ label: string; preview: ImagePreview }> = []
+  if (imageDiff.before) {
+    images.push({
+      label: imageDiff.after ? 'Before' : 'Deleted image',
+      preview: imageDiff.before,
+    })
+  }
+  if (imageDiff.after) {
+    images.push({
+      label: imageDiff.before ? 'After' : 'Added image',
+      preview: imageDiff.after,
+    })
+  }
+
+  return (
+    <div
+      style={{
+        margin: '2px 0 6px 24px',
+        padding: 10,
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 10,
+        border: '1px solid #313244',
+        borderRadius: 6,
+        background: '#11111b',
+        overflow: 'auto',
+        maxHeight: 520,
+      }}
+    >
+      {images.map(({ label, preview }) => (
+        <figure
+          key={label}
+          style={{
+            flex: '1 1 220px',
+            minWidth: 0,
+            margin: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          <figcaption
+            style={{
+              color: '#a6adc8',
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+          >
+            {label}
+          </figcaption>
+          <div
+            style={{
+              minHeight: 80,
+              padding: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 4,
+              backgroundColor: '#181825',
+              backgroundImage: [
+                'linear-gradient(45deg, #242435 25%, transparent 25%)',
+                'linear-gradient(-45deg, #242435 25%, transparent 25%)',
+                'linear-gradient(45deg, transparent 75%, #242435 75%)',
+                'linear-gradient(-45deg, transparent 75%, #242435 75%)',
+              ].join(','),
+              backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0',
+              backgroundSize: '16px 16px',
+            }}
+          >
+            <img
+              src={preview.dataUrl}
+              alt={`${path} ${label.toLowerCase()}`}
+              draggable={false}
+              style={{
+                display: 'block',
+                maxWidth: '100%',
+                maxHeight: 410,
+                objectFit: 'contain',
+              }}
+            />
+          </div>
+        </figure>
+      ))}
     </div>
   )
 }

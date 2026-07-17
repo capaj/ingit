@@ -107,6 +107,16 @@ export const StageActionKind = z.enum([
 
 export const WorktreeDiffArea = z.enum(['staged', 'unstaged'])
 
+export const ImagePreview = z.object({
+  dataUrl: z.string(),
+  byteSize: z.number(),
+})
+
+export const ImageDiff = z.object({
+  before: ImagePreview.nullable(),
+  after: ImagePreview.nullable(),
+})
+
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
 export const InProgressOperationKind = z.enum(['merge', 'rebase'])
@@ -263,6 +273,7 @@ export const contract = {
       path: z.string(),
       patchText: z.string(),
       isBinary: z.boolean(),
+      imageDiff: ImageDiff.optional(),
     })),
 
   stashAction: oc
@@ -311,6 +322,7 @@ export const contract = {
       area: WorktreeDiffArea,
       patchText: z.string(),
       isBinary: z.boolean(),
+      imageDiff: ImageDiff.optional(),
     })),
 
   commit: oc
@@ -403,6 +415,7 @@ export const contract = {
       path: z.string(),
       patchText: z.string(),
       isBinary: z.boolean(),
+      imageDiff: ImageDiff.optional(),
     })),
 
   getCommitPRs: oc

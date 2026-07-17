@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import { lstat, readFile } from 'node:fs/promises'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type {
   RefSummary,
   WorktreeStatusResponse,
@@ -11,6 +13,8 @@ import type {
   WorktreeSummary,
   StashSummary,
   StashFileDiffResponse,
+  ImageDiff,
+  ImagePreview,
 } from '@ingit/rpc-contract'
 import { runGit, GitCommandError } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
@@ -25,6 +29,11 @@ import { parseWorktreeList } from './parsers/worktree-list-parser.js'
 import { streamRevList, streamRevListWithMeta } from './parsers/rev-list-parser.js'
 import type { RevListEntry, RevListEntryWithMeta } from './parsers/rev-list-parser.js'
 import { ZiggitRepo } from './ziggit-ffi.js'
+import {
+  createImagePreview,
+  IMAGE_PREVIEW_MAX_BYTES,
+  isPreviewableImagePath,
+} from './image-preview.js'
 
 export interface HeadState {
   kind: 'symbolic' | 'detached'
@@ -204,6 +213,80 @@ export class RepoSession {
     return readWorktreeChanges(this.rootPath)
   }
 
+  private async getGitImage(revision: string, path: string): Promise<ImagePreview | null> {
+    if (!isPreviewableImagePath(path)) return null
+    try {
+      const object = `${revision}:${path}`
+      const info = await this.catFile.info(object)
+      if (!info || info.type !== 'blob' || info.size > IMAGE_PREVIEW_MAX_BYTES) return null
+      const contents = await this.catFile.contents(object)
+      return contents ? createImagePreview(contents.data, path) : null
+    } catch {
+      return null
+    }
+  }
+
+  private async getWorktreeImage(path: string): Promise<ImagePreview | null> {
+    if (!isPreviewableImagePath(path)) return null
+
+    // RPC inputs must never turn image preview into an arbitrary local-file
+    // reader. Keep paths inside the repository and refuse symlinks.
+    const absolutePath = resolve(this.rootPath, path)
+    const repositoryRelativePath = relative(this.rootPath, absolutePath)
+    if (
+      repositoryRelativePath === '..'
+      || repositoryRelativePath.startsWith(`..${sep}`)
+      || isAbsolute(repositoryRelativePath)
+    ) {
+      return null
+    }
+
+    try {
+      const file = await lstat(absolutePath)
+      if (!file.isFile() || file.size > IMAGE_PREVIEW_MAX_BYTES) return null
+      return createImagePreview(await readFile(absolutePath), path)
+    } catch {
+      return null
+    }
+  }
+
+  private async getWorktreeImageDiff(
+    path: string,
+    area: WorktreeDiffArea,
+    oldPath?: string,
+  ): Promise<ImageDiff | undefined> {
+    if (!isPreviewableImagePath(path) && (!oldPath || !isPreviewableImagePath(oldPath))) {
+      return undefined
+    }
+
+    const beforePath = oldPath ?? path
+    const [before, after] = area === 'staged'
+      ? await Promise.all([
+          this.getGitImage('HEAD', beforePath),
+          this.getGitImage('', path),
+        ])
+      : await Promise.all([
+          this.getGitImage('', beforePath),
+          this.getWorktreeImage(path),
+        ])
+    return before || after ? { before, after } : undefined
+  }
+
+  private async getCommitImageDiff(
+    sha: string,
+    path: string,
+    oldPath?: string,
+  ): Promise<ImageDiff | undefined> {
+    if (!isPreviewableImagePath(path) && (!oldPath || !isPreviewableImagePath(oldPath))) {
+      return undefined
+    }
+    const [before, after] = await Promise.all([
+      this.getGitImage(`${sha}^`, oldPath ?? path),
+      this.getGitImage(sha, path),
+    ])
+    return before || after ? { before, after } : undefined
+  }
+
   async getStashes(): Promise<StashSummary[]> {
     const fieldSeparator = '\x1f'
     const recordSeparator = '\x1e'
@@ -279,11 +362,19 @@ export class RepoSession {
     const patchText = [trackedPatch, untrackedPatch]
       .filter((patch) => patch.length > 0)
       .join('\n')
+    const [before, trackedAfter, untrackedAfter] = await Promise.all([
+      this.getGitImage(`${stash.sha}^1`, oldPath ?? path),
+      this.getGitImage(stash.sha, path),
+      this.getGitImage(`${stash.sha}^3`, path),
+    ])
+    const after = trackedAfter ?? untrackedAfter
+    const imageDiff = before || after ? { before, after } : undefined
     return {
       sha: stash.sha,
       path,
       patchText,
       isBinary: /^Binary files .* differ$/m.test(patchText),
+      ...(imageDiff ? { imageDiff } : {}),
     }
   }
 
@@ -447,11 +538,13 @@ export class RepoSession {
         patchText = stdout
       }
     }
+    const imageDiff = await this.getWorktreeImageDiff(path, area, oldPath)
     return {
       path,
       area,
       patchText,
       isBinary: /^Binary files .* differ$/m.test(patchText),
+      ...(imageDiff ? { imageDiff } : {}),
     }
   }
 
@@ -525,11 +618,13 @@ export class RepoSession {
       ['diff-tree', '-r', '--root', '--no-commit-id', '-M', '-C', '-p', sha, '--', ...pathspec],
       this.rootPath,
     )
+    const imageDiff = await this.getCommitImageDiff(sha, path, oldPath)
     return {
       sha,
       path,
       patchText,
       isBinary: /^Binary files .* differ$/m.test(patchText),
+      ...(imageDiff ? { imageDiff } : {}),
     }
   }
 
