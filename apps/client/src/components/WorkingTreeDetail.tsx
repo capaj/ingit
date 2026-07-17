@@ -125,8 +125,8 @@ function FileRow({
           <span style={{ color: '#cdd6f4' }}>{base}</span>
         </span>
         <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
-          <RefActionButton label={actionLabel} tone="neutral" size="compact" variant="ghost" onClick={onAction} />
-          <RefActionButton label="Discard" tone="danger" size="compact" variant="ghost" onClick={onDiscard} />
+          <RefActionButton label={actionLabel} tone="neutral" size="compact" variant="ghost" iconOnly onClick={onAction} />
+          <RefActionButton label="Discard" tone="danger" size="compact" variant="ghost" iconOnly onClick={onDiscard} />
         </span>
       </div>
       {expanded && diffEntry && <DiffView entry={diffEntry} path={file.path} />}

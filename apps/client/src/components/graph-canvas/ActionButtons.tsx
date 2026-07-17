@@ -11,8 +11,10 @@ type ActionIconName =
   | 'rebase'
   | 'reset'
   | 'revert'
+  | 'stage'
   | 'stash'
   | 'tag'
+  | 'unstage'
   | 'uncommit'
 
 function iconForLabel(label: string): ActionIconName {
@@ -28,6 +30,8 @@ function iconForLabel(label: string): ActionIconName {
   if (normalized.includes('push')) return 'push'
   if (normalized.includes('delete')) return 'delete'
   if (normalized.includes('discard')) return 'reset'
+  if (normalized.includes('unstage')) return 'unstage'
+  if (normalized.includes('stage')) return 'stage'
   if (normalized.includes('stash')) return 'stash'
   if (normalized.includes('move')) return 'move'
   if (normalized.includes('reset')) return 'reset'
@@ -140,6 +144,12 @@ function ActionIcon({ name, size = 14 }: { name: ActionIconName; size?: number }
           <path {...common} d="M3 3v5h5" />
         </>
       )}
+      {name === 'stage' && (
+        <>
+          <path {...common} d="M12 5v14" />
+          <path {...common} d="M5 12h14" />
+        </>
+      )}
       {name === 'stash' && (
         <>
           <path {...common} d="M4 4h16v6H4z" />
@@ -152,6 +162,9 @@ function ActionIcon({ name, size = 14 }: { name: ActionIconName; size?: number }
           <path {...common} d="M20 10 10 20 4 14V4h10l6 6Z" />
           <circle {...common} cx="9" cy="9" r="1" />
         </>
+      )}
+      {name === 'unstage' && (
+        <path {...common} d="M5 12h14" />
       )}
       {name === 'uncommit' && (
         <>
@@ -282,6 +295,7 @@ export function RefActionButton({
   variant = 'solid',
   disabled = false,
   loading = false,
+  iconOnly = false,
 }: {
   label: string
   onClick: () => void
@@ -290,6 +304,7 @@ export function RefActionButton({
   variant?: 'solid' | 'ghost'
   disabled?: boolean
   loading?: boolean
+  iconOnly?: boolean
 }) {
   const compact = size === 'compact'
   const ghost = variant === 'ghost'
@@ -332,13 +347,15 @@ export function RefActionButton({
       }}
       disabled={isInactive}
       aria-busy={loading || undefined}
+      aria-label={iconOnly ? label : undefined}
+      title={iconOnly ? label : undefined}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: compact ? 72 : 84,
+        minWidth: iconOnly ? (compact ? 24 : 30) : compact ? 72 : 84,
         height: compact ? 20 : 28,
-        padding: compact ? '0 8px' : '0 10px',
+        padding: iconOnly ? 0 : compact ? '0 8px' : '0 10px',
         background: ghost ? 'rgba(24,24,37,0.5)' : solidBg,
         border: ghost ? '1px solid transparent' : `1px solid ${solidBorder}`,
         color: textColor,
@@ -364,7 +381,7 @@ export function RefActionButton({
       {loading
         ? <LoadingSpinner size={compact ? 12 : 13} />
         : <ActionIcon name={iconForLabel(label)} size={compact ? 12 : 13} />}
-      <span>{label}</span>
+      {!iconOnly && <span>{label}</span>}
     </button>
   )
 }
