@@ -6,7 +6,7 @@ import {
 } from './action-preview-layout'
 
 describe('mergePreviewGutterX', () => {
-  test('creates a right-side gutter when every existing gutter is occupied', () => {
+  test('uses the right-side source gutter when its rail is clear', () => {
     const branchNodes = [
       { x: 420, idx: 4 },
       { x: 500, idx: 8 },
@@ -15,35 +15,40 @@ describe('mergePreviewGutterX', () => {
 
     const gutterX = mergePreviewGutterX(branchNodes, -1, 12, 80, 'right')
 
-    expect(gutterX).toBe(660)
-    expect(branchNodes.every((node) => gutterX! > node.x)).toBe(true)
+    expect(gutterX).toBe(580)
   })
 
-  test('creates a left-side gutter when the source is left of the target', () => {
+  test('uses the left-side source gutter when its rail is clear', () => {
     const branchNodes = [
       { x: 420, idx: 4 },
       { x: 500, idx: 8 },
       { x: 580, idx: 12 },
     ]
 
-    const gutterX = mergePreviewGutterX(branchNodes, -1, 12, 80, 'left')
+    const gutterX = mergePreviewGutterX(branchNodes, -1, 4, 80, 'left')
 
-    expect(gutterX).toBe(340)
-    expect(branchNodes.every((node) => gutterX! < node.x)).toBe(true)
+    expect(gutterX).toBe(420)
   })
 
-  test('reuses the leftmost gutter when it is empty across the preview rows', () => {
+  test('does not zig-zag through an empty gutter on the opposite side', () => {
     const branchNodes = [
-      // This lane is used only below the source, so the preview can safely
-      // occupy it from its ghost node through source row 24.
-      { x: 420, idx: 30 },
-      { x: 500, idx: 6 },
-      { x: 580, idx: 0 },
-      { x: 660, idx: 14 },
-      { x: 740, idx: 24 },
+      { x: 155, idx: 10 },
+      { x: 294, idx: 1 },
+      { x: 433, idx: 13 },
+      { x: 711, idx: 0 },
     ]
 
-    expect(mergePreviewGutterX(branchNodes, -1, 24, 80, 'right')).toBe(420)
+    expect(mergePreviewGutterX(branchNodes, -1, 0, 80, 'right')).toBe(711)
+  })
+
+  test('creates a new outward gutter when the source rail is obstructed', () => {
+    const branchNodes = [
+      { x: 500, idx: 4 },
+      { x: 580, idx: 8 },
+      { x: 580, idx: 12 },
+    ]
+
+    expect(mergePreviewGutterX(branchNodes, -1, 12, 80, 'right')).toBe(660)
   })
 
   test('does not invent a gutter when no graph nodes exist', () => {

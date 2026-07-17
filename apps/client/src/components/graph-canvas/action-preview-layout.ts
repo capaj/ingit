@@ -27,9 +27,10 @@ export interface PreviewCamera {
 }
 
 /**
- * Reuse the leftmost graph gutter that is empty across the preview's rows.
- * When every existing gutter is occupied, reserve a new one beyond the graph
- * on the same side as the branch being merged.
+ * Reuse the source branch's gutter when it is empty between the preview node
+ * and the source. Otherwise, move outward on the source side of the graph.
+ * Keeping the rail at or beyond the source prevents a preview edge from
+ * crossing to the opposite side and then doubling back into its endpoint.
  */
 export function mergePreviewGutterX(
   nodes: Array<{ x: number; idx: number }>,
@@ -45,11 +46,19 @@ export function mergePreviewGutterX(
   const gutterXs = [...new Set(nodes.map((node) => node.x))].sort((left, right) => left - right)
   const occupiedXs = new Set(
     nodes
-      .filter((node) => node.idx >= topIdx && node.idx <= bottomIdx)
+      // Endpoint nodes are allowed to touch their own rail. Only commits
+      // strictly between the endpoints can obstruct its vertical section.
+      .filter((node) => node.idx > topIdx && node.idx < bottomIdx)
       .map((node) => node.x),
   )
+  const sourceX = nodes.find((node) => node.idx === toIdx)?.x
+  const sourceSideGutters = sourceX === undefined
+    ? []
+    : gutterXs
+      .filter((gutterX) => fallbackSide === 'left' ? gutterX <= sourceX : gutterX >= sourceX)
+      .sort((left, right) => fallbackSide === 'left' ? right - left : left - right)
 
-  for (const gutterX of gutterXs) {
+  for (const gutterX of sourceSideGutters) {
     if (!occupiedXs.has(gutterX)) return gutterX
   }
 
