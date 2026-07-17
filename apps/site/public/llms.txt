@@ -14,8 +14,11 @@
 - Animated and virtualized commit graph
 - Optimistic checkout, merge, rebase, cherry-pick, revert, uncommit, and branch moves
 - Time Machine reflog UI for recovering lost commits and deleted branches
-- Working-tree staging and diff inspection
-- GitHub pull requests and live CI status on commits
+- Linked worktree discovery, branch labels, and switching
+- Visual stash list with per-file diffs, apply, drop, and safe checkout restore
+- Working-tree staging, diff inspection, stash, discard, amend, commit, and push actions
+- Semantic commit icons driven by customizable message rules
+- GitHub author avatars, pull requests, and live CI status on commits
 - Claude Code and Codex session detection and focus handoff
 - Plain Git underneath, with no database or daemon
 

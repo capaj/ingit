@@ -7,6 +7,7 @@ const mediaRoot = join(siteRoot, 'public/media')
 
 await mkdir(join(mediaRoot, 'showcase'), {recursive: true})
 await mkdir(join(mediaRoot, 'brand'), {recursive: true})
+await mkdir(join(mediaRoot, 'product'), {recursive: true})
 
 const showcase = [
   '01-switch-branches',
@@ -51,6 +52,18 @@ await Promise.all([
     join(repoRoot, 'apps/client/public/press-kit/png/dark/ingit-icon-512.png'),
     join(siteRoot, 'public/icon-512.png'),
   ),
+  cp(
+    join(siteRoot, 'assets/product-screenshots/linked-worktrees.png'),
+    join(mediaRoot, 'product/linked-worktrees.png'),
+  ),
+  cp(
+    join(siteRoot, 'assets/product-screenshots/stash-detail.png'),
+    join(mediaRoot, 'product/stash-detail.png'),
+  ),
+  cp(
+    join(siteRoot, 'assets/product-screenshots/finishing-flow.png'),
+    join(mediaRoot, 'product/finishing-flow.png'),
+  ),
 ])
 
-console.log(`Synced ${showcase.length} showcase videos and the Remotion hero film.`)
+console.log(`Synced ${showcase.length} showcase videos, 3 product screenshots, and the Remotion hero film.`)

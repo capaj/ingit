@@ -35,6 +35,12 @@ const keywords = [
   'working tree GUI',
   'Git diff viewer',
   'stage and unstage files',
+  'Git stash GUI',
+  'Git worktree GUI',
+  'linked Git worktrees',
+  'commit and push',
+  'discard working tree changes',
+  'semantic commit icons',
   'GitHub CI status',
   'pull request integration',
   'AI coding agent dashboard',
@@ -83,11 +89,14 @@ const structuredData = {
       screenshot: [
         socialImageURL.href,
         new URL('/media/showcase/05-time-machine-recover.jpg', siteURL).href,
+        new URL('/media/product/linked-worktrees.png', siteURL).href,
+        new URL('/media/product/stash-detail.png', siteURL).href,
+        new URL('/media/product/finishing-flow.png', siteURL).href,
       ],
       applicationCategory: 'DeveloperApplication',
       applicationSubCategory: 'Version Control Client',
       operatingSystem: ['Linux', 'macOS', 'Windows'],
-      softwareVersion: '0.1.4',
+      softwareVersion: '0.1.9',
       isAccessibleForFree: true,
       license: 'https://github.com/capaj/ingit/blob/master/LICENSE',
       downloadUrl: 'https://www.npmjs.com/package/@ingit/cli',
@@ -106,8 +115,11 @@ const structuredData = {
         'Animated and virtualized commit graph',
         'Optimistic checkout, merge, rebase, cherry-pick, revert, and branch operations',
         'Visual reflog Time Machine for recovering lost commits and deleted branches',
-        'Working tree staging and diff inspection',
-        'GitHub pull request and live CI status integration',
+        'Linked worktree discovery, labels, and switching',
+        'Visual stash browsing, diff inspection, apply, and drop workflows',
+        'Working tree staging, diff inspection, stash, discard, amend, commit, and push actions',
+        'Semantic commit icons with customizable message rules',
+        'GitHub author, pull request, and live CI status integration',
         'Claude Code and Codex agent session detection',
         'Local-first operation with no database or daemon',
       ],
@@ -164,7 +176,7 @@ const structuredData = {
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="ingit — Git at the speed of thought, with an animated commit graph preview" />
-    <meta property="og:updated_time" content="2026-07-10T03:30:00+02:00" />
+    <meta property="og:updated_time" content="2026-07-17T12:00:00+02:00" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:creator" content="@capajj" />
     <meta name="twitter:domain" content="ingit.pages.dev" />

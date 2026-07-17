@@ -4,6 +4,17 @@ import GraphMorph from '../components/GraphMorph.astro'
 
 const repoURL = 'https://github.com/capaj/ingit'
 const installCommand = 'npm install --global @ingit/cli'
+const tickerItems = [
+  'COMMIT GRAPH',
+  'LINKED WORKTREES',
+  'OPTIMISTIC MUTATIONS',
+  'STASH WORKFLOWS',
+  'TIME MACHINE',
+  'COMMIT & PUSH',
+  'AGENT SESSIONS',
+  'SEMANTIC COMMIT ICONS',
+  'CI STATUS',
+]
 
 const gaugeRadius = 16
 const gaugeInnerRadius = 11
@@ -93,7 +104,7 @@ const showcase = [
 
 <BaseLayout
   title="ingit — Git at the speed of thought"
-  description="A fast, animated git GUI with optimistic mutations, Time Machine recovery, GitHub CI, and a control tower for your coding agents."
+  description="A fast, animated Git GUI with linked worktrees, visual stash workflows, optimistic mutations, Time Machine recovery, GitHub context, and coding-agent sessions."
 >
   <header class="site-header" data-header>
     <a class="brand" href="#top" aria-label="ingit home">
@@ -101,6 +112,7 @@ const showcase = [
       <span>ingit</span>
     </a>
     <nav aria-label="Primary navigation">
+      <a href="#new">What’s new</a>
       <a href="#reel">See it move</a>
       <a href="#inside">Under the hood</a>
       <a class="nav-github" href={repoURL} target="_blank" rel="noreferrer">
@@ -171,8 +183,8 @@ const showcase = [
 
     <section class="ticker" aria-label="Highlights">
       <div class="ticker__track">
-        <span>COMMIT GRAPH</span><i></i><span>OPTIMISTIC MUTATIONS</span><i></i><span>TIME MACHINE</span><i></i><span>AGENT SESSIONS</span><i></i><span>CI STATUS</span><i></i><span>WORKING TREE</span><i></i>
-        <span aria-hidden="true">COMMIT GRAPH</span><i aria-hidden="true"></i><span aria-hidden="true">OPTIMISTIC MUTATIONS</span><i aria-hidden="true"></i><span aria-hidden="true">TIME MACHINE</span><i aria-hidden="true"></i><span aria-hidden="true">AGENT SESSIONS</span><i aria-hidden="true"></i><span aria-hidden="true">CI STATUS</span><i aria-hidden="true"></i><span aria-hidden="true">WORKING TREE</span><i aria-hidden="true"></i>
+        {tickerItems.map((item) => <><span>{item}</span><i></i></>)}
+        {tickerItems.map((item) => <><span aria-hidden="true">{item}</span><i aria-hidden="true"></i></>)}
       </div>
     </section>
 
@@ -318,7 +330,7 @@ const showcase = [
           </div>
           <p class="feature__label">GitHub awareness</p>
           <h3>Your remote state, on the graph.</h3>
-          <p>PRs attach to commits. Live CI dots poll until checks settle. Push, fetch, or force-with-lease without changing context.</p>
+          <p>Authors and PRs attach to commits. Live CI dots poll until checks settle. Push, fetch, or force-with-lease without changing context.</p>
         </article>
         <article class="feature feature--tree reveal">
           <div class="feature__visual tree-ui" aria-hidden="true">
@@ -329,7 +341,130 @@ const showcase = [
           </div>
           <p class="feature__label">Working tree</p>
           <h3>Changes stay close to history.</h3>
-          <p>Stage and unstage files, inspect diffs, and see exactly what’s ready to become the next node.</p>
+          <p>Stage and unstage files, inspect diffs, stash or discard changes, and see exactly what’s ready to become the next node.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="new-features section-shell" id="new" aria-labelledby="new-title">
+      <div class="new-features__heading reveal">
+        <p class="section-number">05 / JUST LANDED</p>
+        <h2 id="new-title">The graph grew a<br /><em>working day.</em></h2>
+        <p>Everything added since the first version of this page, captured in the real app—not a product mockup.</p>
+      </div>
+
+      <div class="product-update-list">
+        <article class="product-update product-update--worktrees">
+          <figure class="product-update__media reveal">
+            <div class="window-bar" aria-hidden="true">
+              <span><i></i><i></i><i></i></span>
+              <code>linked worktrees</code>
+              <small>LIVE</small>
+            </div>
+            <img
+              src="/media/product/linked-worktrees.png"
+              width="1600"
+              height="1000"
+              loading="lazy"
+              alt="ingit commit graph with a linked feature worktree labeled on its branch and a worktree switcher in the header"
+            />
+          </figure>
+          <div class="product-update__copy reveal" data-delay="1">
+            <div class="product-update__index"><span>01</span><i></i><small>03</small></div>
+            <p class="product-update__kicker">PARALLEL CHECKOUTS, LOCATED</p>
+            <h3>Every worktree.<br /><em>One graph.</em></h3>
+            <p>ingit discovers linked worktrees, labels the branches they occupy, and lets you jump between them from the header or the branch itself. Detached worktrees stay visible too.</p>
+            <ul class="product-update__tags" aria-label="Worktree capabilities">
+              <li>Linked branches</li>
+              <li>Branch-in-use guards</li>
+              <li>Fast switching</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="product-update product-update--stash product-update--reverse">
+          <figure class="product-update__media reveal" data-delay="1">
+            <div class="window-bar" aria-hidden="true">
+              <span><i></i><i></i><i></i></span>
+              <code>stash detail</code>
+              <small>LIVE</small>
+            </div>
+            <img
+              src="/media/product/stash-detail.png"
+              width="1600"
+              height="1000"
+              loading="lazy"
+              alt="ingit with the stash list open on the left and a selected stash detail with apply, drop, parent, and changed files on the right"
+            />
+          </figure>
+          <div class="product-update__copy reveal">
+            <div class="product-update__index"><span>02</span><i></i><small>03</small></div>
+            <p class="product-update__kicker">STASHES, WITHOUT THE BLINDFOLD</p>
+            <h3>Put work aside.<br /><em>Keep its shape.</em></h3>
+            <p>Browse stashes in the refs sidebar, inspect every file and diff, jump to the parent commit, then apply or explicitly drop. Safe checkout flows preserve local work and restore it on the other side.</p>
+            <ul class="product-update__tags" aria-label="Stash capabilities">
+              <li>Per-file diffs</li>
+              <li>Apply or drop</li>
+              <li>Safe checkout restore</li>
+            </ul>
+          </div>
+        </article>
+
+        <article class="product-update product-update--finish">
+          <figure class="product-update__media reveal">
+            <div class="window-bar" aria-hidden="true">
+              <span><i></i><i></i><i></i></span>
+              <code>working tree</code>
+              <small>LIVE</small>
+            </div>
+            <img
+              src="/media/product/finishing-flow.png"
+              width="1600"
+              height="1000"
+              loading="lazy"
+              alt="ingit working tree with staged and unstaged files, stash and discard actions, and the commit or commit and push menu"
+            />
+          </figure>
+          <div class="product-update__copy reveal" data-delay="1">
+            <div class="product-update__index"><span>03</span><i></i><small>03</small></div>
+            <p class="product-update__kicker">FROM DIFF TO REMOTE</p>
+            <h3>Finish the change.<br /><em>Stay put.</em></h3>
+            <p>Stage, unstage, inspect, stash, or discard one file—or everything—with explicit confirmation. Then amend, skip hooks, commit, or commit and push without leaving the graph.</p>
+            <ul class="product-update__tags" aria-label="Working tree capabilities">
+              <li>Commit &amp; push</li>
+              <li>Per-file discard</li>
+              <li>Stash from changes</li>
+            </ul>
+          </div>
+        </article>
+      </div>
+
+      <div class="new-detail-grid">
+        <article class="new-detail reveal">
+          <span class="new-detail__number">A / 04</span>
+          <div class="new-detail__icons" aria-hidden="true"><i>✦</i><i>⌁</i><i>✓</i><i>↯</i></div>
+          <h3>Commit messages, decoded.</h3>
+          <p>Conventional types and message patterns become semantic icons on the graph. Two dozen built-ins can be reordered, disabled, or replaced with your own regex and SVG in Settings.</p>
+        </article>
+        <article class="new-detail reveal" data-delay="1">
+          <span class="new-detail__number">B / 04</span>
+          <div class="new-detail__pr" aria-hidden="true">
+            <b>JS</b><span><small>AUTHOR + GITHUB</small>PR #42 · polish stash flow ↗</span><i>✓ CI</i>
+          </div>
+          <h3>Humans and PRs, attached.</h3>
+          <p>Commit detail now carries the author’s avatar and direct links to every matching pull request, right beside the CI runs and GitHub commit.</p>
+        </article>
+        <article class="new-detail reveal">
+          <span class="new-detail__number">C / 04</span>
+          <div class="new-detail__rebase" aria-hidden="true"><i></i><i></i><i></i><i></i><span>FIT TO VIEWPORT</span></div>
+          <h3>Long rebases stay in frame.</h3>
+          <p>Rebase previews now stage the replay beside its target and move the camera to fit the whole operation, so long commit chains remain readable before you confirm.</p>
+        </article>
+        <article class="new-detail reveal" data-delay="1">
+          <span class="new-detail__number">D / 04</span>
+          <div class="new-detail__platforms" aria-hidden="true"><span>LINUX</span><span>macOS</span><span>WINDOWS</span></div>
+          <h3>Native on your machine.</h3>
+          <p>The CLI now ships across Linux, macOS, and Windows, and repeated launches reuse the running ingit instance instead of multiplying local servers.</p>
         </article>
       </div>
     </section>
@@ -337,7 +472,7 @@ const showcase = [
     <section class="architecture" aria-labelledby="architecture-title">
       <div class="section-shell">
         <div class="architecture__copy reveal">
-          <p class="section-number">05 / NO MAGIC TRICKS</p>
+          <p class="section-number">06 / NO MAGIC TRICKS</p>
           <h2 id="architecture-title">Plain git.<br /><em>Beautifully projected.</em></h2>
           <p>No database. No daemon. Everything ingit shows is derived from your repository, and every action is a git command you could have typed.</p>
         </div>
