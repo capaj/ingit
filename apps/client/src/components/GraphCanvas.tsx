@@ -13,7 +13,8 @@ import {
   mergePreviewGutterX,
   stackPreviewChainAboveTarget,
 } from './graph-canvas/action-preview-layout'
-import { findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
+import { findClearEndpointRail, findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
+import { routeUpstreamAroundWorktree } from './graph-canvas/worktree-lane-layout'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,7 @@ const EDGE_SHORT_CURVE_ROWS = 6
 const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
 const EDGE_RAIL_STAGGER_STEP = 6
 const EDGE_BUNDLE_GAP = 4
+const EDGE_TARGET_JOIN_GAP = 6
 const GRAPH_LEFT_GUTTER = 120
 const GRAPH_RIGHT_GUTTER = 520
 const PAD_TOP = 40
@@ -269,6 +271,7 @@ interface VisibleEdgeItem {
   path: string
   plan: EdgeRoutePlan
   bundleOffset: number
+  targetJoinOffset: number
   x1: number
   y1: number
   x2: number
@@ -310,6 +313,8 @@ interface RenderedEdgeItem {
   toPlan: EdgeRoutePlan
   fromBundleOffset: number
   toBundleOffset: number
+  fromTargetJoinOffset: number
+  toTargetJoinOffset: number
   stroke: string
   fromStrokeWidth: number
   toStrokeWidth: number
@@ -363,6 +368,7 @@ interface RenderedLaneHighlight {
 interface EdgeRoutingData {
   plans: Map<string, EdgeRoutePlan>
   bundleOffsets: Map<string, number>
+  targetJoinOffsets: Map<string, number>
 }
 
 function upstreamShortName(upstream?: string) {
@@ -392,7 +398,14 @@ type EdgeRoutePlan =
   | { mode: 'adjacent-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
   | { mode: 'occlusion-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
   | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
-  | { mode: 'outer-rail'; side: 'left' | 'right'; anchorLane: number; innerLane: number; outerRailX: number }
+  | {
+    mode: 'outer-rail'
+    side: 'left' | 'right'
+    anchorLane: number
+    innerLane: number
+    outerRailX: number
+    horizontalTargetJoin?: boolean
+  }
 
 export function buildLayout(rows: CommitRow[], extraLeftGutter = 0) {
   let minLane = Infinity
@@ -680,16 +693,31 @@ function countRowsMatching(
   return count
 }
 
-function buildOuterRailPath(
+export function buildOuterRailPath(
   from: EdgePoint,
   to: EdgePoint,
   outerRailX: number,
+  horizontalTargetJoin = false,
+  targetJoinOffset = 0,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
   const start = pointOnCircleToward(from.x, from.y, outerRailX, from.y + verticalDirection * (NODE_RADIUS + 8), NODE_RADIUS - 1)
-  const end = pointOnCircleToward(to.x, to.y, outerRailX, to.y - verticalDirection * (NODE_RADIUS + 8), NODE_RADIUS - 1)
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
-  const targetJoinY = to.y - verticalDirection * (NODE_RADIUS + 8)
+  const targetJoinY = horizontalTargetJoin
+    ? to.y + targetJoinOffset
+    : to.y - verticalDirection * (NODE_RADIUS + 8)
+  const targetRadius = NODE_RADIUS - 1
+  const end = horizontalTargetJoin
+    ? {
+        // Preserve the bundle's Y offset all the way to the node. A generic
+        // point-toward calculation would aim from the center to the distant
+        // rail, causing parallel hooks to converge and overlap too early.
+        x: to.x
+          + Math.sign(outerRailX - to.x || 1)
+            * Math.sqrt(Math.max(0, targetRadius ** 2 - targetJoinOffset ** 2)),
+        y: targetJoinY,
+      }
+    : pointOnCircleToward(to.x, to.y, outerRailX, targetJoinY, targetRadius)
 
   return roundedPolylinePath(
     [
@@ -702,21 +730,35 @@ function buildOuterRailPath(
   )
 }
 
-function buildAdjacentHookPath(
+export function buildAdjacentHookPath(
   from: EdgePoint,
   to: EdgePoint,
   trackX: number,
+  targetJoinOffset = 0,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
   const start = pointOnCircleToward(from.x, from.y, trackX, to.y, NODE_RADIUS - 1)
-  const end = pointOnCircleToward(to.x, to.y, trackX, to.y, NODE_RADIUS - 1)
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
+  const hasHorizontalTargetJoin = Math.abs(trackX - to.x) > 0.001
+  const targetRadius = NODE_RADIUS - 1
+  const boundedTargetJoinOffset = hasHorizontalTargetJoin
+    ? Math.max(-targetRadius, Math.min(targetRadius, targetJoinOffset))
+    : 0
+  const targetJoinY = to.y + boundedTargetJoinOffset
+  const end = hasHorizontalTargetJoin
+    ? {
+        x: to.x
+          + Math.sign(trackX - to.x)
+            * Math.sqrt(Math.max(0, targetRadius ** 2 - boundedTargetJoinOffset ** 2)),
+        y: targetJoinY,
+      }
+    : pointOnCircleToward(to.x, to.y, trackX, targetJoinY, targetRadius)
 
   return roundedPolylinePath(
     [
       start,
       { x: trackX, y: sourceJoinY },
-      { x: trackX, y: to.y },
+      { x: trackX, y: targetJoinY },
       end,
     ],
     EDGE_CORNER_RADIUS,
@@ -766,7 +808,10 @@ function planEdgeRoute(
   to: LayoutNode,
   edgeKey: string,
   occupiedLanes: number[],
-  opts: { adjacentTrack?: 'from' | 'to' } = {},
+  opts: {
+    adjacentTrack?: 'from' | 'to'
+    additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>
+  } = {},
 ): EdgeRoutePlan {
   const laneDelta = Math.abs(from.row.lane - to.row.lane)
   const rowDelta = Math.abs(to.idx - from.idx)
@@ -792,6 +837,7 @@ function planEdgeRoute(
       occupiedLanes,
       EDGE_OCCLUSION_GEOMETRY,
       preferredTrack,
+      opts.additionalOccupiedLanes,
     )
     if (occlusionTrack) {
       return {
@@ -802,6 +848,29 @@ function planEdgeRoute(
       }
     }
     return { mode: 'curve' }
+  }
+
+  const preferredTrack = opts.adjacentTrack ?? 'from'
+  const fromRouteNode = { x: from.x, y: from.y, idx: from.idx, lane: from.row.lane }
+  const toRouteNode = { x: to.x, y: to.y, idx: to.idx, lane: to.row.lane }
+
+  // Lane ordering reserves the complete source rail for first-parent edges and
+  // the complete target rail for merge edges. Prefer that guaranteed-clear
+  // endpoint gutter: it produces one vertical rail and one horizontal join,
+  // instead of zig-zagging between two interior rails.
+  const endpointRail = findClearEndpointRail(
+    fromRouteNode,
+    toRouteNode,
+    occupiedLanes,
+    preferredTrack,
+    opts.additionalOccupiedLanes,
+  )
+  if (endpointRail) {
+    return {
+      mode: 'outer-rail',
+      ...endpointRail,
+      horizontalTargetJoin: true,
+    }
   }
 
   const minLane = Math.min(from.row.lane, to.row.lane)
@@ -892,6 +961,7 @@ function routedEdgePath(
   to: EdgePoint,
   plan: EdgeRoutePlan,
   bundleOffset: number,
+  targetJoinOffset = 0,
 ): string {
   switch (plan.mode) {
     case 'straight':
@@ -900,7 +970,12 @@ function routedEdgePath(
       return buildCurvedEdgePath(from, to)
     case 'adjacent-hook':
     case 'occlusion-hook':
-      return buildAdjacentHookPath(from, to, (plan.track === 'to' ? to.x : from.x) + bundleOffset)
+      return buildAdjacentHookPath(
+        from,
+        to,
+        (plan.track === 'to' ? to.x : from.x) + bundleOffset,
+        targetJoinOffset,
+      )
     case 'inside-rail':
       return buildInsideRailPath(
         from,
@@ -910,7 +985,13 @@ function routedEdgePath(
         plan.crossoverY,
       )
     case 'outer-rail':
-      return buildOuterRailPath(from, to, plan.outerRailX + bundleOffset)
+      return buildOuterRailPath(
+        from,
+        to,
+        plan.outerRailX + bundleOffset,
+        plan.horizontalTargetJoin,
+        targetJoinOffset,
+      )
   }
 }
 
@@ -954,7 +1035,8 @@ function buildAnimatedRoutedEdgePath(edge: RenderedEdgeItem, progress: number) {
   }
   const plan = lerpEdgeRoutePlan(edge.fromPlan, edge.toPlan, progress)
   const bundleOffset = lerp(edge.fromBundleOffset, edge.toBundleOffset, progress)
-  return routedEdgePath(fromNode, toNode, plan, bundleOffset)
+  const targetJoinOffset = lerp(edge.fromTargetJoinOffset, edge.toTargetJoinOffset, progress)
+  return routedEdgePath(fromNode, toNode, plan, bundleOffset, targetJoinOffset)
 }
 
 function computeLocScaleMax(rows: CommitRow[]) {
@@ -1362,13 +1444,56 @@ function countConflictedWorktreeFiles(changes: WorktreeChangesResponse): number 
   return new Set(changes.unstaged.filter((file) => file.status === 'U').map((file) => file.path)).size
 }
 
-function buildEdgeRoutingData(visibleEdges: VisibleEdge[], occupiedLanes: number[]): EdgeRoutingData {
+interface TargetJoinCandidate {
+  key: string
+  targetKey: string
+  side: 'left' | 'right'
+  railX: number
+}
+
+export function buildTargetJoinOffsets(
+  candidates: TargetJoinCandidate[],
+  gap = EDGE_TARGET_JOIN_GAP,
+): Map<string, number> {
+  const groups = new Map<string, TargetJoinCandidate[]>()
+
+  for (const candidate of candidates) {
+    const groupKey = `${candidate.targetKey}:${candidate.side}`
+    const group = groups.get(groupKey)
+    if (group) group.push(candidate)
+    else groups.set(groupKey, [candidate])
+  }
+
+  const offsets = new Map<string, number>()
+  for (const candidatesInGroup of groups.values()) {
+    candidatesInGroup.sort((left, right) => {
+      const railOrder = left.side === 'right'
+        ? left.railX - right.railX
+        : right.railX - left.railX
+      return railOrder || left.key.localeCompare(right.key)
+    })
+
+    const middle = (candidatesInGroup.length - 1) / 2
+    for (let index = 0; index < candidatesInGroup.length; index++) {
+      offsets.set(candidatesInGroup[index].key, (index - middle) * gap)
+    }
+  }
+
+  return offsets
+}
+
+export function buildEdgeRoutingData(
+  visibleEdges: VisibleEdge[],
+  occupiedLanes: number[],
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
+): EdgeRoutingData {
   const plans = new Map<string, EdgeRoutePlan>()
   const bundleGroups = new Map<string, Array<{ key: string; topIdx: number; bottomIdx: number; innerLane?: number }>>()
 
   for (const edge of visibleEdges) {
     const plan = planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes, {
       adjacentTrack: edge.isMerge ? 'to' : 'from',
+      additionalOccupiedLanes,
     })
     plans.set(edge.key, plan)
 
@@ -1414,7 +1539,26 @@ function buildEdgeRoutingData(visibleEdges: VisibleEdge[], occupiedLanes: number
     }
   }
 
-  return { plans, bundleOffsets }
+  const targetJoinCandidates = visibleEdges.flatMap((edge) => {
+    const plan = plans.get(edge.key)
+    const bundleOffset = bundleOffsets.get(edge.key) ?? 0
+    const railX = plan?.mode === 'outer-rail' && plan.horizontalTargetJoin
+      ? plan.outerRailX + bundleOffset
+      : (plan?.mode === 'adjacent-hook' || plan?.mode === 'occlusion-hook')
+          ? (plan.track === 'to' ? edge.to.x : edge.from.x) + bundleOffset
+          : null
+    if (railX === null || Math.abs(railX - edge.to.x) < 0.001) return []
+
+    return [{
+      key: edge.key,
+      targetKey: edge.to.row.sha,
+      side: railX < edge.to.x ? 'left' as const : 'right' as const,
+      railX,
+    }]
+  })
+  const targetJoinOffsets = buildTargetJoinOffsets(targetJoinCandidates)
+
+  return { plans, bundleOffsets, targetJoinOffsets }
 }
 
 function buildVisibleEdgeItems(
@@ -1430,6 +1574,7 @@ function buildVisibleEdgeItems(
       adjacentTrack: edge.isMerge ? 'to' : 'from',
     })
     const bundleOffset = edgeRouting.bundleOffsets.get(edge.key) ?? 0
+    const targetJoinOffset = edgeRouting.targetJoinOffsets.get(edge.key) ?? 0
     // An edge takes the color of the branch line it travels along: the child for
     // a normal edge, the merged-in parent for a merge edge.
     const colorNode = edge.isMerge ? edge.to : edge.from
@@ -1437,9 +1582,10 @@ function buildVisibleEdgeItems(
       key: edge.key,
       fromSha: edge.from.row.sha,
       toSha: edge.to.row.sha,
-      path: routedEdgePath(edge.from, edge.to, plan, bundleOffset),
+      path: routedEdgePath(edge.from, edge.to, plan, bundleOffset, targetJoinOffset),
       plan,
       bundleOffset,
+      targetJoinOffset,
       x1: edge.from.x,
       y1: edge.from.y,
       x2: edge.to.x,
@@ -1544,10 +1690,25 @@ export function GraphCanvas() {
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
 
+  const currentBranch = useMemo(() => {
+    const current = refs.find((ref) => ref.isCurrent)
+    return current?.shortName ?? null
+  }, [refs])
+
+  const worktreeChangeCount = worktreeChanges
+    ? worktreeChanges.staged.length + worktreeChanges.unstaged.length
+    : 0
+  const renderedRows = useMemo(() => {
+    if (!histWindow) return null
+    return worktreeChangeCount > 0
+      ? routeUpstreamAroundWorktree(histWindow.rows, currentBranch)
+      : histWindow.rows
+  }, [histWindow, currentBranch, worktreeChangeCount])
+
   const layout = useMemo(() => {
-    if (!histWindow || histWindow.rows.length === 0) return null
-    return buildLayout(histWindow.rows, showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0)
-  }, [histWindow, showCommitMessages])
+    if (!renderedRows || renderedRows.length === 0) return null
+    return buildLayout(renderedRows, showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0)
+  }, [renderedRows, showCommitMessages])
 
   const refMap = useMemo(
     () => new Map(refs.map((ref) => [ref.shortName, ref])),
@@ -1585,11 +1746,6 @@ export function GraphCanvas() {
     }
     return null
   }, [selectedRef, refs, worktreesByBranch])
-
-  const currentBranch = useMemo(() => {
-    const current = refs.find((ref) => ref.isCurrent)
-    return current?.shortName ?? null
-  }, [refs])
 
   const defaultNextTagName = useMemo(
     () => nextVersionTagName(refs),
@@ -1724,6 +1880,8 @@ export function GraphCanvas() {
       kind: operation,
       x: pendingNode.x,
       y: pendingNode.y,
+      idx: pendingNode.idx,
+      lane: pendingNode.row.lane,
       headY: headNode.y,
       color,
       count,
@@ -1899,6 +2057,13 @@ export function GraphCanvas() {
     [layout],
   )
 
+  const additionalOccupiedLanes = useMemo<ReadonlyMap<number, readonly number[]> | undefined>(
+    () => worktreeNode
+      ? new Map([[worktreeNode.idx, [worktreeNode.lane]]])
+      : undefined,
+    [worktreeNode],
+  )
+
   const gutterBackgrounds = useMemo(() => {
     if (!layout || !showGutterColors) return []
     const xByLane = new Map<number, number>()
@@ -2055,8 +2220,8 @@ export function GraphCanvas() {
   }, [layout, lastRenderedRange.current.firstIdx, lastRenderedRange.current.lastIdx])
 
   const edgeRouting = useMemo(
-    () => buildEdgeRoutingData(visibleEdges, occupiedLanes),
-    [visibleEdges, occupiedLanes],
+    () => buildEdgeRoutingData(visibleEdges, occupiedLanes, additionalOccupiedLanes),
+    [visibleEdges, occupiedLanes, additionalOccupiedLanes],
   )
 
   const { placements: visibleRefPlacements, rowWidths: refRowWidths } = useMemo(
@@ -2221,6 +2386,8 @@ export function GraphCanvas() {
             toPlan: toEdge?.plan ?? fromEdge?.plan ?? { mode: 'curve' },
             fromBundleOffset: fromEdge?.bundleOffset ?? toEdge?.bundleOffset ?? 0,
             toBundleOffset: toEdge?.bundleOffset ?? fromEdge?.bundleOffset ?? 0,
+            fromTargetJoinOffset: fromEdge?.targetJoinOffset ?? toEdge?.targetJoinOffset ?? 0,
+            toTargetJoinOffset: toEdge?.targetJoinOffset ?? fromEdge?.targetJoinOffset ?? 0,
             stroke: toEdge?.stroke ?? fromEdge?.stroke ?? '#cdd6f4',
             fromStrokeWidth: fromEdge?.strokeWidth ?? displayEdge.strokeWidth,
             toStrokeWidth: toEdge?.strokeWidth ?? displayEdge.strokeWidth,
@@ -2308,6 +2475,8 @@ export function GraphCanvas() {
       toPlan: edge.plan,
       fromBundleOffset: edge.bundleOffset,
       toBundleOffset: edge.bundleOffset,
+      fromTargetJoinOffset: edge.targetJoinOffset,
+      toTargetJoinOffset: edge.targetJoinOffset,
       stroke: edge.stroke,
       fromStrokeWidth: edge.strokeWidth,
       toStrokeWidth: edge.strokeWidth,

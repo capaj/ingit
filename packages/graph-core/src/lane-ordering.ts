@@ -82,12 +82,37 @@ function buildSegments(rows: LaneRow[]): LaneSegment[] {
 
     const firstParent = row.parentShas[0]
     const parent = firstParent ? rowBySha.get(firstParent) : undefined
-    if (parent?.lane === row.lane) {
+    if (parent) {
       segment.continuity += Math.abs(parent.row - row.row)
+      // A first-parent edge that reconnects into another lane continues along
+      // the source gutter until the parent row. Count that complete rail as
+      // occupied, otherwise another disconnected branch can be packed into
+      // the same gutter and the two colored rails render on top of each other.
+      if (parent.lane !== row.lane) {
+        extendSegmentToRow(segment, parent.row)
+      }
+    }
+  }
+
+  // Merge edges approach on the merge parent's gutter. Keep that target
+  // segment occupied up to the merge commit for the same reason.
+  for (const row of rows) {
+    for (const parentSha of row.parentShas.slice(1)) {
+      const parent = rowBySha.get(parentSha)
+      if (!parent) continue
+      const parentSegment = segmentByRoot.get(find(parent.sha))
+      if (!parentSegment) continue
+      parentSegment.continuity += Math.abs(parent.row - row.row)
+      extendSegmentToRow(parentSegment, row.row)
     }
   }
 
   return [...segmentByRoot.values()]
+}
+
+function extendSegmentToRow(segment: LaneSegment, row: number): void {
+  segment.startRow = Math.min(segment.startRow, row)
+  segment.endRow = Math.max(segment.endRow, row)
 }
 
 function orderSide(

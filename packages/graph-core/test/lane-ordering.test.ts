@@ -57,4 +57,34 @@ describe('lane ordering', () => {
     expect(lanes.get('early')).toBe(1)
     expect(lanes.get('late')).toBe(1)
   })
+
+  test('does not reuse a gutter while an earlier branch rail is still reconnecting', () => {
+    const lanes = orderLaneSegmentsByContinuity([
+      { sha: 'red-tip', parentShas: ['red-root'], row: 0, lane: 1 },
+      { sha: 'red-root', parentShas: ['base'], row: 1, lane: 1 },
+      { sha: 'yellow-tip', parentShas: ['yellow-middle'], row: 2, lane: 1 },
+      { sha: 'yellow-middle', parentShas: ['yellow-root'], row: 3, lane: 1 },
+      { sha: 'yellow-root', parentShas: ['base'], row: 4, lane: 1 },
+      { sha: 'base', parentShas: [], row: 6, lane: 0 },
+    ])
+
+    expect(lanes.get('red-tip')).toBe(2)
+    expect(lanes.get('red-root')).toBe(2)
+    expect(lanes.get('yellow-tip')).toBe(1)
+    expect(lanes.get('yellow-root')).toBe(1)
+  })
+
+  test('does not pack another branch under an active merge-parent rail', () => {
+    const lanes = orderLaneSegmentsByContinuity([
+      { sha: 'merge', parentShas: ['base', 'red-root'], row: 0, lane: 0 },
+      { sha: 'yellow-tip', parentShas: ['yellow-root'], row: 1, lane: 1 },
+      { sha: 'yellow-root', parentShas: [], row: 2, lane: 1 },
+      { sha: 'red-root', parentShas: [], row: 4, lane: 2 },
+      { sha: 'base', parentShas: [], row: 5, lane: 0 },
+    ])
+
+    expect(lanes.get('red-root')).toBe(2)
+    expect(lanes.get('yellow-tip')).toBe(1)
+    expect(lanes.get('yellow-root')).toBe(1)
+  })
 })

@@ -15,6 +15,13 @@ export interface EdgeOcclusionGeometry {
 
 export type OcclusionHookTrack = 'from' | 'to'
 
+export interface ClearEndpointRail {
+  side: 'left' | 'right'
+  anchorLane: number
+  innerLane: number
+  outerRailX: number
+}
+
 interface Point {
   x: number
   y: number
@@ -62,6 +69,7 @@ function curveIntersectsIntermediateNode(
   to: OcclusionRouteNode,
   occupiedLanes: number[],
   geometry: EdgeOcclusionGeometry,
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
 ): boolean {
   const clipRadius = geometry.nodeRadius - 1
   const start = pointOnCircleToward(from, to, clipRadius)
@@ -80,11 +88,16 @@ function curveIntersectsIntermediateNode(
   const intermediateNodes: Point[] = []
   for (let idx = firstIntermediateRow; idx <= lastIntermediateRow; idx++) {
     const lane = occupiedLanes[idx]
-    if (lane === undefined) continue
-    intermediateNodes.push({
-      x: from.x + (lane - from.lane) * geometry.laneWidth,
-      y: from.y + (idx - from.idx) * geometry.rowHeight,
-    })
+    const lanes = [
+      ...(lane === undefined ? [] : [lane]),
+      ...(additionalOccupiedLanes?.get(idx) ?? []),
+    ]
+    for (const occupiedLane of lanes) {
+      intermediateNodes.push({
+        x: from.x + (occupiedLane - from.lane) * geometry.laneWidth,
+        y: from.y + (idx - from.idx) * geometry.rowHeight,
+      })
+    }
   }
 
   let previous = start
@@ -99,11 +112,12 @@ function curveIntersectsIntermediateNode(
   return false
 }
 
-function hookTrackIsClear(
+function endpointTrackIsClear(
   from: OcclusionRouteNode,
   to: OcclusionRouteNode,
   occupiedLanes: number[],
   track: OcclusionHookTrack,
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
 ): boolean {
   const trackLane = track === 'from' ? from.lane : to.lane
   const firstIntermediateRow = Math.min(from.idx, to.idx) + 1
@@ -111,8 +125,35 @@ function hookTrackIsClear(
 
   for (let idx = firstIntermediateRow; idx <= lastIntermediateRow; idx++) {
     if (occupiedLanes[idx] === trackLane) return false
+    if (additionalOccupiedLanes?.get(idx)?.includes(trackLane)) return false
   }
   return true
+}
+
+/**
+ * Use the preferred endpoint's own gutter as the single vertical rail when it
+ * is clear across the edge span. The caller can connect the other endpoint
+ * with one diagonal instead of switching between two interior rails.
+ */
+export function findClearEndpointRail(
+  from: OcclusionRouteNode,
+  to: OcclusionRouteNode,
+  occupiedLanes: number[],
+  preferredTrack: OcclusionHookTrack,
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
+): ClearEndpointRail | null {
+  if (!endpointTrackIsClear(from, to, occupiedLanes, preferredTrack, additionalOccupiedLanes)) {
+    return null
+  }
+
+  const railNode = preferredTrack === 'from' ? from : to
+  const otherNode = preferredTrack === 'from' ? to : from
+  return {
+    side: railNode.x <= otherNode.x ? 'left' : 'right',
+    anchorLane: railNode.lane,
+    innerLane: otherNode.lane,
+    outerRailX: railNode.x,
+  }
 }
 
 /**
@@ -126,11 +167,20 @@ export function findOcclusionHookTrack(
   occupiedLanes: number[],
   geometry: EdgeOcclusionGeometry,
   preferredTrack: OcclusionHookTrack,
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
 ): OcclusionHookTrack | null {
   if (Math.abs(to.idx - from.idx) < 2) return null
-  if (!curveIntersectsIntermediateNode(from, to, occupiedLanes, geometry)) return null
+  if (!curveIntersectsIntermediateNode(
+    from,
+    to,
+    occupiedLanes,
+    geometry,
+    additionalOccupiedLanes,
+  )) return null
 
-  if (hookTrackIsClear(from, to, occupiedLanes, preferredTrack)) return preferredTrack
+  if (endpointTrackIsClear(from, to, occupiedLanes, preferredTrack, additionalOccupiedLanes)) return preferredTrack
   const alternateTrack = preferredTrack === 'from' ? 'to' : 'from'
-  return hookTrackIsClear(from, to, occupiedLanes, alternateTrack) ? alternateTrack : null
+  return endpointTrackIsClear(from, to, occupiedLanes, alternateTrack, additionalOccupiedLanes)
+    ? alternateTrack
+    : null
 }
