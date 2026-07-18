@@ -1727,6 +1727,7 @@ interface VerticalRailCandidate {
   railKey: string
   topIdx: number
   bottomIdx: number
+  bundleOrder?: number
   railStartY?: number
   strokeWidth?: number
 }
@@ -1794,13 +1795,24 @@ export function buildVerticalBundleOffsets(
     }
 
     for (const component of components.values()) {
-      const slotEnds: VerticalRailCandidate[] = []
+      const orderedComponent = [...component].sort((left, right) => (
+        (left.bundleOrder ?? 0) - (right.bundleOrder ?? 0)
+        || left.topIdx - right.topIdx
+        || left.bottomIdx - right.bottomIdx
+        || left.key.localeCompare(right.key)
+      ))
+      const slots: VerticalRailCandidate[][] = []
       const slotWidths: number[] = []
       const assignments: Array<{ key: string; slot: number }> = []
-      for (const candidate of component) {
-        let slot = slotEnds.findIndex((previous) => !verticalRailCandidatesConflict(previous, candidate))
-        if (slot < 0) slot = slotEnds.length
-        slotEnds[slot] = candidate
+      for (const candidate of orderedComponent) {
+        let slot = slots.findIndex((assigned) => (
+          assigned.every((previous) => !verticalRailCandidatesConflict(previous, candidate))
+        ))
+        if (slot < 0) {
+          slot = slots.length
+          slots.push([])
+        }
+        slots[slot].push(candidate)
         slotWidths[slot] = Math.max(slotWidths[slot] ?? 0, candidate.strokeWidth ?? 3)
         assignments.push({ key: candidate.key, slot })
       }
@@ -1966,6 +1978,9 @@ export function buildEdgeRoutingData(
       railKey,
       topIdx: Math.min(edge.from.idx, edge.to.idx),
       bottomIdx: Math.max(edge.from.idx, edge.to.idx),
+      // Keep the first-parent continuation to the left and incoming merge
+      // rails to the right, independent of which interval starts first.
+      bundleOrder: edge.isMerge ? 1 : 0,
       railStartY: Math.min(edge.from.y, edge.to.y) + NODE_RADIUS + 8,
       strokeWidth: edge.isMerge ? 2 : 4.5,
     }]

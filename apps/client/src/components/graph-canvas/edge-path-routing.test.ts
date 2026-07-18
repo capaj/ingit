@@ -296,6 +296,29 @@ describe('outer rail path', () => {
     expect(offsets.get('lower-merge')).toBe(5)
   })
 
+  test('keeps an earlier incoming merge rail right of the branch continuation', () => {
+    const offsets = buildVerticalBundleOffsets([
+      {
+        key: 'incoming-merge',
+        railKey: 'gutter-2',
+        topIdx: 0,
+        bottomIdx: 10,
+        bundleOrder: 1,
+        strokeWidth: 2,
+      },
+      {
+        key: 'branch-continuation',
+        railKey: 'gutter-2',
+        topIdx: 2,
+        bottomIdx: 10,
+        bundleOrder: 0,
+        strokeWidth: 4.5,
+      },
+    ])
+
+    expect(offsets.get('branch-continuation')).toBeLessThan(offsets.get('incoming-merge')!)
+  })
+
   test('bundles a straight continuation with merge rails sharing its gutter', () => {
     const rows = Array.from({ length: 11 }, (_, index) => row(
       `node-${index}`,
