@@ -29,7 +29,7 @@ function iconForLabel(label: string): ActionIconName {
   if (normalized.includes('fetch')) return 'fetch'
   if (normalized.includes('push')) return 'push'
   if (normalized.includes('delete')) return 'delete'
-  if (normalized.includes('discard')) return 'reset'
+  if (normalized.includes('discard')) return 'delete'
   if (normalized.includes('unstage')) return 'unstage'
   if (normalized.includes('stage')) return 'stage'
   if (normalized.includes('stash')) return 'stash'
