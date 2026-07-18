@@ -400,7 +400,11 @@ function findTrackingRemoteRef(localRef: RefSummary, refs: RefSummary[]) {
 
 type EdgeRoutePlan =
   | { mode: 'straight'; bundleJoinY?: number }
-  | { mode: 'curve'; targetSide?: 'left' | 'right' }
+  | {
+    mode: 'curve'
+    targetSide?: 'left' | 'right'
+    sourceSide?: 'left' | 'right'
+  }
   | { mode: 'adjacent-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
   | { mode: 'occlusion-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
   | { mode: 'target-hook'; laneA: number; laneB: number; track: 'from' }
@@ -709,9 +713,78 @@ export function buildOuterRailPath(
   targetNodeRadius = NODE_RADIUS,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
-  const start = pointOnCircleToward(from.x, from.y, outerRailX, from.y + verticalDirection * (NODE_RADIUS + 8), NODE_RADIUS - 1)
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
   const targetRadius = Math.max(1, targetNodeRadius - 1)
+  const usesTargetRail = (
+    !horizontalTargetJoin
+    && Math.abs(outerRailX - to.x) < 0.001
+    && Math.abs(from.x - to.x) > 0.001
+  )
+  if (usesTargetRail) {
+    const sourceSide = from.x < to.x ? -1 : 1
+    const sourceVerticalSide = -verticalDirection
+    const diagonalRadius = targetRadius * Math.SQRT1_2
+    const end = {
+      x: to.x + sourceSide * diagonalRadius,
+      y: to.y + sourceVerticalSide * diagonalRadius,
+    }
+    const terminalLength = 18
+    const targetLead = {
+      x: end.x + sourceSide * terminalLength * Math.SQRT1_2,
+      y: end.y + sourceVerticalSide * terminalLength * Math.SQRT1_2,
+    }
+    const shiftedRailX = targetLead.x
+    const shiftedStart = pointOnCircleToward(
+      from.x,
+      from.y,
+      shiftedRailX,
+      sourceJoinY,
+      NODE_RADIUS - 1,
+    )
+
+    return roundedPolylinePath(
+      [
+        shiftedStart,
+        { x: shiftedRailX, y: sourceJoinY },
+        targetLead,
+        end,
+      ],
+      Math.min(5, terminalLength / 2),
+    )
+  }
+
+  const usesSourceRail = (
+    Math.abs(outerRailX - from.x) < 0.001
+    && Math.abs(from.x - to.x) > 0.001
+  )
+  let routeRailX = outerRailX
+  let sourcePoints: EdgePoint[]
+  if (usesSourceRail) {
+    const targetSide = to.x < from.x ? -1 : 1
+    const sourceRadius = NODE_RADIUS - 1
+    const diagonalRadius = sourceRadius * Math.SQRT1_2
+    const start = {
+      x: from.x + targetSide * diagonalRadius,
+      y: from.y + verticalDirection * diagonalRadius,
+    }
+    const terminalLength = 18
+    const sourceLead = {
+      x: start.x + targetSide * terminalLength * Math.SQRT1_2,
+      y: start.y + verticalDirection * terminalLength * Math.SQRT1_2,
+    }
+    routeRailX = sourceLead.x
+    sourcePoints = [start, sourceLead]
+  } else {
+    const start = pointOnCircleToward(
+      from.x,
+      from.y,
+      outerRailX,
+      sourceJoinY,
+      NODE_RADIUS - 1,
+    )
+    sourcePoints = [start, { x: outerRailX, y: sourceJoinY }]
+  }
+
   const boundedTargetJoinOffset = horizontalTargetJoin
     ? Math.max(-targetRadius, Math.min(targetRadius, targetJoinOffset))
     : targetJoinOffset
@@ -724,17 +797,16 @@ export function buildOuterRailPath(
         // point-toward calculation would aim from the center to the distant
         // rail, causing parallel hooks to converge and overlap too early.
         x: to.x
-          + Math.sign(outerRailX - to.x || 1)
+          + Math.sign(routeRailX - to.x || 1)
             * Math.sqrt(Math.max(0, targetRadius ** 2 - boundedTargetJoinOffset ** 2)),
         y: targetJoinY,
       }
-    : pointOnCircleToward(to.x, to.y, outerRailX, targetJoinY, targetRadius)
+    : pointOnCircleToward(to.x, to.y, routeRailX, targetJoinY, targetRadius)
 
   return roundedPolylinePath(
     [
-      start,
-      { x: outerRailX, y: sourceJoinY },
-      { x: outerRailX, y: targetJoinY },
+      ...sourcePoints,
+      { x: routeRailX, y: targetJoinY },
       end,
     ],
     EDGE_CORNER_RADIUS,
@@ -749,10 +821,78 @@ export function buildAdjacentHookPath(
   targetNodeRadius = NODE_RADIUS,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
-  const start = pointOnCircleToward(from.x, from.y, trackX, to.y, NODE_RADIUS - 1)
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
   const hasHorizontalTargetJoin = Math.abs(trackX - to.x) > 0.001
   const targetRadius = Math.max(1, targetNodeRadius - 1)
+  const usesTargetTrack = (
+    !hasHorizontalTargetJoin
+    && Math.abs(from.x - to.x) > 0.001
+  )
+  if (usesTargetTrack) {
+    const sourceSide = from.x < to.x ? -1 : 1
+    const sourceVerticalSide = -verticalDirection
+    const diagonalRadius = targetRadius * Math.SQRT1_2
+    const end = {
+      x: to.x + sourceSide * diagonalRadius,
+      y: to.y + sourceVerticalSide * diagonalRadius,
+    }
+    const terminalLength = 18
+    const targetLead = {
+      x: end.x + sourceSide * terminalLength * Math.SQRT1_2,
+      y: end.y + sourceVerticalSide * terminalLength * Math.SQRT1_2,
+    }
+    const shiftedTrackX = targetLead.x
+    const shiftedStart = pointOnCircleToward(
+      from.x,
+      from.y,
+      shiftedTrackX,
+      sourceJoinY,
+      NODE_RADIUS - 1,
+    )
+
+    return roundedPolylinePath(
+      [
+        shiftedStart,
+        { x: shiftedTrackX, y: sourceJoinY },
+        targetLead,
+        end,
+      ],
+      Math.min(5, terminalLength / 2),
+    )
+  }
+
+  const usesSourceTrack = (
+    Math.abs(trackX - from.x) < 0.001
+    && Math.abs(from.x - to.x) > 0.001
+  )
+  let routeTrackX = trackX
+  let sourcePoints: EdgePoint[]
+  if (usesSourceTrack) {
+    const targetSide = to.x < from.x ? -1 : 1
+    const sourceRadius = NODE_RADIUS - 1
+    const diagonalRadius = sourceRadius * Math.SQRT1_2
+    const start = {
+      x: from.x + targetSide * diagonalRadius,
+      y: from.y + verticalDirection * diagonalRadius,
+    }
+    const terminalLength = 18
+    const sourceLead = {
+      x: start.x + targetSide * terminalLength * Math.SQRT1_2,
+      y: start.y + verticalDirection * terminalLength * Math.SQRT1_2,
+    }
+    routeTrackX = sourceLead.x
+    sourcePoints = [start, sourceLead]
+  } else {
+    const start = pointOnCircleToward(
+      from.x,
+      from.y,
+      trackX,
+      to.y,
+      NODE_RADIUS - 1,
+    )
+    sourcePoints = [start, { x: trackX, y: sourceJoinY }]
+  }
+
   const boundedTargetJoinOffset = hasHorizontalTargetJoin
     ? Math.max(-targetRadius, Math.min(targetRadius, targetJoinOffset))
     : 0
@@ -760,17 +900,16 @@ export function buildAdjacentHookPath(
   const end = hasHorizontalTargetJoin
     ? {
         x: to.x
-          + Math.sign(trackX - to.x)
+          + Math.sign(routeTrackX - to.x)
             * Math.sqrt(Math.max(0, targetRadius ** 2 - boundedTargetJoinOffset ** 2)),
         y: targetJoinY,
       }
-    : pointOnCircleToward(to.x, to.y, trackX, targetJoinY, targetRadius)
+    : pointOnCircleToward(to.x, to.y, routeTrackX, targetJoinY, targetRadius)
 
   return roundedPolylinePath(
     [
-      start,
-      { x: trackX, y: sourceJoinY },
-      { x: trackX, y: targetJoinY },
+      ...sourcePoints,
+      { x: routeTrackX, y: targetJoinY },
       end,
     ],
     EDGE_CORNER_RADIUS,
@@ -857,14 +996,22 @@ export function buildCurvedEdgePath(
   to: EdgePoint,
   targetSide?: 'left' | 'right',
   targetNodeRadius = NODE_RADIUS,
+  sourceSide?: 'left' | 'right',
 ) {
   if (targetSide) {
     const targetRadius = Math.max(1, targetNodeRadius - 1)
     const verticalDirection = to.y >= from.y ? 1 : -1
-    const start = {
-      x: from.x,
-      y: from.y + verticalDirection * (NODE_RADIUS - 1),
-    }
+    const sourceRadius = NODE_RADIUS - 1
+    const sourceDiagonalRadius = sourceRadius * Math.SQRT1_2
+    const start = sourceSide
+      ? {
+          x: from.x + (sourceSide === 'left' ? -sourceDiagonalRadius : sourceDiagonalRadius),
+          y: from.y + verticalDirection * sourceDiagonalRadius,
+        }
+      : {
+          x: from.x,
+          y: from.y + verticalDirection * sourceRadius,
+        }
     const end = {
       x: to.x + (targetSide === 'left' ? -targetRadius : targetRadius),
       y: to.y,
@@ -873,8 +1020,16 @@ export function buildCurvedEdgePath(
     // clearly, even when the long diagonal is already close to that angle.
     const terminalLength = Math.min(18, Math.hypot(end.x - start.x, end.y - start.y) * 0.2)
     const sourceLead = {
-      x: start.x,
-      y: start.y + verticalDirection * terminalLength,
+      x: start.x + (
+        sourceSide === 'left'
+          ? -terminalLength * Math.SQRT1_2
+          : sourceSide === 'right'
+            ? terminalLength * Math.SQRT1_2
+            : 0
+      ),
+      y: start.y + verticalDirection * (
+        sourceSide ? terminalLength * Math.SQRT1_2 : terminalLength
+      ),
     }
     const targetLead = {
       x: end.x + (targetSide === 'left' ? -terminalLength : terminalLength),
@@ -1061,7 +1216,13 @@ function routedEdgePath(
     case 'straight':
       return buildStraightEdgePath(from, to, bundleOffset, targetNodeRadius, plan.bundleJoinY)
     case 'curve':
-      return buildCurvedEdgePath(from, to, plan.targetSide, targetNodeRadius)
+      return buildCurvedEdgePath(
+        from,
+        to,
+        plan.targetSide,
+        targetNodeRadius,
+        plan.sourceSide,
+      )
     case 'adjacent-hook':
     case 'occlusion-hook':
     case 'target-hook':
@@ -1750,19 +1911,31 @@ export function buildEdgeRoutingData(
     plans.set(edge.key, plan)
   }
 
-  // When several parents already enter one commit as parallel horizontal
-  // hooks, align a clear short curve on the same side with that bundle. This
-  // avoids one diagonal cutting across an otherwise orderly stack of joins.
+  // Align clear short curves when a horizontal hook already enters the same
+  // side, or when multiple curves would otherwise converge on one attachment
+  // point. Keeping the complete same-side group in one hook bundle prevents
+  // both occlusion and crossings near the target.
   const alignedTargetSides = new Set<string>()
+  const curveTargetSideCounts = new Map<string, number>()
   for (const edge of visibleEdges) {
     const railX = targetJoinRailX(edge, plans.get(edge.key))
     if (railX === null || Math.abs(railX - edge.to.x) < 0.001) continue
     const side = railX < edge.to.x ? 'left' : 'right'
     alignedTargetSides.add(`${edge.to.row.sha}:${side}`)
   }
+  for (const edge of visibleEdges) {
+    if (plans.get(edge.key)?.mode !== 'curve') continue
+    const side = edge.from.x < edge.to.x ? 'left' : edge.from.x > edge.to.x ? 'right' : null
+    if (!side) continue
+    const groupKey = `${edge.to.row.sha}:${side}`
+    curveTargetSideCounts.set(groupKey, (curveTargetSideCounts.get(groupKey) ?? 0) + 1)
+  }
+  for (const [groupKey, count] of curveTargetSideCounts) {
+    if (count > 1) alignedTargetSides.add(groupKey)
+  }
 
   for (const edge of visibleEdges) {
-    if (edge.isMerge || plans.get(edge.key)?.mode !== 'curve') continue
+    if (plans.get(edge.key)?.mode !== 'curve') continue
     const side = edge.from.x < edge.to.x ? 'left' : edge.from.x > edge.to.x ? 'right' : null
     if (!side || !alignedTargetSides.has(`${edge.to.row.sha}:${side}`)) continue
 
@@ -1857,6 +2030,11 @@ export function buildEdgeRoutingData(
       // Enter through the free side of the target instead of crossing the
       // centered continuation or parallel rails attached to the commit.
       targetSide: edge.from.x < edge.to.x ? 'left' : 'right',
+      // If this commit's main continuation already leaves vertically in the
+      // same direction, peel the side edge away at 45 degrees immediately.
+      ...(targetsWithCenteredContinuation.has(edge.from.row.sha)
+        ? { sourceSide: edge.to.x < edge.from.x ? 'left' as const : 'right' as const }
+        : {}),
     })
   }
 

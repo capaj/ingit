@@ -42,6 +42,31 @@ describe('outer rail path', () => {
     expect(path).toEndWith('L85,200')
   })
 
+  test('enters a target-side rail diagonally without overlapping its vertical line', () => {
+    const path = buildOuterRailPath(
+      { x: 0, y: 200 },
+      { x: 100, y: 0 },
+      100,
+    )
+
+    expect(path).toContain('Q')
+    expect(path).not.toContain('L100,')
+    expect(path).toEndWith('L89.39339828220179,10.606601717798213')
+  })
+
+  test('leaves a source-side rail diagonally without overlapping its vertical line', () => {
+    const path = buildOuterRailPath(
+      { x: 100, y: 0 },
+      { x: 0, y: 200 },
+      100,
+      true,
+    )
+
+    expect(path).toStartWith('M89.39339828220179,10.606601717798213')
+    expect(path).not.toContain('M100,')
+    expect(path).toEndWith('L15,200')
+  })
+
   test('keeps shared horizontal target hooks side by side', () => {
     const offsets = buildTargetJoinOffsets([
       { key: 'cyan', targetKey: 'base', side: 'right', railX: 450 },
@@ -68,10 +93,31 @@ describe('outer rail path', () => {
       offsets.get('yellow'),
     )
 
-    expect(cyanPath).toContain('Q450,197')
-    expect(yellowPath).toContain('Q610,203')
+    expect(cyanPath).toMatch(/Q[^ ]+,197 /)
+    expect(yellowPath).toMatch(/Q[^ ]+,203 /)
     expect(cyanPath).toEndWith(',197')
     expect(yellowPath).toEndWith(',203')
+  })
+
+  test('leaves a source-side adjacent hook at 45 degrees', () => {
+    const path = buildAdjacentHookPath(
+      { x: 100, y: 0 },
+      { x: 0, y: 200 },
+      100,
+    )
+
+    expect(path).toStartWith('M89.39339828220179,10.606601717798213')
+    expect(path).toEndWith('L15,200')
+  })
+
+  test('enters a target-side adjacent hook at 45 degrees', () => {
+    const path = buildAdjacentHookPath(
+      { x: 0, y: 200 },
+      { x: 100, y: 0 },
+      100,
+    )
+
+    expect(path).toEndWith('L89.39339828220179,10.606601717798213')
   })
 
   test('bundles an occlusion hook with an outer rail at their shared target', () => {
@@ -139,6 +185,56 @@ describe('outer rail path', () => {
     expect(routing.plans.get('short-target')?.mode).toBe('target-hook')
     expect(routing.targetJoinOffsets.get('short-target')).toBe(-3)
     expect(routing.targetJoinOffsets.get('long-target')).toBe(3)
+  })
+
+  test('aligns a short merge curve with an existing horizontal hook', () => {
+    const rows = [
+      row('long-parent', 0),
+      row('filler-1', 3),
+      row('filler-2', 3),
+      row('filler-3', 3),
+      row('filler-4', 3),
+      row('filler-5', 3),
+      row('filler-6', 3),
+      row('merge-parent', 1),
+      row('target', 3),
+    ]
+    const layout = buildLayout(rows)
+    const target = layout.nodes[8]
+    const routing = buildEdgeRoutingData(
+      [
+        { key: 'long-target', from: layout.nodes[0], to: target, isMerge: false },
+        { key: 'merge-target', from: layout.nodes[7], to: target, isMerge: true },
+      ],
+      layout.nodes.map((node) => node.row.lane),
+    )
+
+    expect(routing.plans.get('long-target')?.mode).toBe('outer-rail')
+    expect(routing.plans.get('merge-target')?.mode).toBe('target-hook')
+    expect(routing.targetJoinOffsets.get('merge-target')).toBe(-3)
+    expect(routing.targetJoinOffsets.get('long-target')).toBe(3)
+  })
+
+  test('aligns multiple same-side curves without an existing hook', () => {
+    const rows = [
+      row('near-source', 1),
+      row('far-source', 2),
+      row('target', 0),
+    ]
+    const layout = buildLayout(rows)
+    const target = layout.nodes[2]
+    const routing = buildEdgeRoutingData(
+      [
+        { key: 'near-target', from: layout.nodes[0], to: target, isMerge: false },
+        { key: 'far-target', from: layout.nodes[1], to: target, isMerge: true },
+      ],
+      layout.nodes.map((node) => node.row.lane),
+    )
+
+    expect(routing.plans.get('near-target')?.mode).toBe('target-hook')
+    expect(routing.plans.get('far-target')?.mode).toBe('target-hook')
+    expect(routing.targetJoinOffsets.get('near-target')).toBe(-3)
+    expect(routing.targetJoinOffsets.get('far-target')).toBe(3)
   })
 
   test('grows a target node once five or more hooks need attachment points', () => {
@@ -286,6 +382,46 @@ describe('outer rail path', () => {
     expect(routing.plans.get('side-target')).toEqual({
       mode: 'curve',
       targetSide: 'left',
+    })
+  })
+
+  test('leaves at 45 degrees when the source also continues vertically', () => {
+    const rows = [
+      row('source', 2),
+      row('filler-1', 0),
+      row('target', 1),
+      row('target-parent', 1),
+      row('source-parent', 2),
+    ]
+    const layout = buildLayout(rows)
+    const routing = buildEdgeRoutingData(
+      [
+        {
+          key: 'source-target',
+          from: layout.nodes[0],
+          to: layout.nodes[2],
+          isMerge: true,
+        },
+        {
+          key: 'target-parent',
+          from: layout.nodes[2],
+          to: layout.nodes[3],
+          isMerge: false,
+        },
+        {
+          key: 'source-parent',
+          from: layout.nodes[0],
+          to: layout.nodes[4],
+          isMerge: false,
+        },
+      ],
+      rows.map((entry) => entry.lane),
+    )
+
+    expect(routing.plans.get('source-target')).toEqual({
+      mode: 'curve',
+      targetSide: 'right',
+      sourceSide: 'left',
     })
   })
 
