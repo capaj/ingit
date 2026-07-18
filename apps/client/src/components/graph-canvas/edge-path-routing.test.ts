@@ -3,9 +3,13 @@ import type { CommitRow } from '@ingit/rpc-contract'
 import {
   buildAdjacentHookPath,
   buildEdgeRoutingData,
+  buildCurvedEdgePath,
   buildLayout,
   buildOuterRailPath,
+  buildStraightEdgePath,
   buildTargetJoinOffsets,
+  buildTargetNodeRadii,
+  buildVerticalBundleOffsets,
 } from '../GraphCanvas'
 
 function row(sha: string, lane: number): CommitRow {
@@ -107,5 +111,233 @@ describe('outer rail path', () => {
       routing.targetJoinOffsets.get('cyan-target'),
     )
     expect(cyanPath).toEndWith(`,${target.y - 3}`)
+  })
+
+  test('aligns a short curve with existing horizontal hooks into the same target', () => {
+    const rows = [
+      row('long-parent', 0),
+      row('filler-1', 3),
+      row('filler-2', 3),
+      row('filler-3', 3),
+      row('filler-4', 3),
+      row('filler-5', 3),
+      row('filler-6', 3),
+      row('short-parent', 1),
+      row('target', 3),
+    ]
+    const layout = buildLayout(rows)
+    const target = layout.nodes[8]
+    const routing = buildEdgeRoutingData(
+      [
+        { key: 'long-target', from: layout.nodes[0], to: target, isMerge: false },
+        { key: 'short-target', from: layout.nodes[7], to: target, isMerge: false },
+      ],
+      layout.nodes.map((node) => node.row.lane),
+    )
+
+    expect(routing.plans.get('long-target')?.mode).toBe('outer-rail')
+    expect(routing.plans.get('short-target')?.mode).toBe('target-hook')
+    expect(routing.targetJoinOffsets.get('short-target')).toBe(-3)
+    expect(routing.targetJoinOffsets.get('long-target')).toBe(3)
+  })
+
+  test('grows a target node once five or more hooks need attachment points', () => {
+    const candidates = Array.from({ length: 6 }, (_, index) => ({
+      key: `edge-${index}`,
+      targetKey: 'busy-target',
+      side: 'left' as const,
+      railX: index * 80,
+    }))
+
+    expect(buildTargetNodeRadii(candidates.slice(0, 4)).get('busy-target')).toBeUndefined()
+    expect(buildTargetNodeRadii(candidates.slice(0, 5)).get('busy-target')).toBe(19)
+    expect(buildTargetNodeRadii(candidates).get('busy-target')).toBe(22)
+  })
+
+  test('spaces overlapping vertical rails and reuses tracks after they clear', () => {
+    const offsets = buildVerticalBundleOffsets([
+      { key: 'long', railKey: 'gutter-2', topIdx: 0, bottomIdx: 10 },
+      { key: 'nested', railKey: 'gutter-2', topIdx: 2, bottomIdx: 8 },
+      { key: 'third', railKey: 'gutter-2', topIdx: 8, bottomIdx: 12 },
+      { key: 'later', railKey: 'gutter-2', topIdx: 11, bottomIdx: 20 },
+      { key: 'other-gutter', railKey: 'gutter-3', topIdx: 0, bottomIdx: 20 },
+    ])
+
+    expect(offsets.get('long')).toBe(-3)
+    expect(offsets.get('nested')).toBe(3)
+    expect(offsets.get('third')).toBe(3)
+    expect(offsets.get('later')).toBe(-3)
+    expect(offsets.get('other-gutter')).toBe(0)
+  })
+
+  test('keeps a merge rail in the middle and gives every vertical stroke visible clearance', () => {
+    const offsets = buildVerticalBundleOffsets([
+      {
+        key: 'branch-continuation',
+        railKey: 'gutter-2',
+        topIdx: 0,
+        bottomIdx: 10,
+        strokeWidth: 4.5,
+      },
+      {
+        key: 'upper-merge',
+        railKey: 'gutter-2',
+        topIdx: 2,
+        bottomIdx: 10,
+        strokeWidth: 2,
+      },
+      {
+        key: 'lower-merge',
+        railKey: 'gutter-2',
+        topIdx: 4,
+        bottomIdx: 10,
+        strokeWidth: 2,
+      },
+    ])
+
+    expect(offsets.get('branch-continuation')).toBe(-6.25)
+    expect(offsets.get('upper-merge')).toBe(0)
+    expect(offsets.get('lower-merge')).toBe(5)
+  })
+
+  test('bundles a straight continuation with merge rails sharing its gutter', () => {
+    const rows = Array.from({ length: 11 }, (_, index) => row(
+      `node-${index}`,
+      index === 0 || index === 10 ? 0 : index === 2 ? 3 : index === 4 ? 2 : index === 8 ? -1 : 1,
+    ))
+    const layout = buildLayout(rows)
+    const routing = buildEdgeRoutingData(
+      [
+        { key: 'branch', from: layout.nodes[0], to: layout.nodes[10], isMerge: false },
+        { key: 'upper-merge', from: layout.nodes[2], to: layout.nodes[10], isMerge: true },
+        { key: 'lower-merge', from: layout.nodes[4], to: layout.nodes[10], isMerge: true },
+        { key: 'side-curve', from: layout.nodes[8], to: layout.nodes[10], isMerge: false },
+      ],
+      rows.map((entry) => entry.lane),
+    )
+
+    expect(routing.plans.get('branch')).toEqual({
+      mode: 'straight',
+      bundleJoinY: layout.nodes[2].y + 16,
+    })
+    expect(routing.plans.get('upper-merge')?.mode).toBe('outer-rail')
+    expect(routing.plans.get('lower-merge')?.mode).toBe('outer-rail')
+    expect(routing.plans.get('side-curve')).toEqual({ mode: 'curve', targetSide: 'left' })
+    expect(routing.bundleOffsets.get('branch')).toBe(-6.25)
+    expect(routing.bundleOffsets.get('upper-merge')).toBe(0)
+    expect(routing.bundleOffsets.get('lower-merge')).toBe(5)
+  })
+
+  test('starts a bundled straight rail centered before jogging onto its track', () => {
+    const path = buildStraightEdgePath(
+      { x: 100, y: 100 },
+      { x: 100, y: 400 },
+      -6.25,
+      16,
+      280,
+    )
+
+    expect(path).toStartWith('M100,115')
+    expect(path).toContain('100,270')
+    expect(path).toContain('93.75,280')
+    expect(path).toMatch(/L93\.75,386\.3641098567\d+$/)
+  })
+
+  test('bends a side-entry curve into radial segments at both node borders', () => {
+    const path = buildCurvedEdgePath(
+      { x: 100, y: 100 },
+      { x: 180, y: 400 },
+      'left',
+    )
+
+    expect(path).toContain('Q')
+    expect(path).toStartWith('M100,115L100,128')
+    expect(path).toEndWith('L165,400')
+  })
+
+  test('uses a side entry when the target continues vertically', () => {
+    const rows = [
+      row('side-source', 0),
+      row('filler-1', 2),
+      row('filler-2', 2),
+      row('target', 1),
+      row('target-parent', 1),
+    ]
+    const layout = buildLayout(rows)
+    const routing = buildEdgeRoutingData(
+      [
+        {
+          key: 'side-target',
+          from: layout.nodes[0],
+          to: layout.nodes[3],
+          isMerge: false,
+        },
+        {
+          key: 'target-parent',
+          from: layout.nodes[3],
+          to: layout.nodes[4],
+          isMerge: false,
+        },
+      ],
+      rows.map((entry) => entry.lane),
+    )
+
+    expect(routing.plans.get('target-parent')).toEqual({ mode: 'straight' })
+    expect(routing.plans.get('side-target')).toEqual({
+      mode: 'curve',
+      targetSide: 'left',
+    })
+  })
+
+  test('keeps connected first-parent segments on one vertical track', () => {
+    const offsets = buildVerticalBundleOffsets([
+      {
+        key: 'tip-parent',
+        railKey: 'gutter-2',
+        topIdx: 0,
+        bottomIdx: 5,
+      },
+      {
+        key: 'parent-root',
+        railKey: 'gutter-2',
+        topIdx: 5,
+        bottomIdx: 10,
+      },
+    ])
+
+    expect(offsets.get('tip-parent')).toBe(0)
+    expect(offsets.get('parent-root')).toBe(0)
+  })
+
+  test('recenters an outgoing rail below a busy merge node', () => {
+    const offsets = buildVerticalBundleOffsets([
+      {
+        key: 'incoming-merge',
+        railKey: 'gutter-2',
+        topIdx: 0,
+        bottomIdx: 5,
+      },
+      {
+        key: 'outgoing-branch',
+        railKey: 'gutter-2',
+        topIdx: 5,
+        bottomIdx: 10,
+      },
+    ])
+
+    expect(offsets.get('incoming-merge')).toBe(0)
+    expect(offsets.get('outgoing-branch')).toBe(0)
+  })
+
+  test('does not shift an unrelated vertical range because another range is busy', () => {
+    const offsets = buildVerticalBundleOffsets([
+      { key: 'busy-left', railKey: 'gutter-2', topIdx: 0, bottomIdx: 5 },
+      { key: 'busy-right', railKey: 'gutter-2', topIdx: 1, bottomIdx: 4 },
+      { key: 'unrelated', railKey: 'gutter-2', topIdx: 10, bottomIdx: 15 },
+    ])
+
+    expect(offsets.get('busy-left')).toBe(-3)
+    expect(offsets.get('busy-right')).toBe(3)
+    expect(offsets.get('unrelated')).toBe(0)
   })
 })

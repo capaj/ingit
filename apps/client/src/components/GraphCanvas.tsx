@@ -48,8 +48,8 @@ const EDGE_CORNER_RADIUS = 12
 const EDGE_SHORT_CURVE_ROWS = 6
 const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
 const EDGE_RAIL_STAGGER_STEP = 6
-const EDGE_BUNDLE_GAP = 4
 const EDGE_TARGET_JOIN_GAP = 6
+const EDGE_VERTICAL_RAIL_CLEARANCE = 3
 const GRAPH_LEFT_GUTTER = 120
 const GRAPH_RIGHT_GUTTER = 520
 const PAD_TOP = 40
@@ -272,6 +272,7 @@ interface VisibleEdgeItem {
   plan: EdgeRoutePlan
   bundleOffset: number
   targetJoinOffset: number
+  targetNodeRadius: number
   x1: number
   y1: number
   x2: number
@@ -315,6 +316,8 @@ interface RenderedEdgeItem {
   toBundleOffset: number
   fromTargetJoinOffset: number
   toTargetJoinOffset: number
+  fromTargetNodeRadius: number
+  toTargetNodeRadius: number
   stroke: string
   fromStrokeWidth: number
   toStrokeWidth: number
@@ -341,6 +344,8 @@ interface RenderedNodeItem {
   toY: number
   fromOpacity: number
   toOpacity: number
+  fromRadius: number
+  toRadius: number
 }
 
 interface RenderedRefItem {
@@ -369,6 +374,7 @@ interface EdgeRoutingData {
   plans: Map<string, EdgeRoutePlan>
   bundleOffsets: Map<string, number>
   targetJoinOffsets: Map<string, number>
+  targetNodeRadii: Map<string, number>
 }
 
 function upstreamShortName(upstream?: string) {
@@ -393,10 +399,11 @@ function findTrackingRemoteRef(localRef: RefSummary, refs: RefSummary[]) {
 }
 
 type EdgeRoutePlan =
-  | { mode: 'straight' }
-  | { mode: 'curve' }
+  | { mode: 'straight'; bundleJoinY?: number }
+  | { mode: 'curve'; targetSide?: 'left' | 'right' }
   | { mode: 'adjacent-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
   | { mode: 'occlusion-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
+  | { mode: 'target-hook'; laneA: number; laneB: number; track: 'from' }
   | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
   | {
     mode: 'outer-rail'
@@ -699,14 +706,18 @@ export function buildOuterRailPath(
   outerRailX: number,
   horizontalTargetJoin = false,
   targetJoinOffset = 0,
+  targetNodeRadius = NODE_RADIUS,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
   const start = pointOnCircleToward(from.x, from.y, outerRailX, from.y + verticalDirection * (NODE_RADIUS + 8), NODE_RADIUS - 1)
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
+  const targetRadius = Math.max(1, targetNodeRadius - 1)
+  const boundedTargetJoinOffset = horizontalTargetJoin
+    ? Math.max(-targetRadius, Math.min(targetRadius, targetJoinOffset))
+    : targetJoinOffset
   const targetJoinY = horizontalTargetJoin
-    ? to.y + targetJoinOffset
+    ? to.y + boundedTargetJoinOffset
     : to.y - verticalDirection * (NODE_RADIUS + 8)
-  const targetRadius = NODE_RADIUS - 1
   const end = horizontalTargetJoin
     ? {
         // Preserve the bundle's Y offset all the way to the node. A generic
@@ -714,7 +725,7 @@ export function buildOuterRailPath(
         // rail, causing parallel hooks to converge and overlap too early.
         x: to.x
           + Math.sign(outerRailX - to.x || 1)
-            * Math.sqrt(Math.max(0, targetRadius ** 2 - targetJoinOffset ** 2)),
+            * Math.sqrt(Math.max(0, targetRadius ** 2 - boundedTargetJoinOffset ** 2)),
         y: targetJoinY,
       }
     : pointOnCircleToward(to.x, to.y, outerRailX, targetJoinY, targetRadius)
@@ -735,12 +746,13 @@ export function buildAdjacentHookPath(
   to: EdgePoint,
   trackX: number,
   targetJoinOffset = 0,
+  targetNodeRadius = NODE_RADIUS,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
   const start = pointOnCircleToward(from.x, from.y, trackX, to.y, NODE_RADIUS - 1)
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
   const hasHorizontalTargetJoin = Math.abs(trackX - to.x) > 0.001
-  const targetRadius = NODE_RADIUS - 1
+  const targetRadius = Math.max(1, targetNodeRadius - 1)
   const boundedTargetJoinOffset = hasHorizontalTargetJoin
     ? Math.max(-targetRadius, Math.min(targetRadius, targetJoinOffset))
     : 0
@@ -791,13 +803,90 @@ function buildInsideRailPath(
   )
 }
 
-function buildStraightEdgePath(from: EdgePoint, to: EdgePoint) {
+export function buildStraightEdgePath(
+  from: EdgePoint,
+  to: EdgePoint,
+  bundleOffset = 0,
+  targetNodeRadius = NODE_RADIUS,
+  bundleJoinY?: number,
+) {
+  if (Math.abs(from.x - to.x) < 0.001 && Math.abs(bundleOffset) > 0.001) {
+    const verticalDirection = to.y > from.y ? 1 : -1
+    const sourceRadius = NODE_RADIUS - 1
+    const targetRadius = Math.max(1, targetNodeRadius - 1)
+    const boundedOffset = Math.max(
+      -Math.min(sourceRadius, targetRadius),
+      Math.min(Math.min(sourceRadius, targetRadius), bundleOffset),
+    )
+    const targetInset = Math.sqrt(Math.max(0, targetRadius ** 2 - boundedOffset ** 2))
+    const edgeLength = Math.abs(to.y - from.y)
+    const requestedJoinDistance = bundleJoinY === undefined
+      ? NODE_RADIUS + 18
+      : Math.abs(bundleJoinY - from.y)
+    const minimumJoinDistance = Math.min(edgeLength / 2, NODE_RADIUS + 18)
+    const maximumJoinDistance = Math.max(minimumJoinDistance, edgeLength - targetInset - 8)
+    const trackJoinDistance = Math.max(
+      minimumJoinDistance,
+      Math.min(maximumJoinDistance, requestedJoinDistance),
+    )
+    const trackJoinY = from.y + verticalDirection * trackJoinDistance
+    const sourceJoinY = trackJoinY - verticalDirection * 10
+    const end = {
+      x: to.x + boundedOffset,
+      y: to.y - verticalDirection * targetInset,
+    }
+
+    return roundedPolylinePath(
+      [
+        { x: from.x, y: from.y + verticalDirection * sourceRadius },
+        { x: from.x, y: sourceJoinY },
+        { x: from.x + boundedOffset, y: trackJoinY },
+        end,
+      ],
+      Math.min(EDGE_CORNER_RADIUS, 6),
+    )
+  }
+
   const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
-  const end = pointOnCircleToward(to.x, to.y, from.x, from.y, NODE_RADIUS - 1)
+  const end = pointOnCircleToward(to.x, to.y, from.x, from.y, Math.max(1, targetNodeRadius - 1))
   return `M${start.x},${start.y}L${end.x},${end.y}`
 }
 
-function buildCurvedEdgePath(from: EdgePoint, to: EdgePoint) {
+export function buildCurvedEdgePath(
+  from: EdgePoint,
+  to: EdgePoint,
+  targetSide?: 'left' | 'right',
+  targetNodeRadius = NODE_RADIUS,
+) {
+  if (targetSide) {
+    const targetRadius = Math.max(1, targetNodeRadius - 1)
+    const verticalDirection = to.y >= from.y ? 1 : -1
+    const start = {
+      x: from.x,
+      y: from.y + verticalDirection * (NODE_RADIUS - 1),
+    }
+    const end = {
+      x: to.x + (targetSide === 'left' ? -targetRadius : targetRadius),
+      y: to.y,
+    }
+    // Leave enough radial run at each node for the terminal bends to read
+    // clearly, even when the long diagonal is already close to that angle.
+    const terminalLength = Math.min(18, Math.hypot(end.x - start.x, end.y - start.y) * 0.2)
+    const sourceLead = {
+      x: start.x,
+      y: start.y + verticalDirection * terminalLength,
+    }
+    const targetLead = {
+      x: end.x + (targetSide === 'left' ? -terminalLength : terminalLength),
+      y: end.y,
+    }
+
+    return roundedPolylinePath(
+      [start, sourceLead, targetLead, end],
+      Math.min(5, terminalLength / 2),
+    )
+  }
+
   const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
   const end = pointOnCircleToward(to.x, to.y, from.x, from.y, NODE_RADIUS - 1)
   return edgePath(start.x, start.y, end.x, end.y)
@@ -942,15 +1031,19 @@ function planEdgeRoute(
   }
 }
 
-function edgeBundleKey(plan: EdgeRoutePlan): string | null {
+function edgeBundleKey(edge: VisibleEdge, plan: EdgeRoutePlan): string | null {
+  const railKey = (x: number) => `vertical:${Math.round(x * 1000) / 1000}`
   switch (plan.mode) {
+    case 'straight':
+      return railKey(edge.from.x)
     case 'outer-rail':
-      return `${plan.mode}:${plan.side}:${plan.anchorLane}`
+      return railKey(plan.outerRailX)
     case 'inside-rail':
       return `${plan.mode}:${plan.minLane}:${plan.maxLane}`
     case 'adjacent-hook':
     case 'occlusion-hook':
-      return `${plan.mode}:${plan.laneA}:${plan.laneB}:${plan.track}`
+    case 'target-hook':
+      return railKey(plan.track === 'to' ? edge.to.x : edge.from.x)
     default:
       return null
   }
@@ -962,19 +1055,22 @@ function routedEdgePath(
   plan: EdgeRoutePlan,
   bundleOffset: number,
   targetJoinOffset = 0,
+  targetNodeRadius = NODE_RADIUS,
 ): string {
   switch (plan.mode) {
     case 'straight':
-      return buildStraightEdgePath(from, to)
+      return buildStraightEdgePath(from, to, bundleOffset, targetNodeRadius, plan.bundleJoinY)
     case 'curve':
-      return buildCurvedEdgePath(from, to)
+      return buildCurvedEdgePath(from, to, plan.targetSide, targetNodeRadius)
     case 'adjacent-hook':
     case 'occlusion-hook':
+    case 'target-hook':
       return buildAdjacentHookPath(
         from,
         to,
         (plan.track === 'to' ? to.x : from.x) + bundleOffset,
         targetJoinOffset,
+        targetNodeRadius,
       )
     case 'inside-rail':
       return buildInsideRailPath(
@@ -991,6 +1087,7 @@ function routedEdgePath(
         plan.outerRailX + bundleOffset,
         plan.horizontalTargetJoin,
         targetJoinOffset,
+        targetNodeRadius,
       )
   }
 }
@@ -999,11 +1096,22 @@ function lerpEdgeRoutePlan(fromPlan: EdgeRoutePlan, toPlan: EdgeRoutePlan, progr
   if (fromPlan.mode !== toPlan.mode) return progress < 0.5 ? fromPlan : toPlan
 
   switch (toPlan.mode) {
-    case 'straight':
+    case 'straight': {
+      const fromStraight = fromPlan as Extract<EdgeRoutePlan, { mode: 'straight' }>
+      return {
+        mode: 'straight',
+        bundleJoinY: fromStraight.bundleJoinY === undefined
+          ? toPlan.bundleJoinY
+          : toPlan.bundleJoinY === undefined
+            ? fromStraight.bundleJoinY
+            : lerp(fromStraight.bundleJoinY, toPlan.bundleJoinY, progress),
+      }
+    }
     case 'curve':
       return toPlan
     case 'adjacent-hook':
     case 'occlusion-hook':
+    case 'target-hook':
       return toPlan
     case 'inside-rail': {
       const fromInside = fromPlan as Extract<EdgeRoutePlan, { mode: 'inside-rail' }>
@@ -1036,7 +1144,8 @@ function buildAnimatedRoutedEdgePath(edge: RenderedEdgeItem, progress: number) {
   const plan = lerpEdgeRoutePlan(edge.fromPlan, edge.toPlan, progress)
   const bundleOffset = lerp(edge.fromBundleOffset, edge.toBundleOffset, progress)
   const targetJoinOffset = lerp(edge.fromTargetJoinOffset, edge.toTargetJoinOffset, progress)
-  return routedEdgePath(fromNode, toNode, plan, bundleOffset, targetJoinOffset)
+  const targetNodeRadius = lerp(edge.fromTargetNodeRadius, edge.toTargetNodeRadius, progress)
+  return routedEdgePath(fromNode, toNode, plan, bundleOffset, targetJoinOffset, targetNodeRadius)
 }
 
 function computeLocScaleMax(rows: CommitRow[]) {
@@ -1277,12 +1386,13 @@ function buildRefPlacements(
   selectedRefName: string | null,
   shaToColor: Map<string, string>,
   worktrees: WorktreeSummary[],
+  nodeRadii?: ReadonlyMap<string, number>,
 ) {
   const placements: RefPlacement[] = []
   const rowWidths = new Map<string, number>()
 
   for (const node of nodes) {
-    const baseX = node.x + NODE_RADIUS + 8
+    const baseX = node.x + (nodeRadii?.get(node.row.sha) ?? NODE_RADIUS) + 8
     const y = node.y - 10
     let cursorX = baseX
 
@@ -1451,6 +1561,110 @@ interface TargetJoinCandidate {
   railX: number
 }
 
+interface VerticalRailCandidate {
+  key: string
+  railKey: string
+  topIdx: number
+  bottomIdx: number
+  railStartY?: number
+  strokeWidth?: number
+}
+
+function verticalRailCandidatesConflict(
+  left: VerticalRailCandidate,
+  right: VerticalRailCandidate,
+): boolean {
+  const overlapStart = Math.max(left.topIdx, right.topIdx)
+  const overlapEnd = Math.min(left.bottomIdx, right.bottomIdx)
+  // Rails that merely meet at a node approach it from opposite vertical
+  // halves. The node hides their attachment transition, so the outgoing rail
+  // can recenter immediately instead of inheriting an incoming bundle offset.
+  return overlapStart < overlapEnd
+}
+
+export function buildVerticalBundleOffsets(
+  candidates: VerticalRailCandidate[],
+  clearance = EDGE_VERTICAL_RAIL_CLEARANCE,
+): Map<string, number> {
+  const groups = new Map<string, VerticalRailCandidate[]>()
+  for (const candidate of candidates) {
+    const group = groups.get(candidate.railKey)
+    if (group) group.push(candidate)
+    else groups.set(candidate.railKey, [candidate])
+  }
+
+  const offsets = new Map<string, number>()
+  for (const group of groups.values()) {
+    group.sort((left, right) => (
+      left.topIdx - right.topIdx
+      || left.bottomIdx - right.bottomIdx
+      || left.key.localeCompare(right.key)
+    ))
+
+    // Keep unrelated time ranges centered in their gutter. Only candidates
+    // connected by a real overlap (or by competing for the same node) need to
+    // participate in one bundle; otherwise one busy merge could shift a rail
+    // thousands of rows away from the intersection.
+    const roots = group.map((_, index) => index)
+    const findRoot = (index: number): number => {
+      if (roots[index] === index) return index
+      roots[index] = findRoot(roots[index])
+      return roots[index]
+    }
+    const union = (left: number, right: number) => {
+      const leftRoot = findRoot(left)
+      const rightRoot = findRoot(right)
+      if (leftRoot !== rightRoot) roots[rightRoot] = leftRoot
+    }
+
+    for (let left = 0; left < group.length; left++) {
+      for (let right = left + 1; right < group.length; right++) {
+        if (group[right].topIdx > group[left].bottomIdx) break
+        if (verticalRailCandidatesConflict(group[left], group[right])) union(left, right)
+      }
+    }
+
+    const components = new Map<number, VerticalRailCandidate[]>()
+    for (let index = 0; index < group.length; index++) {
+      const root = findRoot(index)
+      const component = components.get(root)
+      if (component) component.push(group[index])
+      else components.set(root, [group[index]])
+    }
+
+    for (const component of components.values()) {
+      const slotEnds: VerticalRailCandidate[] = []
+      const slotWidths: number[] = []
+      const assignments: Array<{ key: string; slot: number }> = []
+      for (const candidate of component) {
+        let slot = slotEnds.findIndex((previous) => !verticalRailCandidatesConflict(previous, candidate))
+        if (slot < 0) slot = slotEnds.length
+        slotEnds[slot] = candidate
+        slotWidths[slot] = Math.max(slotWidths[slot] ?? 0, candidate.strokeWidth ?? 3)
+        assignments.push({ key: candidate.key, slot })
+      }
+
+      const slotPositions = [0]
+      for (let slot = 1; slot < slotWidths.length; slot++) {
+        slotPositions[slot] = slotPositions[slot - 1]
+          + slotWidths[slot - 1] / 2
+          + clearance
+          + slotWidths[slot] / 2
+      }
+      const middleSlot = Math.floor(slotPositions.length / 2)
+      const anchor = slotPositions.length % 2 === 1
+        ? slotPositions[middleSlot]
+        : (slotPositions[middleSlot - 1] + slotPositions[middleSlot]) / 2
+
+      for (const assignment of assignments) {
+        offsets.set(assignment.key, slotPositions[assignment.slot] - anchor)
+      }
+    }
+  }
+
+  return offsets
+}
+
 export function buildTargetJoinOffsets(
   candidates: TargetJoinCandidate[],
   gap = EDGE_TARGET_JOIN_GAP,
@@ -1482,13 +1696,51 @@ export function buildTargetJoinOffsets(
   return offsets
 }
 
+export function buildTargetNodeRadii(
+  candidates: TargetJoinCandidate[],
+  gap = EDGE_TARGET_JOIN_GAP,
+): Map<string, number> {
+  const counts = new Map<string, { targetKey: string; count: number }>()
+  for (const candidate of candidates) {
+    const groupKey = `${candidate.targetKey}:${candidate.side}`
+    const group = counts.get(groupKey)
+    if (group) group.count++
+    else counts.set(groupKey, { targetKey: candidate.targetKey, count: 1 })
+  }
+
+  const radii = new Map<string, number>()
+  for (const { targetKey, count } of counts.values()) {
+    if (count < 5) continue
+    const radius = NODE_RADIUS + Math.ceil((count - 4) * gap / 2)
+    radii.set(targetKey, Math.max(radii.get(targetKey) ?? NODE_RADIUS, radius))
+  }
+  return radii
+}
+
+function targetJoinRailX(
+  edge: VisibleEdge,
+  plan: EdgeRoutePlan | undefined,
+  bundleOffset = 0,
+): number | null {
+  if (plan?.mode === 'outer-rail' && plan.horizontalTargetJoin) {
+    return plan.outerRailX + bundleOffset
+  }
+  if (
+    plan?.mode === 'adjacent-hook'
+    || plan?.mode === 'occlusion-hook'
+    || plan?.mode === 'target-hook'
+  ) {
+    return (plan.track === 'to' ? edge.to.x : edge.from.x) + bundleOffset
+  }
+  return null
+}
+
 export function buildEdgeRoutingData(
   visibleEdges: VisibleEdge[],
   occupiedLanes: number[],
   additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
 ): EdgeRoutingData {
   const plans = new Map<string, EdgeRoutePlan>()
-  const bundleGroups = new Map<string, Array<{ key: string; topIdx: number; bottomIdx: number; innerLane?: number }>>()
 
   for (const edge of visibleEdges) {
     const plan = planEdgeRoute(edge.from, edge.to, edge.key, occupiedLanes, {
@@ -1496,57 +1748,122 @@ export function buildEdgeRoutingData(
       additionalOccupiedLanes,
     })
     plans.set(edge.key, plan)
-
-    const bundleKey = edgeBundleKey(plan)
-    if (!bundleKey) continue
-
-    const group = bundleGroups.get(bundleKey)
-    const item = {
-      key: edge.key,
-      topIdx: Math.min(edge.from.idx, edge.to.idx),
-      bottomIdx: Math.max(edge.from.idx, edge.to.idx),
-      innerLane: plan.mode === 'outer-rail' ? plan.innerLane : undefined,
-    }
-    if (group) group.push(item)
-    else bundleGroups.set(bundleKey, [item])
   }
 
-  const bundleOffsets = new Map<string, number>()
+  // When several parents already enter one commit as parallel horizontal
+  // hooks, align a clear short curve on the same side with that bundle. This
+  // avoids one diagonal cutting across an otherwise orderly stack of joins.
+  const alignedTargetSides = new Set<string>()
+  for (const edge of visibleEdges) {
+    const railX = targetJoinRailX(edge, plans.get(edge.key))
+    if (railX === null || Math.abs(railX - edge.to.x) < 0.001) continue
+    const side = railX < edge.to.x ? 'left' : 'right'
+    alignedTargetSides.add(`${edge.to.row.sha}:${side}`)
+  }
 
-  for (const items of bundleGroups.values()) {
-    const samplePlan = plans.get(items[0]?.key ?? '')
-    if (!samplePlan) continue
+  for (const edge of visibleEdges) {
+    if (edge.isMerge || plans.get(edge.key)?.mode !== 'curve') continue
+    const side = edge.from.x < edge.to.x ? 'left' : edge.from.x > edge.to.x ? 'right' : null
+    if (!side || !alignedTargetSides.has(`${edge.to.row.sha}:${side}`)) continue
 
-    if (samplePlan.mode === 'outer-rail') {
-      items.sort((a, b) => {
-        const aLane = a.innerLane ?? samplePlan.innerLane
-        const bLane = b.innerLane ?? samplePlan.innerLane
-        if (samplePlan.side === 'right' && aLane !== bLane) return aLane - bLane
-        if (samplePlan.side === 'left' && aLane !== bLane) return bLane - aLane
-        return a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key)
-      })
-      for (let i = 0; i < items.length; i++) {
-        const sign = samplePlan.side === 'right' ? 1 : -1
-        bundleOffsets.set(items[i].key, i * EDGE_BUNDLE_GAP * sign)
-      }
-      continue
+    const endpointRail = findClearEndpointRail(
+      { x: edge.from.x, y: edge.from.y, idx: edge.from.idx, lane: edge.from.row.lane },
+      { x: edge.to.x, y: edge.to.y, idx: edge.to.idx, lane: edge.to.row.lane },
+      occupiedLanes,
+      'from',
+      additionalOccupiedLanes,
+    )
+    if (!endpointRail || endpointRail.side !== side) continue
+
+    plans.set(edge.key, {
+      mode: 'target-hook',
+      laneA: Math.min(edge.from.row.lane, edge.to.row.lane),
+      laneB: Math.max(edge.from.row.lane, edge.to.row.lane),
+      track: 'from',
+    })
+  }
+
+  const verticalRailCandidates = visibleEdges.flatMap((edge) => {
+    const plan = plans.get(edge.key)
+    if (!plan) return []
+    const railKey = edgeBundleKey(edge, plan)
+    if (!railKey) return []
+    return [{
+      key: edge.key,
+      railKey,
+      topIdx: Math.min(edge.from.idx, edge.to.idx),
+      bottomIdx: Math.max(edge.from.idx, edge.to.idx),
+      railStartY: Math.min(edge.from.y, edge.to.y) + NODE_RADIUS + 8,
+      strokeWidth: edge.isMerge ? 2 : 4.5,
+    }]
+  })
+  const bundleOffsets = buildVerticalBundleOffsets(verticalRailCandidates)
+
+  for (const candidate of verticalRailCandidates) {
+    const plan = plans.get(candidate.key)
+    if (plan?.mode !== 'straight' || Math.abs(bundleOffsets.get(candidate.key) ?? 0) < 0.001) continue
+
+    const firstCompetingRail = verticalRailCandidates
+      .filter((other) => (
+        other.key !== candidate.key
+        && other.railKey === candidate.railKey
+        && other.topIdx > candidate.topIdx
+        && other.topIdx < candidate.bottomIdx
+        && verticalRailCandidatesConflict(candidate, other)
+      ))
+      .sort((left, right) => left.topIdx - right.topIdx || left.key.localeCompare(right.key))[0]
+    if (firstCompetingRail?.railStartY === undefined) continue
+
+    plans.set(candidate.key, {
+      mode: 'straight',
+      // Complete the jog just before the competing line reaches this gutter.
+      bundleJoinY: firstCompetingRail.railStartY - 8,
+    })
+  }
+
+  const bundledIncomingByTarget = new Map<string, string[]>()
+  const targetsWithCenteredContinuation = new Set<string>()
+  for (const edge of visibleEdges) {
+    const plan = plans.get(edge.key)
+    if (
+      plan?.mode === 'straight'
+      && edge.from.idx < edge.to.idx
+      && Math.abs(edge.from.x - edge.to.x) < 0.001
+    ) {
+      targetsWithCenteredContinuation.add(edge.from.row.sha)
     }
+    if (edge.from.idx >= edge.to.idx || !edgeBundleKey(edge, plan ?? { mode: 'curve' })) continue
+    const incoming = bundledIncomingByTarget.get(edge.to.row.sha)
+    if (incoming) incoming.push(edge.key)
+    else bundledIncomingByTarget.set(edge.to.row.sha, [edge.key])
+  }
 
-    items.sort((a, b) => a.topIdx - b.topIdx || a.bottomIdx - b.bottomIdx || a.key.localeCompare(b.key))
-    const middle = (items.length - 1) / 2
-    for (let i = 0; i < items.length; i++) {
-      bundleOffsets.set(items[i].key, (i - middle) * EDGE_BUNDLE_GAP)
-    }
+  for (const edge of visibleEdges) {
+    const plan = plans.get(edge.key)
+    if (plan?.mode !== 'curve' || Math.abs(edge.from.x - edge.to.x) < 0.001) continue
+    const incoming = bundledIncomingByTarget.get(edge.to.row.sha) ?? []
+    const hasBusyIncomingBundle = (
+      incoming.length < 2
+      ? false
+      : incoming.some((key) => Math.abs(bundleOffsets.get(key) ?? 0) > 0.001)
+    )
+    if (
+      !hasBusyIncomingBundle
+      && !targetsWithCenteredContinuation.has(edge.to.row.sha)
+    ) continue
+
+    plans.set(edge.key, {
+      mode: 'curve',
+      // Enter through the free side of the target instead of crossing the
+      // centered continuation or parallel rails attached to the commit.
+      targetSide: edge.from.x < edge.to.x ? 'left' : 'right',
+    })
   }
 
   const targetJoinCandidates = visibleEdges.flatMap((edge) => {
     const plan = plans.get(edge.key)
     const bundleOffset = bundleOffsets.get(edge.key) ?? 0
-    const railX = plan?.mode === 'outer-rail' && plan.horizontalTargetJoin
-      ? plan.outerRailX + bundleOffset
-      : (plan?.mode === 'adjacent-hook' || plan?.mode === 'occlusion-hook')
-          ? (plan.track === 'to' ? edge.to.x : edge.from.x) + bundleOffset
-          : null
+    const railX = targetJoinRailX(edge, plan, bundleOffset)
     if (railX === null || Math.abs(railX - edge.to.x) < 0.001) return []
 
     return [{
@@ -1557,8 +1874,9 @@ export function buildEdgeRoutingData(
     }]
   })
   const targetJoinOffsets = buildTargetJoinOffsets(targetJoinCandidates)
+  const targetNodeRadii = buildTargetNodeRadii(targetJoinCandidates)
 
-  return { plans, bundleOffsets, targetJoinOffsets }
+  return { plans, bundleOffsets, targetJoinOffsets, targetNodeRadii }
 }
 
 function buildVisibleEdgeItems(
@@ -1575,6 +1893,7 @@ function buildVisibleEdgeItems(
     })
     const bundleOffset = edgeRouting.bundleOffsets.get(edge.key) ?? 0
     const targetJoinOffset = edgeRouting.targetJoinOffsets.get(edge.key) ?? 0
+    const targetNodeRadius = edgeRouting.targetNodeRadii.get(edge.to.row.sha) ?? NODE_RADIUS
     // An edge takes the color of the branch line it travels along: the child for
     // a normal edge, the merged-in parent for a merge edge.
     const colorNode = edge.isMerge ? edge.to : edge.from
@@ -1582,10 +1901,11 @@ function buildVisibleEdgeItems(
       key: edge.key,
       fromSha: edge.from.row.sha,
       toSha: edge.to.row.sha,
-      path: routedEdgePath(edge.from, edge.to, plan, bundleOffset, targetJoinOffset),
+      path: routedEdgePath(edge.from, edge.to, plan, bundleOffset, targetJoinOffset, targetNodeRadius),
       plan,
       bundleOffset,
       targetJoinOffset,
+      targetNodeRadius,
       x1: edge.from.x,
       y1: edge.from.y,
       x2: edge.to.x,
@@ -2225,8 +2545,15 @@ export function GraphCanvas() {
   )
 
   const { placements: visibleRefPlacements, rowWidths: refRowWidths } = useMemo(
-    () => buildRefPlacements(visibleNodes, currentBranch, selectedRefName, layout?.shaToColor ?? EMPTY_SHA_COLOR, worktrees),
-    [visibleNodes, currentBranch, selectedRefName, layout, worktrees],
+    () => buildRefPlacements(
+      visibleNodes,
+      currentBranch,
+      selectedRefName,
+      layout?.shaToColor ?? EMPTY_SHA_COLOR,
+      worktrees,
+      edgeRouting.targetNodeRadii,
+    ),
+    [visibleNodes, currentBranch, selectedRefName, layout, worktrees, edgeRouting],
   )
 
   const { detachedWorktreePlacements, rowWidths: rowRefWidths } = useMemo(() => {
@@ -2244,7 +2571,7 @@ export function GraphCanvas() {
     for (const node of visibleNodes) {
       const detached = detachedBySha.get(node.row.sha) ?? []
       if (detached.length === 0) continue
-      const baseX = node.x + NODE_RADIUS + 8
+      const baseX = node.x + (edgeRouting.targetNodeRadii.get(node.row.sha) ?? NODE_RADIUS) + 8
       let width = rowWidths.get(node.row.sha) ?? 0
       let cursorX = baseX + width + (width > 0 ? REF_PILL_GAP : 0)
 
@@ -2259,7 +2586,7 @@ export function GraphCanvas() {
     }
 
     return { detachedWorktreePlacements: placements, rowWidths }
-  }, [visibleNodes, refRowWidths, worktrees])
+  }, [visibleNodes, refRowWidths, worktrees, edgeRouting])
 
   const visibleEdgeItems = useMemo(
     () => buildVisibleEdgeItems(visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys, layout?.shaToColor ?? EMPTY_SHA_COLOR),
@@ -2304,6 +2631,7 @@ export function GraphCanvas() {
       selectedRefName,
       graphAnimation.fromLayout.shaToColor,
       worktrees,
+      fromRouting.targetNodeRadii,
     ).placements
     const toRefPlacements = buildRefPlacements(
       toWindow.visibleNodes,
@@ -2311,6 +2639,7 @@ export function GraphCanvas() {
       selectedRefName,
       graphAnimation.toLayout.shaToColor,
       worktrees,
+      toRouting.targetNodeRadii,
     ).placements
     const fromLaneHighlight = buildCurrentLaneHighlight(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch)
     const toLaneHighlight = buildCurrentLaneHighlight(graphAnimation.toLayout, graphAnimation.toCurrentBranch)
@@ -2343,6 +2672,12 @@ export function GraphCanvas() {
             toY: toNode ? toNode.y : displayNode.y - GRAPH_EXIT_OFFSET_Y,
             fromOpacity: fromNode ? 1 : 0,
             toOpacity: toNode ? 1 : 0,
+            fromRadius: fromNode
+              ? fromRouting.targetNodeRadii.get(key) ?? NODE_RADIUS
+              : toRouting.targetNodeRadii.get(key) ?? NODE_RADIUS,
+            toRadius: toNode
+              ? toRouting.targetNodeRadii.get(key) ?? NODE_RADIUS
+              : fromRouting.targetNodeRadii.get(key) ?? NODE_RADIUS,
           } satisfies RenderedNodeItem,
         }
       })
@@ -2388,6 +2723,8 @@ export function GraphCanvas() {
             toBundleOffset: toEdge?.bundleOffset ?? fromEdge?.bundleOffset ?? 0,
             fromTargetJoinOffset: fromEdge?.targetJoinOffset ?? toEdge?.targetJoinOffset ?? 0,
             toTargetJoinOffset: toEdge?.targetJoinOffset ?? fromEdge?.targetJoinOffset ?? 0,
+            fromTargetNodeRadius: fromEdge?.targetNodeRadius ?? toEdge?.targetNodeRadius ?? NODE_RADIUS,
+            toTargetNodeRadius: toEdge?.targetNodeRadius ?? fromEdge?.targetNodeRadius ?? NODE_RADIUS,
             stroke: toEdge?.stroke ?? fromEdge?.stroke ?? '#cdd6f4',
             fromStrokeWidth: fromEdge?.strokeWidth ?? displayEdge.strokeWidth,
             toStrokeWidth: toEdge?.strokeWidth ?? displayEdge.strokeWidth,
@@ -2461,6 +2798,8 @@ export function GraphCanvas() {
       toY: node.y,
       fromOpacity: 1,
       toOpacity: 1,
+      fromRadius: edgeRouting.targetNodeRadii.get(node.row.sha) ?? NODE_RADIUS,
+      toRadius: edgeRouting.targetNodeRadii.get(node.row.sha) ?? NODE_RADIUS,
     })),
     [graphAnimationRenderData, visibleNodes, layout],
   )
@@ -2477,6 +2816,8 @@ export function GraphCanvas() {
       toBundleOffset: edge.bundleOffset,
       fromTargetJoinOffset: edge.targetJoinOffset,
       toTargetJoinOffset: edge.targetJoinOffset,
+      fromTargetNodeRadius: edge.targetNodeRadius,
+      toTargetNodeRadius: edge.targetNodeRadius,
       stroke: edge.stroke,
       fromStrokeWidth: edge.strokeWidth,
       toStrokeWidth: edge.strokeWidth,
@@ -3622,6 +3963,12 @@ export function GraphCanvas() {
             const nodeOpacity = isGraphAnimating
               ? to(graphProgress, (progress) => lerp(node.fromOpacity, node.toOpacity, progress))
               : node.toOpacity
+            const nodeRadius = isGraphAnimating
+              ? to(graphProgress, (progress) => lerp(node.fromRadius, node.toRadius, progress))
+              : node.toRadius
+            const nodeHaloRadius = isGraphAnimating
+              ? to(graphProgress, (progress) => lerp(node.fromRadius, node.toRadius, progress) * 2.5)
+              : node.toRadius * 2.5
             const iconTransform = isGraphAnimating
               ? to(
                   graphProgress,
@@ -3675,7 +4022,7 @@ export function GraphCanvas() {
                   <animated.circle
                     cx={nodeX}
                     cy={nodeY}
-                    r={NODE_RADIUS * 2.5}
+                    r={nodeHaloRadius}
                     fill={color}
                     opacity={0.15}
                   />
@@ -3683,7 +4030,7 @@ export function GraphCanvas() {
                 <animated.circle
                   cx={nodeX}
                   cy={nodeY}
-                  r={NODE_RADIUS}
+                  r={nodeRadius}
                   fill={NODE_FILL}
                   stroke={color}
                   strokeWidth={selected ? 3.5 : 2.75}
@@ -3982,7 +4329,8 @@ export function GraphCanvas() {
         })}
         {visibleNodes.map((node) => {
           const refRowWidth = rowRefWidths.get(node.row.sha) ?? 0
-          const px = node.x + NODE_RADIUS + 8 + refRowWidth + (refRowWidth > 0 ? 8 : 0)
+          const nodeRadius = edgeRouting.targetNodeRadii.get(node.row.sha) ?? NODE_RADIUS
+          const px = node.x + nodeRadius + 8 + refRowWidth + (refRowWidth > 0 ? 8 : 0)
           const py = node.y - 10
           const refActionInFlight = pendingRefAction !== null
           const nodeActions = !refActionInFlight && node.row.sha === selectedSha ? visibleCommitActions : []
