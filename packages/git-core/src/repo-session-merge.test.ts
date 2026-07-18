@@ -301,6 +301,42 @@ describe('RepoSession.rebaseRef', () => {
     }
   })
 
+  test('preserves uncommitted changes while rebasing', async () => {
+    const repoDir = await makeTempDir('ingit-rebase-autostash-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'base.txt'), 'base\n')
+    await Bun.write(join(repoDir, 'tracked.txt'), 'tracked\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+
+    await Bun.write(join(repoDir, 'main.txt'), 'main\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'main'], repoDir)
+    const mainSha = await currentHeadSha(repoDir)
+
+    await runGit(['checkout', '-b', 'feature', 'HEAD~1'], repoDir)
+    await Bun.write(join(repoDir, 'feature.txt'), 'feature\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'feature'], repoDir)
+
+    await Bun.write(join(repoDir, 'tracked.txt'), 'tracked\nwork in progress\n')
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      const result = await session.rebaseRef('main')
+
+      expect(result.headSha).toBe(await currentHeadSha(repoDir))
+      expect(await headParents(repoDir)).toEqual([mainSha])
+      expect(await Bun.file(join(repoDir, 'tracked.txt')).text()).toBe('tracked\nwork in progress\n')
+      expect((await runGit(['diff', '--name-only'], repoDir)).stdout.trim()).toBe('tracked.txt')
+      expect((await runGit(['stash', 'list'], repoDir)).stdout.trim()).toBe('')
+    } finally {
+      session.close()
+    }
+  })
+
   test('fetches a remote-tracking branch before rebasing onto it', async () => {
     const remoteDir = await makeTempDir('ingit-rebase-remote-')
     await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
@@ -393,6 +429,7 @@ describe('RepoSession.rebaseRef', () => {
     await initRepo(repoDir)
 
     await Bun.write(join(repoDir, 'shared.txt'), 'base\n')
+    await Bun.write(join(repoDir, 'wip.txt'), 'saved\n')
     await runGit(['add', '.'], repoDir)
     await runGit(['commit', '-m', 'base'], repoDir)
 
@@ -410,6 +447,8 @@ describe('RepoSession.rebaseRef', () => {
     await runGit(['commit', '-m', 'feature conflicts shared'], repoDir)
     const featureHeadBeforeRebase = await currentHeadSha(repoDir)
 
+    await Bun.write(join(repoDir, 'wip.txt'), 'saved\nuncommitted work\n')
+
     const session = await RepoSession.open(repoDir)
 
     try {
@@ -421,11 +460,13 @@ describe('RepoSession.rebaseRef', () => {
       expect(result.changes.mergeHeadShas).toBeUndefined()
       expect(result.changes.rebaseHeadSha).toBeUndefined()
       expect(result.changes.staged).toEqual([])
-      expect(result.changes.unstaged).toEqual([])
+      expect(result.changes.unstaged).toContainEqual({ path: 'wip.txt', status: 'M' })
       expect(await currentBranch(repoDir)).toBe('feature')
       expect(await currentHeadSha(repoDir)).toBe(featureHeadBeforeRebase)
       expect(await headSubject(repoDir)).toBe('feature conflicts shared')
       expect(await Bun.file(join(repoDir, 'shared.txt')).text()).toBe('feature\n')
+      expect(await Bun.file(join(repoDir, 'wip.txt')).text()).toBe('saved\nuncommitted work\n')
+      expect((await runGit(['stash', 'list'], repoDir)).stdout.trim()).toBe('')
     } finally {
       session.close()
     }

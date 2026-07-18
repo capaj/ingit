@@ -878,7 +878,10 @@ export class RepoSession {
     let stdout: string
     let stderr: string
     try {
-      const result = await runGit(['rebase', ref], this.rootPath)
+      // Let Git own the complete auto-stash lifecycle. In particular, it
+      // keeps the temporary stash attached to a conflicted rebase and restores
+      // it after either `rebase --continue` or `rebase --abort`.
+      const result = await runGit(['rebase', '--autostash', ref], this.rootPath)
       stdout = result.stdout
       stderr = result.stderr
     } catch (err) {
