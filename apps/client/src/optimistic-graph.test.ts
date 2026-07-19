@@ -2,7 +2,11 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { CommitRow, RefSummary } from '@ingit/rpc-contract'
-import { predictRebase, predictWorktreeAfterCommit } from './optimistic-graph'
+import {
+  predictRebase,
+  predictWorktreeAfterCheckout,
+  predictWorktreeAfterCommit,
+} from './optimistic-graph'
 
 function row(sha: string, parentShas: string[], refNames: string[] = [], committerUnix = 100): CommitRow {
   return {
@@ -104,5 +108,44 @@ describe('predictWorktreeAfterCommit', () => {
       unstaged: [{ path: 'still-dirty.ts', status: 'M' }],
     })
     expect(changes.staged).toHaveLength(1)
+  })
+})
+
+describe('predictWorktreeAfterCheckout', () => {
+  test('keeps dirty files while moving their anchor to the destination branch', () => {
+    const changes = {
+      branch: 'main',
+      headSha: 'main-head',
+      staged: [{ path: 'staged.ts', status: 'M' as const }],
+      unstaged: [{ path: 'unstaged.ts', status: 'M' as const }],
+    }
+
+    const prediction = predictWorktreeAfterCheckout(changes, 'feature-head', 'feature')
+
+    expect(prediction).toEqual({
+      branch: 'feature',
+      headSha: 'feature-head',
+      staged: [{ path: 'staged.ts', status: 'M' }],
+      unstaged: [{ path: 'unstaged.ts', status: 'M' }],
+    })
+    expect(changes).toEqual({
+      branch: 'main',
+      headSha: 'main-head',
+      staged: [{ path: 'staged.ts', status: 'M' }],
+      unstaged: [{ path: 'unstaged.ts', status: 'M' }],
+    })
+  })
+
+  test('removes the branch name for a detached checkout', () => {
+    const prediction = predictWorktreeAfterCheckout({
+      branch: 'main',
+      headSha: 'main-head',
+      staged: [],
+      unstaged: [{ path: 'dirty.ts', status: 'M' }],
+    }, 'detached-head', null)
+
+    expect(prediction.branch).toBeUndefined()
+    expect(prediction.headSha).toBe('detached-head')
+    expect(prediction.unstaged).toHaveLength(1)
   })
 })

@@ -60,6 +60,7 @@ import {
   predictUncommit,
   predictAppendOnHead,
   predictAmendHead,
+  predictWorktreeAfterCheckout,
   predictWorktreeAfterCommit,
   predictMerge,
   predictRebase,
@@ -125,6 +126,7 @@ function worktreeFileCount(changes: WorktreeChangesResponse): number {
 interface OptimisticSnapshot {
   refs: RefSummary[]
   historyWindow: HistoryWindowResponse | null
+  worktreeChanges: WorktreeChangesResponse | null
   selectedSha: string | null
   selectedRefName: string | null
   scrollToSha: string | null
@@ -190,6 +192,7 @@ function captureSnapshot(s: AppState): OptimisticSnapshot {
   return {
     refs: s.refs,
     historyWindow: s.historyWindow,
+    worktreeChanges: s.worktreeChanges,
     selectedSha: s.selectedSha,
     selectedRefName: s.selectedRefName,
     scrollToSha: s.scrollToSha,
@@ -425,6 +428,10 @@ interface AppState {
   // True while an optimistic mutation is in flight. Blocks further node actions
   // until the current one is confirmed (or rolled back).
   pendingMutation: boolean
+  // Checkout temporarily auto-stashes dirty files. Keep this separate from the
+  // generic mutation lock so GraphCanvas can retain and dim the worktree node
+  // until those files have been restored on the destination branch.
+  pendingCheckout: boolean
   // Bumped when the store reconciles an optimistic prediction with the server's
   // authoritative result. GraphCanvas watches it to swap to the real layout
   // *without* re-animating (the predicted nodes are already in place).
@@ -521,6 +528,7 @@ async function openRepoByPathImpl(
     reflog: null,
     reflogLoading: false,
     pendingMutation: false,
+    pendingCheckout: false,
   })
   try {
     const res = await openRepo({ path })
@@ -711,6 +719,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   worktreeFileDiffs: {},
   commitFileDiffs: {},
   pendingMutation: false,
+  pendingCheckout: false,
   graphAnimationSuppressToken: 0,
   showCommitMessages: (() => {
     try {
@@ -1324,6 +1333,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       worktreeFileDiffs: {},
       commitFileDiffs: {},
       pendingMutation: false,
+      pendingCheckout: false,
       reflog: null,
       reflogLoading: false,
       reflogMaxCount: REFLOG_PAGE_SIZE,
@@ -1611,9 +1621,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       predicted = predictMoveRef(rows, snapshot.refs, refName, sha)
     }
 
+    const predictedCheckoutBranch = action === 'checkout'
+      ? predicted?.refs.find((ref) => ref.kind === 'head' && ref.isCurrent)?.shortName ?? null
+      : null
+    const predictedWorktreeChanges = action === 'checkout' && snapshot.worktreeChanges
+      ? predictWorktreeAfterCheckout(snapshot.worktreeChanges, sha, predictedCheckoutBranch)
+      : snapshot.worktreeChanges
+
     if (predicted) {
       set({
         pendingMutation: true,
+        ...(action === 'checkout'
+          ? {
+              pendingCheckout: true,
+              worktreeChanges: predictedWorktreeChanges,
+            }
+          : {}),
         refs: predicted.refs,
         historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
         mergePreview: null,
@@ -1630,7 +1653,15 @@ export const useAppStore = create<AppState>((set, get) => ({
           : { selectedRefName: null }),
       })
     } else {
-      set({ pendingMutation: true })
+      set({
+        pendingMutation: true,
+        ...(action === 'checkout'
+          ? {
+              pendingCheckout: true,
+              worktreeChanges: predictedWorktreeChanges,
+            }
+          : {}),
+      })
     }
 
     try {
@@ -1689,6 +1720,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                 }
               : snapshot),
             pendingMutation: false,
+            pendingCheckout: false,
             refs,
             stashes,
             worktrees,
@@ -1702,7 +1734,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           }))
           if (moved) loadSelectedCommitExtras(repoId, currentSha)
         } catch {
-          set({ ...snapshot, pendingMutation: false })
+          set({ ...snapshot, pendingMutation: false, pendingCheckout: false })
         }
       } else {
         set({ ...snapshot, pendingMutation: false })
@@ -1783,6 +1815,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set((s) => ({
       pendingMutation: false,
+      pendingCheckout: false,
       graphAnimationSuppressToken: predicted
         ? s.graphAnimationSuppressToken + 1
         : s.graphAnimationSuppressToken,
@@ -2196,16 +2229,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = captureSnapshot(get())
     // Detached checkout of a bare commit: no branch becomes current.
     const predicted = predictCheckout(snapshot.historyWindow?.rows ?? [], snapshot.refs, null, sha)
+    const predictedWorktreeChanges = snapshot.worktreeChanges
+      ? predictWorktreeAfterCheckout(snapshot.worktreeChanges, sha, null)
+      : null
     if (predicted) {
       set({
         pendingMutation: true,
+        pendingCheckout: true,
         refs: predicted.refs,
         historyWindow: optimisticHistoryWindow(snapshot.historyWindow, predicted.rows),
+        worktreeChanges: predictedWorktreeChanges,
         selectedRefName: null,
         mergePreview: null,
       })
     } else {
-      set({ pendingMutation: true })
+      set({
+        pendingMutation: true,
+        pendingCheckout: true,
+        worktreeChanges: predictedWorktreeChanges,
+      })
     }
 
     try {
@@ -2224,13 +2266,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       })(), MUTATION_TIMEOUT_MS)
     } catch (err) {
-      set({ ...snapshot, pendingMutation: false })
+      set({ ...snapshot, pendingMutation: false, pendingCheckout: false })
       throw err
     }
 
     const [refs, hist] = await fetchRefsAndHistory(repoId)
     set((s) => ({
       pendingMutation: false,
+      pendingCheckout: false,
       graphAnimationSuppressToken: predicted
         ? s.graphAnimationSuppressToken + 1
         : s.graphAnimationSuppressToken,

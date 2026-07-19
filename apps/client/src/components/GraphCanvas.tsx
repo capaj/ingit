@@ -305,6 +305,21 @@ interface GraphAnimationSnapshot {
   toCurrentBranch: string | null
 }
 
+interface WorktreeNodeGeometry {
+  kind: 'merge' | 'rebase' | 'worktree'
+  x: number
+  y: number
+  idx: number
+  lane: number
+  headX: number
+  headY: number
+  color: string
+  count: number
+  conflictedCount: number
+  targetPlan: EdgeRoutePlan
+  sourcePath: string | null
+}
+
 interface RenderedEdgeItem {
   key: string
   fromSha: string
@@ -2147,6 +2162,7 @@ export function GraphCanvas() {
   const performMergeRef = useAppStore((state) => state.performMergeRef)
   const performRebaseRef = useAppStore((state) => state.performRebaseRef)
   const pendingMutation = useAppStore((state) => state.pendingMutation)
+  const pendingCheckout = useAppStore((state) => state.pendingCheckout)
   const graphAnimationSuppressToken = useAppStore((state) => state.graphAnimationSuppressToken)
   const showCommitMessages = useAppStore((state) => state.showCommitMessages)
   const showGutterColors = useAppStore((state) => state.showGutterColors)
@@ -2167,6 +2183,8 @@ export function GraphCanvas() {
   const lastObservedScrollTopRef = useRef(0)
   const graphAnimationStartFrameRef = useRef<number | null>(null)
   const scrollTopFrameRef = useRef<number | null>(null)
+  const retainedWorktreeNodeRef = useRef<WorktreeNodeGeometry | null>(null)
+  const worktreeMotionInitializedRef = useRef(false)
   const addRefHoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingScrollTopRef = useRef(0)
   const [zoom, setZoom] = useState(1)
@@ -2326,7 +2344,7 @@ export function GraphCanvas() {
 
   // The working-tree / in-progress operation node floats one row above HEAD,
   // in HEAD's lane. Merge conflicts also draw a dashed second-parent edge.
-  const worktreeNode = useMemo(() => {
+  const worktreeNode = useMemo<WorktreeNodeGeometry | null>(() => {
     if (!layout || !worktreeChanges) return null
     const count = worktreeChanges.staged.length + worktreeChanges.unstaged.length
     if (count === 0) return null
@@ -2373,12 +2391,7 @@ export function GraphCanvas() {
     }
     const occupied = layout.nodes.map((node) => node.row.lane)
     const targetKey = `${pendingNode.row.sha}-${headNode.row.sha}`
-    const targetPath = routedEdgePath(
-      pendingNode,
-      headNode,
-      planEdgeRoute(pendingNode, headNode, targetKey, occupied),
-      0,
-    )
+    const targetPlan = planEdgeRoute(pendingNode, headNode, targetKey, occupied)
     const sourceSha = worktreeChanges.mergeHeadShas?.[0]
     const sourceNode = sourceSha ? layout.shaToNode.get(sourceSha) ?? null : null
     const sourcePath = sourceNode
@@ -2395,14 +2408,47 @@ export function GraphCanvas() {
       y: pendingNode.y,
       idx: pendingNode.idx,
       lane: pendingNode.row.lane,
+      headX: headNode.x,
       headY: headNode.y,
       color,
       count,
       conflictedCount,
-      targetPath,
+      targetPlan,
       sourcePath,
     }
   }, [layout, worktreeChanges, currentBranch])
+
+  const renderedWorktreeNode = worktreeNode
+    ?? (pendingCheckout ? retainedWorktreeNodeRef.current : null)
+  const shouldInitializeWorktreeMotion = !!renderedWorktreeNode
+    && !worktreeMotionInitializedRef.current
+  const {
+    worktreeX,
+    worktreeY,
+    worktreeHeadX,
+    worktreeHeadY,
+    worktreeOpacity,
+  } = useSpring({
+    worktreeX: renderedWorktreeNode?.x ?? 0,
+    worktreeY: renderedWorktreeNode?.y ?? 0,
+    worktreeHeadX: renderedWorktreeNode?.headX ?? 0,
+    worktreeHeadY: renderedWorktreeNode?.headY ?? 0,
+    worktreeOpacity: renderedWorktreeNode
+      ? pendingCheckout ? 0.5 : 1
+      : 0,
+    immediate: (key) => key !== 'worktreeOpacity' && shouldInitializeWorktreeMotion,
+    config: (key) => key === 'worktreeOpacity'
+      ? { mass: 1, tension: 210, friction: 26, clamp: true }
+      : GRAPH_SPRING_CONFIG,
+  })
+
+  useEffect(() => {
+    if (worktreeNode) retainedWorktreeNodeRef.current = worktreeNode
+    else if (!pendingCheckout) retainedWorktreeNodeRef.current = null
+
+    if (renderedWorktreeNode) worktreeMotionInitializedRef.current = true
+    else if (!pendingCheckout) worktreeMotionInitializedRef.current = false
+  }, [worktreeNode, renderedWorktreeNode, pendingCheckout])
 
   const syncScrollTopState = useCallback((nextScrollTop: number) => {
     pendingScrollTopRef.current = nextScrollTop
@@ -2571,10 +2617,10 @@ export function GraphCanvas() {
   )
 
   const additionalOccupiedLanes = useMemo<ReadonlyMap<number, readonly number[]> | undefined>(
-    () => worktreeNode
-      ? new Map([[worktreeNode.idx, [worktreeNode.lane]]])
+    () => renderedWorktreeNode
+      ? new Map([[renderedWorktreeNode.idx, [renderedWorktreeNode.lane]]])
       : undefined,
-    [worktreeNode],
+    [renderedWorktreeNode],
   )
 
   const gutterBackgrounds = useMemo(() => {
@@ -3711,17 +3757,17 @@ export function GraphCanvas() {
   const fullHeight = layout.totalHeight
   const scaledW = fullWidth * zoom
   const scaledH = fullHeight * zoom
-  const worktreeConflictBadgeWidth = worktreeNode
-    ? Math.max(22, String(worktreeNode.conflictedCount).length * 7 + 14)
+  const worktreeConflictBadgeWidth = renderedWorktreeNode
+    ? Math.max(22, String(renderedWorktreeNode.conflictedCount).length * 7 + 14)
     : 0
-  const worktreeLabel = worktreeNode?.kind === 'merge'
-    ? worktreeNode.conflictedCount > 0 ? 'Merge conflicts' : 'Merge in progress'
-    : worktreeNode?.kind === 'rebase'
-      ? worktreeNode.conflictedCount > 0 ? 'Rebase conflicts' : 'Rebase in progress'
+  const worktreeLabel = renderedWorktreeNode?.kind === 'merge'
+    ? renderedWorktreeNode.conflictedCount > 0 ? 'Merge conflicts' : 'Merge in progress'
+    : renderedWorktreeNode?.kind === 'rebase'
+      ? renderedWorktreeNode.conflictedCount > 0 ? 'Rebase conflicts' : 'Rebase in progress'
       : 'Uncommitted changes'
-  const worktreeTitle = worktreeNode?.kind === 'worktree'
-    ? `Uncommitted changes — ${worktreeNode.count} file${worktreeNode.count === 1 ? '' : 's'}\nClick to stage / unstage`
-    : `${worktreeLabel} — ${worktreeNode?.conflictedCount ?? 0} conflict${worktreeNode?.conflictedCount === 1 ? '' : 's'}\nClick to review files`
+  const worktreeTitle = renderedWorktreeNode?.kind === 'worktree'
+    ? `Uncommitted changes — ${renderedWorktreeNode.count} file${renderedWorktreeNode.count === 1 ? '' : 's'}\nClick to stage / unstage`
+    : `${worktreeLabel} — ${renderedWorktreeNode?.conflictedCount ?? 0} conflict${renderedWorktreeNode?.conflictedCount === 1 ? '' : 's'}\nClick to review files`
 
   return (
     <div
@@ -3861,17 +3907,21 @@ export function GraphCanvas() {
           </div>
         )}
         <div ref={commitLabelsLayerRef} style={{ position: 'relative' }}>
-          {worktreeNode && worktreeNode.y * renderedZoom + graphTranslateY - scrollTop > 28 && (
-            <div
+          {renderedWorktreeNode && renderedWorktreeNode.y * renderedZoom + graphTranslateY - scrollTop > 28 && (
+            <animated.div
               style={{
                 position: 'absolute',
                 left: 20,
-                top: worktreeNode.y * renderedZoom + graphTranslateY - 7,
+                top: to(
+                  worktreeY,
+                  (y) => y * renderedZoom + graphTranslateY - 7,
+                ),
+                opacity: worktreeOpacity,
                 maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * renderedZoom,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                color: worktreeSelected ? worktreeNode.color : '#a6adc8',
+                color: worktreeSelected ? renderedWorktreeNode.color : '#a6adc8',
                 fontSize: 12,
                 fontWeight: 600,
                 pointerEvents: 'none',
@@ -3879,7 +3929,7 @@ export function GraphCanvas() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
-                transition: `top ${cameraTransition}, max-width ${cameraTransition}`,
+                transition: `max-width ${cameraTransition}`,
               }}
             >
               <span style={{
@@ -3887,13 +3937,13 @@ export function GraphCanvas() {
                 width: 8,
                 height: 8,
                 borderRadius: '50%',
-                background: worktreeNode.color,
+                background: renderedWorktreeNode.color,
                 flexShrink: 0,
               }} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {worktreeLabel}
               </span>
-            </div>
+            </animated.div>
           )}
           {floatingCommitLabels.map((label) => {
             const status = commitCIStatus[label.sha]
@@ -4324,16 +4374,17 @@ export function GraphCanvas() {
               <circle cx={node.x} cy={node.y} r={2.5} fill={color} />
             </g>
           ))}
-          {worktreeNode && !isGraphAnimating && (
-            <g
+          {renderedWorktreeNode && (
+            <animated.g
               onClick={(e) => { e.stopPropagation(); selectWorktree() }}
+              opacity={worktreeOpacity}
               style={{ cursor: 'pointer', pointerEvents: 'auto' }}
             >
               <title>{worktreeTitle}</title>
-              {worktreeNode.sourcePath && (
+              {renderedWorktreeNode.sourcePath && (
                 <path
-                  d={worktreeNode.sourcePath}
-                  stroke={worktreeNode.color}
+                  d={renderedWorktreeNode.sourcePath}
+                  stroke={renderedWorktreeNode.color}
                   strokeWidth={2.25}
                   strokeLinecap="round"
                   strokeDasharray="3 5"
@@ -4341,9 +4392,17 @@ export function GraphCanvas() {
                   opacity={0.55}
                 />
               )}
-              <path
-                d={worktreeNode.targetPath}
-                stroke={worktreeNode.color}
+              <animated.path
+                d={to(
+                  [worktreeX, worktreeY, worktreeHeadX, worktreeHeadY],
+                  (x, y, headX, headY) => routedEdgePath(
+                    { x, y },
+                    { x: headX, y: headY },
+                    renderedWorktreeNode.targetPlan,
+                    0,
+                  ),
+                )}
+                stroke={renderedWorktreeNode.color}
                 strokeWidth={2.5}
                 strokeLinecap="round"
                 strokeDasharray="3 5"
@@ -4351,38 +4410,44 @@ export function GraphCanvas() {
                 opacity={0.7}
               />
               {worktreeSelected && (
-                <circle cx={worktreeNode.x} cy={worktreeNode.y} r={NODE_RADIUS * 2.5} fill={worktreeNode.color} opacity={0.15} />
+                <animated.circle
+                  cx={worktreeX}
+                  cy={worktreeY}
+                  r={NODE_RADIUS * 2.5}
+                  fill={renderedWorktreeNode.color}
+                  opacity={0.15}
+                />
               )}
-              <circle
-                cx={worktreeNode.x}
-                cy={worktreeNode.y}
+              <animated.circle
+                cx={worktreeX}
+                cy={worktreeY}
                 r={NODE_RADIUS}
                 fill={NODE_FILL}
-                stroke={worktreeNode.color}
+                stroke={renderedWorktreeNode.color}
                 strokeWidth={worktreeSelected ? 3.5 : 2.75}
                 strokeDasharray="4 3"
               />
-              {worktreeNode.kind === 'worktree' ? (
-                <text
-                  x={worktreeNode.x}
-                  y={worktreeNode.y}
+              {renderedWorktreeNode.kind === 'worktree' ? (
+                <animated.text
+                  x={worktreeX}
+                  y={worktreeY}
                   textAnchor="middle"
                   dominantBaseline="central"
                   fontSize={12}
                   fontWeight={700}
-                  fill={worktreeNode.color}
+                  fill={renderedWorktreeNode.color}
                   style={{ pointerEvents: 'none', userSelect: 'none' }}
                 >
-                  {worktreeNode.count}
-                </text>
+                  {renderedWorktreeNode.count}
+                </animated.text>
               ) : (
                 <>
-                  <circle cx={worktreeNode.x} cy={worktreeNode.y} r={2.5} fill={worktreeNode.color} />
-                  {worktreeNode.conflictedCount > 0 && (
+                  <animated.circle cx={worktreeX} cy={worktreeY} r={2.5} fill={renderedWorktreeNode.color} />
+                  {renderedWorktreeNode.conflictedCount > 0 && (
                     <g style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                      <rect
-                        x={worktreeNode.x + NODE_RADIUS + 6}
-                        y={worktreeNode.y - 10}
+                      <animated.rect
+                        x={to(worktreeX, (x) => x + NODE_RADIUS + 6)}
+                        y={to(worktreeY, (y) => y - 10)}
                         width={worktreeConflictBadgeWidth}
                         height={20}
                         rx={10}
@@ -4390,22 +4455,25 @@ export function GraphCanvas() {
                         stroke="#fab387"
                         strokeWidth={1.4}
                       />
-                      <text
-                        x={worktreeNode.x + NODE_RADIUS + 6 + worktreeConflictBadgeWidth / 2}
-                        y={worktreeNode.y}
+                      <animated.text
+                        x={to(
+                          worktreeX,
+                          (x) => x + NODE_RADIUS + 6 + worktreeConflictBadgeWidth / 2,
+                        )}
+                        y={worktreeY}
                         textAnchor="middle"
                         dominantBaseline="central"
                         fontSize={11}
                         fontWeight={800}
                         fill="#fab387"
                       >
-                        {worktreeNode.conflictedCount}
-                      </text>
+                        {renderedWorktreeNode.conflictedCount}
+                      </animated.text>
                     </g>
                   )}
                 </>
               )}
-            </g>
+            </animated.g>
           )}
         </svg>
 

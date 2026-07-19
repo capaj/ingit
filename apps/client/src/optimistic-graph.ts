@@ -43,6 +43,27 @@ export function predictWorktreeAfterCommit(
   }
 }
 
+/**
+ * Checkout temporarily stashes dirty files on the server, which makes the
+ * authoritative worktree clean while the branch switch is in flight. Keep the
+ * user's known changes attached to the predicted destination until the stash
+ * has been restored.
+ */
+export function predictWorktreeAfterCheckout(
+  changes: WorktreeChangesResponse,
+  headSha: string,
+  branchShortName: string | null,
+): WorktreeChangesResponse {
+  const predicted = {
+    ...changes,
+    headSha,
+  }
+  if (branchShortName) return { ...predicted, branch: branchShortName }
+
+  const { branch: _branch, ...detached } = predicted
+  return detached
+}
+
 interface RowMeta {
   authorName: string
   authorEmail: string
