@@ -14,19 +14,33 @@ import {
   stackPreviewChainAboveTarget,
 } from './graph-canvas/action-preview-layout'
 import { findClearEndpointRail, findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
-import { routeUpstreamAroundWorktree } from './graph-canvas/worktree-lane-layout'
+import {
+  buildLayout,
+  colorForBranchName,
+  COMMIT_MESSAGE_GUTTER,
+  GRAPH_TOP_HEADROOM,
+  hashText,
+  laneColor,
+  LANE_ORIGIN_X_BASE,
+  LANE_WIDTH,
+  NODE_SPACING_Y,
+  PAD_TOP,
+  pickBestRef,
+  type GraphLayout,
+  type LayoutNode,
+} from './graph-canvas/layout'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
+
+export { buildLayout } from './graph-canvas/layout'
 
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
 
-const NODE_SPACING_Y = 56
 // Cap how many on-screen commits we look up CI for at once. Zoomed out, hundreds
 // can be visible; fetching them all blasts GitHub and trips its secondary rate
 // limit, so we take the newest 20 and ignore the rest.
 const MAX_ONSCREEN_CI_FETCH = 20
-const LANE_WIDTH = 80
 const NODE_RADIUS = 16
 const NODE_FILL = '#11111b'
 const REF_PILL_HEIGHT = 20
@@ -50,13 +64,6 @@ const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
 const EDGE_RAIL_STAGGER_STEP = 6
 const EDGE_TARGET_JOIN_GAP = 6
 const EDGE_VERTICAL_RAIL_CLEARANCE = 3
-const GRAPH_LEFT_GUTTER = 120
-const GRAPH_RIGHT_GUTTER = 520
-const PAD_TOP = 40
-const GRAPH_TOP_HEADROOM = NODE_SPACING_Y * 2
-const PAD_LEFT = 40
-const COMMIT_MESSAGE_GUTTER = 260
-const LANE_ORIGIN_X_BASE = PAD_LEFT + GRAPH_LEFT_GUTTER
 const GRAPH_SPRING_CONFIG = { mass: 2.1, tension: 180, friction: 28 }
 const GRAPH_CAMERA_TRANSITION_MS = 220
 const REBASE_PREVIEW_CAMERA_TRANSITION_MS = 900
@@ -75,43 +82,12 @@ const EDGE_OCCLUSION_GEOMETRY = {
   curveControlRatio: 0.3,
 }
 
-const LANE_COLORS = [
-  '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
-  '#94e2d5', '#fab387', '#74c7ec', '#f5c2e7', '#b4befe',
-]
-
 // Stable empty fallback so memo factories don't allocate a fresh map per render
 // when no layout is loaded yet.
 const EMPTY_SHA_COLOR: Map<string, string> = new Map()
 
-function laneColor(lane: number) {
-  const normalized = ((lane % LANE_COLORS.length) + LANE_COLORS.length) % LANE_COLORS.length
-  return LANE_COLORS[normalized]
-}
-
-// Branch colors must be stable: a commit's color depends on the branch line it
-// belongs to, never on its lane index. Lane indices shift on every checkout
-// (the current branch is pulled to lane 0), so coloring by lane made the whole
-// graph recolor itself on checkout. Hashing a stable identity (the branch name,
-// or the sha for unlabeled commits) keeps each line's color fixed.
-function colorForBranchName(name: string) {
-  return LANE_COLORS[hashText(name) % LANE_COLORS.length]
-}
-
-function stableColorForNode(sha: string, shaToBranch: Map<string, string>) {
-  const branch = shaToBranch.get(sha)
-  return branch ? colorForBranchName(branch) : LANE_COLORS[hashText(sha) % LANE_COLORS.length]
-}
-
 function verticalOffsetForHeight(height: number) {
   return Math.round((REF_PILL_HEIGHT - height) / 2)
-}
-
-interface LayoutNode {
-  row: CommitRow
-  x: number
-  y: number
-  idx: number
 }
 
 interface EdgePoint {
@@ -296,8 +272,6 @@ interface CurrentLaneHighlight {
   color: string
 }
 
-type GraphLayout = ReturnType<typeof buildLayout>
-
 interface GraphAnimationSnapshot {
   fromLayout: GraphLayout
   toLayout: GraphLayout
@@ -432,68 +406,6 @@ type EdgeRoutePlan =
     outerRailX: number
     horizontalTargetJoin?: boolean
   }
-
-export function buildLayout(rows: CommitRow[], extraLeftGutter = 0) {
-  let minLane = Infinity
-  let maxLane = -Infinity
-  const nodes: LayoutNode[] = []
-  const shaToNode = new Map<string, LayoutNode>()
-  const shaToRow = new Map<string, CommitRow>()
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]
-    if (row.lane < minLane) minLane = row.lane
-    if (row.lane > maxLane) maxLane = row.lane
-    shaToRow.set(row.sha, row)
-  }
-
-  const leftmostLane = Number.isFinite(minLane) ? minLane : 0
-  const rightmostLane = Number.isFinite(maxLane) ? maxLane : 0
-  const laneRadius = Math.max(Math.abs(leftmostLane), Math.abs(rightmostLane))
-  const laneOriginX = LANE_ORIGIN_X_BASE + extraLeftGutter
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]
-    const node: LayoutNode = {
-      row,
-      x: laneOriginX + (row.lane + laneRadius) * LANE_WIDTH,
-      y: PAD_TOP + GRAPH_TOP_HEADROOM + i * NODE_SPACING_Y,
-      idx: i,
-    }
-    nodes.push(node)
-    shaToNode.set(row.sha, node)
-  }
-
-  // Build sha → branch name by tracing first-parent chains from branch tips
-  // Prefer local branches over remotes; skip bare remote names like "origin"
-  const shaToBranch = new Map<string, string>()
-  for (const row of rows) {
-    const bestRef = pickBestRef(row.refNames)
-    if (!bestRef) continue
-    let sha: string | undefined = row.sha
-    while (sha && !shaToBranch.has(sha)) {
-      shaToBranch.set(sha, bestRef)
-      const r = shaToRow.get(sha)
-      if (!r || r.parentShas.length === 0) break
-      sha = r.parentShas[0]
-    }
-  }
-
-  const shaToColor = new Map<string, string>()
-  for (const node of nodes) {
-    shaToColor.set(node.row.sha, stableColorForNode(node.row.sha, shaToBranch))
-  }
-
-  return {
-    nodes,
-    shaToNode,
-    shaToBranch,
-    shaToColor,
-    maxLane,
-    totalWidth: PAD_LEFT * 2 + GRAPH_LEFT_GUTTER + extraLeftGutter + (laneRadius * 2 + 1) * LANE_WIDTH + GRAPH_RIGHT_GUTTER,
-    totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2 + GRAPH_TOP_HEADROOM,
-  }
-}
 
 function sameParents(left: CommitRow, right: CommitRow) {
   return left.parentShas.length === right.parentShas.length
@@ -634,14 +546,6 @@ function edgePath(x1: number, y1: number, x2: number, y2: number): string {
   return `M${x1},${y1}C${x1},${y1 + dy * 0.3} ${x2},${y2 - dy * 0.3} ${x2},${y2}`
 }
 
-function hashText(text: string) {
-  let hash = 0
-  for (let i = 0; i < text.length; i++) {
-    hash = (hash * 31 + text.charCodeAt(i)) >>> 0
-  }
-  return hash
-}
-
 function pointOnCircleToward(fromX: number, fromY: number, toX: number, toY: number, radius: number) {
   const dx = toX - fromX
   const dy = toY - fromY
@@ -717,6 +621,23 @@ function countRowsMatching(
   }
 
   return count
+}
+
+function laneIsClearAcrossRows(
+  lane: number,
+  fromIdx: number,
+  toIdx: number,
+  occupiedLanes: number[],
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
+) {
+  const start = Math.max(0, Math.min(fromIdx, toIdx))
+  const end = Math.min(occupiedLanes.length - 1, Math.max(fromIdx, toIdx))
+
+  for (let idx = start; idx <= end; idx++) {
+    if (occupiedLanes[idx] === lane) return false
+    if (additionalOccupiedLanes?.get(idx)?.includes(lane)) return false
+  }
+  return true
 }
 
 export function buildOuterRailPath(
@@ -1113,6 +1034,32 @@ function planEdgeRoute(
   const fromRouteNode = { x: from.x, y: from.y, idx: from.idx, lane: from.row.lane }
   const toRouteNode = { x: to.x, y: to.y, idx: to.idx, lane: to.row.lane }
 
+  // A merge between opposite sides of the center line should leave from the
+  // outside of the merge commit. Following the merge parent's otherwise-clear
+  // rail would drag the horizontal hook across every intervening lane right
+  // below the commit. Use the immediately outward lane when it is clear, then
+  // make the long horizontal join at the parent instead.
+  if (preferredTrack === 'to' && from.row.lane * to.row.lane < 0) {
+    const outwardDirection = from.row.lane < 0 ? -1 : 1
+    const outwardLane = from.row.lane + outwardDirection
+    if (laneIsClearAcrossRows(
+      outwardLane,
+      from.idx,
+      to.idx,
+      occupiedLanes,
+      opts.additionalOccupiedLanes,
+    )) {
+      return {
+        mode: 'outer-rail',
+        side: outwardDirection < 0 ? 'left' : 'right',
+        anchorLane: outwardLane,
+        innerLane: to.row.lane,
+        outerRailX: from.x + outwardDirection * LANE_WIDTH,
+        horizontalTargetJoin: true,
+      }
+    }
+  }
+
   // Lane ordering reserves the complete source rail for first-parent edges and
   // the complete target rail for merge edges. Prefer that guaranteed-clear
   // endpoint gutter: it produces one vertical rail and one horizontal join,
@@ -1456,17 +1403,6 @@ function findTopVisibleNode(nodes: LayoutNode[], scrollTop: number, zoom: number
 }
 
 function isRemoteRef(name: string) { return name.includes('/') }
-
-/** Pick the best ref name for display: prefer local branches, skip bare remote names */
-function pickBestRef(refNames: string[]): string | null {
-  if (refNames.length === 0) return null
-  // Prefer local branches (no slash)
-  const local = refNames.find(r => !r.includes('/'))
-  if (local) return local
-  // Fall back to remote refs that look like branch names (origin/xxx), skip bare "origin"
-  const remote = refNames.find(r => r.includes('/') && r !== 'origin' && r !== 'HEAD')
-  return remote ?? null
-}
 
 function areRefNamesEqual(left: string[], right: string[]) {
   if (left.length !== right.length) return false
@@ -2146,6 +2082,7 @@ function shouldAnimateGraphMutation(
 export function GraphCanvas() {
   const commitIconRules = useCommitIconRules()
   const histWindow = useAppStore((state) => state.historyWindow)
+  const graphModel = useAppStore((state) => state.graphModel)
   const refs = useAppStore((state) => state.refs)
   const selectedSha = useAppStore((state) => state.selectedSha)
   const selectedRefName = useAppStore((state) => state.selectedRefName)
@@ -2221,25 +2158,13 @@ export function GraphCanvas() {
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
 
-  const currentBranch = useMemo(() => {
-    const current = refs.find((ref) => ref.isCurrent)
-    return current?.shortName ?? null
-  }, [refs])
-
-  const worktreeChangeCount = worktreeChanges
-    ? worktreeChanges.staged.length + worktreeChanges.unstaged.length
-    : 0
-  const renderedRows = useMemo(() => {
-    if (!histWindow) return null
-    return worktreeChangeCount > 0
-      ? routeUpstreamAroundWorktree(histWindow.rows, currentBranch)
-      : histWindow.rows
-  }, [histWindow, currentBranch, worktreeChangeCount])
-
-  const layout = useMemo(() => {
-    if (!renderedRows || renderedRows.length === 0) return null
-    return buildLayout(renderedRows, showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0)
-  }, [renderedRows, showCommitMessages])
+  // Projection and layout are derived when graph inputs enter the store, not
+  // during React render. The graph model cache also reuses optimistic geometry
+  // when the authoritative checkout response has the same topology.
+  const currentBranch = graphModel?.currentBranch
+    ?? refs.find((ref) => ref.isCurrent)?.shortName
+    ?? null
+  const layout = graphModel?.layout ?? null
 
   const refMap = useMemo(
     () => new Map(refs.map((ref) => [ref.shortName, ref])),

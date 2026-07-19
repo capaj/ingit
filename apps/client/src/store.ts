@@ -5,21 +5,13 @@ import type {
   CommitDetailResponse,
   CommitAuthorResponse,
   CommitDiffResponse,
-  CommitActionKind,
   CommitRow,
-  ChangedPath,
   MergePreviewResponse,
-  RefActionKind,
   ReflogResponse,
   WorktreeChangesResponse,
-  StageActionKind,
-  WorktreeFile,
-  WorktreeDiffArea,
-  InProgressOperationKind,
   WorktreeSummary,
   StashSummary,
   StashDiffResponse,
-  ImageDiff,
 } from '@ingit/rpc-contract'
 import {
   openRepo,
@@ -67,12 +59,53 @@ import {
   type OptimisticGraph,
 } from './optimistic-graph'
 import { mergeHistory } from './history-pagination'
+import { recordStorePublication } from './performance-metrics'
+import { deriveGraphModel } from './components/graph-canvas/graph-model'
+import {
+  createRepositorySliceState,
+  type RepositorySlice,
+} from './store/repository-slice'
+import {
+  createGraphSliceState,
+  REFLOG_PAGE_SIZE,
+  type CIRun,
+  type CIState,
+  type CommitPRInfo,
+  type GraphSlice,
+} from './store/graph-slice'
+import {
+  commitFileDiffKey,
+  createWorktreeSliceState,
+  stashFileDiffKey,
+  worktreeDiffKey,
+  type CommitFileDiffEntry,
+  type WorktreeSlice,
+} from './store/worktree-slice'
+import {
+  createUiSliceState,
+  type ErrorDialogAction,
+  type UiSlice,
+} from './store/ui-slice'
 
-/** Optional extra button shown in the error dialog (e.g. "Force push"). */
-export interface ErrorDialogAction {
-  label: string
-  run: () => void
+export type { AppStatus } from './store/repository-slice'
+export type {
+  CIRun,
+  CIRunState,
+  CIState,
+  CIStatusEntry,
+} from './store/graph-slice'
+export type {
+  CommitFileDiffEntry,
+  WorktreeDiffEntry,
+} from './store/worktree-slice'
+export type { ErrorDialogAction, ViewMode } from './store/ui-slice'
+export {
+  commitFileDiffKey,
+  stashFileDiffKey,
+  worktreeDiffKey,
 }
+
+export type AppState = RepositorySlice & GraphSlice & WorktreeSlice & UiSlice
 
 // Repository switches only need enough recent history to fill the viewport.
 // The graph requests deeper pages as the user approaches them, avoiding a
@@ -354,154 +387,6 @@ function prependRecentRepo(recentRepos: string[], repoPath: string): string[] {
     .slice(0, MAX_RECENT_REPOS)
 }
 
-export type AppStatus = 'no-repo' | 'loading' | 'ready'
-export type ViewMode = 'history' | 'reflog'
-
-const REFLOG_PAGE_SIZE = 300
-
-export type CIState = 'success' | 'pending' | 'failure' | 'error' | 'neutral' | 'none'
-export type CIRunState = 'success' | 'pending' | 'failure' | 'error' | 'neutral'
-export interface CIRun {
-  name: string
-  description?: string
-  state: CIRunState
-  url?: string
-}
-export interface CIStatusEntry {
-  state: CIState | 'loading'
-  runs: CIRun[]
-}
-
-type CommitPRInfo = Array<{ number: number; title: string; url: string; state: string; mergedAt: string | null }>
-
-/** Loaded (or loading / failed) patch for one worktree file, keyed `${area}:${path}`. */
-export interface WorktreeDiffEntry {
-  loading: boolean
-  patchText?: string
-  isBinary?: boolean
-  imageDiff?: ImageDiff
-  error?: string
-}
-
-export type CommitFileDiffEntry = WorktreeDiffEntry
-
-export function worktreeDiffKey(area: WorktreeDiffArea, path: string): string {
-  return `${area}:${path}`
-}
-
-export function commitFileDiffKey(sha: string, path: string): string {
-  return `${sha}:${path}`
-}
-
-export function stashFileDiffKey(sha: string, path: string): string {
-  return `${sha}:${path}`
-}
-
-interface AppState {
-  status: AppStatus
-  repoId: string | null
-  repoPath: string | null
-  currentWorktreePath: string | null
-  totalCommitCount: number
-  recentRepos: string[]
-  discoveredFolder: string | null
-  discoveredRepos: string[]
-  refs: RefSummary[]
-  stashes: StashSummary[]
-  selectedStashSha: string | null
-  stashDiff: StashDiffResponse | null
-  stashFileDiffs: Record<string, WorktreeDiffEntry>
-  worktrees: WorktreeSummary[]
-  historyWindow: HistoryWindowResponse | null
-  viewMode: ViewMode
-  reflog: ReflogResponse | null
-  reflogLoading: boolean
-  reflogMaxCount: number
-  selectedSha: string | null
-  selectedRefName: string | null
-  scrollToSha: string | null
-  scrollToKey: number  // incremented to force re-scroll even for same SHA
-  commitDetail: CommitDetailResponse | null
-  commitDiff: CommitDiffResponse | null
-  commitPRs: CommitPRInfo
-  commitAuthorAvatars: Record<string, string | null>
-  mergePreview: MergePreviewResponse | null
-  githubUrl: string | null
-  openError: string | null
-  errorDialog: { title: string; message: string; action?: ErrorDialogAction } | null
-  loadingMore: boolean
-  commitCIStatus: Record<string, CIStatusEntry>
-  showCommitMessages: boolean
-  showGutterColors: boolean
-  worktreeChanges: WorktreeChangesResponse | null
-  worktreeSelected: boolean
-  /** In-progress commit message; kept while the working-tree panel is hidden. */
-  worktreeCommitMessage: string
-  worktreeFileDiffs: Record<string, WorktreeDiffEntry>
-  commitFileDiffs: Record<string, CommitFileDiffEntry>
-  // True while an optimistic mutation is in flight. Blocks further node actions
-  // until the current one is confirmed (or rolled back).
-  pendingMutation: boolean
-  // Checkout temporarily auto-stashes dirty files. Keep this separate from the
-  // generic mutation lock so GraphCanvas can retain and dim the worktree node
-  // until those files have been restored on the destination branch.
-  pendingCheckout: boolean
-  // Bumped when the store reconciles an optimistic prediction with the server's
-  // authoritative result. GraphCanvas watches it to swap to the real layout
-  // *without* re-animating (the predicted nodes are already in place).
-  graphAnimationSuppressToken: number
-
-  // Actions
-  setShowCommitMessages: (value: boolean) => void
-  setShowGutterColors: (value: boolean) => void
-  setWorktreeCommitMessage: (message: string) => void
-  reloadFromServer: () => Promise<void>
-  loadWorktrees: () => Promise<void>
-  loadWorktreeChanges: () => Promise<void>
-  /** Stash all tracked and untracked changes. */
-  createStash: (message?: string) => Promise<boolean>
-  /** Apply a stash while keeping it in the stash list. */
-  applyStash: (stashSha: string) => Promise<boolean>
-  /** Permanently remove a stash. */
-  dropStash: (stashSha: string) => Promise<boolean>
-  selectStash: (stashSha: string) => void
-  loadStashFileDiff: (stashSha: string, file: ChangedPath) => Promise<void>
-  selectWorktree: () => void
-  /** Run a staging action and report whether it succeeded. */
-  runStageAction: (action: StageActionKind, paths: string[]) => Promise<boolean>
-  loadWorktreeFileDiff: (file: WorktreeFile, area: WorktreeDiffArea) => Promise<void>
-  loadCommitFileDiff: (sha: string, file: ChangedPath) => Promise<void>
-  /** Commit the index. Returns true on success (so the UI can clear the message). */
-  performCommit: (message: string, noVerify: boolean, amend?: boolean) => Promise<boolean>
-  showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
-  dismissError: () => void
-  openRepoByPath: (path: string) => Promise<void>
-  closeRepo: () => void
-  loadRecentRepos: () => Promise<void>
-  loadDiscoveredRepos: (folder?: string) => Promise<void>
-  openFromUrl: () => void
-  selectCommit: (sha: string) => void
-  selectRef: (ref: RefSummary) => void
-  selectGraphRef: (refName: string) => void
-  clearGraphRefSelection: () => void
-  ensureMergePreview: (refName: string) => Promise<MergePreviewResponse | null>
-  navigateTo: (sha: string) => Promise<void>
-  requestMore: (direction: 'up' | 'down') => Promise<void>
-  performRefAction: (action: RefActionKind, refName: string, sha: string, force?: boolean) => Promise<void>
-  performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
-  performMergeRef: (refName: string) => Promise<void>
-  performRebaseRef: (refName: string) => Promise<void>
-  abortInProgressOperation: (operation: InProgressOperationKind) => Promise<void>
-  continueInProgressOperation: (operation: InProgressOperationKind) => Promise<void>
-  checkoutSha: (sha: string) => Promise<void>
-  fetchCommitCIStatusesIfNeeded: (shas: string[]) => void
-  watchCommitCIStatus: (sha: string) => void
-  setViewMode: (mode: ViewMode) => void
-  loadReflog: () => Promise<void>
-  loadMoreReflog: () => Promise<void>
-  recoverBranch: (branchName: string, sha: string) => Promise<void>
-}
-
 async function openRepoByPathImpl(
   path: string,
   set: StoreSetter,
@@ -693,63 +578,46 @@ function ciPollTick() {
   fetchCIStatusesInto([...toPoll])
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
-  status: 'no-repo',
-  repoId: null,
-  repoPath: null,
-  currentWorktreePath: null,
-  totalCommitCount: 0,
-  recentRepos: [],
-  discoveredFolder: null,
-  discoveredRepos: [],
-  refs: [],
-  stashes: [],
-  selectedStashSha: null,
-  stashDiff: null,
-  stashFileDiffs: {},
-  worktrees: [],
-  historyWindow: null,
-  viewMode: 'history',
-  reflog: null,
-  reflogLoading: false,
-  reflogMaxCount: REFLOG_PAGE_SIZE,
-  selectedSha: null,
-  selectedRefName: null,
-  scrollToSha: null,
-  scrollToKey: 0,
-  commitDetail: null,
-  commitDiff: null,
-  commitPRs: [],
-  commitAuthorAvatars: {},
-  mergePreview: null,
-  githubUrl: null,
-  openError: null,
-  errorDialog: null,
-  loadingMore: false,
-  commitCIStatus: {},
-  worktreeChanges: null,
-  worktreeSelected: false,
-  worktreeCommitMessage: '',
-  worktreeFileDiffs: {},
-  commitFileDiffs: {},
-  pendingMutation: false,
-  pendingCheckout: false,
-  graphAnimationSuppressToken: 0,
-  showCommitMessages: (() => {
-    try {
-      const stored = localStorage.getItem('showCommitMessages')
-      return stored === null ? true : stored === 'true'
-    } catch {
-      return true
-    }
-  })(),
-  showGutterColors: (() => {
-    try {
-      return localStorage.getItem('showGutterColors') === 'true'
-    } catch {
-      return false
-    }
-  })(),
+const GRAPH_MODEL_INPUT_KEYS = new Set<keyof AppState>([
+  'historyWindow',
+  'refs',
+  'worktreeChanges',
+  'showCommitMessages',
+])
+
+function updatesGraphModel(partial: Partial<AppState>): boolean {
+  return Object.keys(partial).some((key) => GRAPH_MODEL_INPUT_KEYS.has(key as keyof AppState))
+}
+
+export const useAppStore = create<AppState>((baseSet, get) => {
+  // Keep cross-domain actions in one bounded store so checkout can still
+  // publish one atomic snapshot. Every graph-input publication derives the
+  // render model here, before React subscribers run.
+  const set: StoreSetter = (update) => {
+    baseSet((state) => {
+      const partial = typeof update === 'function' ? update(state) : update
+      const graphInputsChanged = updatesGraphModel(partial)
+      recordStorePublication(graphInputsChanged)
+      if (!graphInputsChanged) return partial
+
+      const nextState = { ...state, ...partial }
+      return {
+        ...partial,
+        graphModel: deriveGraphModel(
+          nextState.historyWindow,
+          nextState.refs,
+          nextState.worktreeChanges,
+          nextState.showCommitMessages,
+        ),
+      }
+    })
+  }
+
+  return {
+    ...createRepositorySliceState(),
+    ...createGraphSliceState(),
+    ...createWorktreeSliceState(),
+    ...createUiSliceState(),
 
   setShowCommitMessages: (value) => {
     try { localStorage.setItem('showCommitMessages', String(value)) } catch {}
@@ -2337,4 +2205,5 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
     if (get().viewMode === 'reflog') void get().loadReflog()
   },
-}))
+  }
+})

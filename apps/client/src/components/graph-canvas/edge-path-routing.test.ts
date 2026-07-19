@@ -237,6 +237,41 @@ describe('outer rail path', () => {
     expect(routing.targetJoinOffsets.get('far-target')).toBe(3)
   })
 
+  test('routes a long cross-center merge around the outside of its source', () => {
+    const rows = [
+      row('merge', 2),
+      row('filler-1', 4),
+      row('filler-2', 0),
+      row('filler-3', 2),
+      row('filler-4', 2),
+      row('filler-5', 0),
+      row('filler-6', -1),
+      row('filler-7', -2),
+      row('filler-8', 0),
+      row('filler-9', -4),
+      row('merged-parent', -6),
+    ]
+    const layout = buildLayout(rows)
+    const routing = buildEdgeRoutingData(
+      [{
+        key: 'merge-parent',
+        from: layout.nodes[0],
+        to: layout.nodes[10],
+        isMerge: true,
+      }],
+      rows.map((entry) => entry.lane),
+    )
+
+    expect(routing.plans.get('merge-parent')).toEqual({
+      mode: 'outer-rail',
+      side: 'right',
+      anchorLane: 3,
+      innerLane: -6,
+      outerRailX: layout.nodes[0].x + 80,
+      horizontalTargetJoin: true,
+    })
+  })
+
   test('grows a target node once five or more hooks need attachment points', () => {
     const candidates = Array.from({ length: 6 }, (_, index) => ({
       key: `edge-${index}`,

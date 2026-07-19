@@ -1,5 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Profiler, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from './store'
+import { recordGraphRender } from './performance-metrics'
 import { listDirectory as fetchDirectory } from './api'
 import { RepoOpen } from './components/RepoOpen'
 import { RefsSidebar } from './components/RefsSidebar'
@@ -66,21 +68,36 @@ export function App() {
   } | null>(null)
   const repoPathInputRef = useRef<HTMLInputElement>(null)
   const {
-    status, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, refs, stashes, selectedStashSha, stashDiff, historyWindow, selectedSha,
-    commitDetail, commitDiff, commitPRs, commitAuthorAvatars, commitCIStatus, githubUrl, openError,
+    status, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, openError,
     errorDialog, dismissError, showError,
-    openRepoByPath, closeRepo, openFromUrl, selectRef,
-    navigateTo, checkoutSha, performRefAction,
+    openRepoByPath, closeRepo, openFromUrl, performRefAction,
     showCommitMessages, setShowCommitMessages,
     viewMode, setViewMode,
-    worktreeSelected,
     worktreeChanges,
-    applyStash,
-    dropStash,
-    selectStash,
-    pendingMutation,
     reloadFromServer,
-  } = useAppStore()
+  } = useAppStore(useShallow((state) => ({
+    status: state.status,
+    repoPath: state.repoPath,
+    currentWorktreePath: state.currentWorktreePath,
+    worktrees: state.worktrees,
+    recentRepos: state.recentRepos,
+    discoveredFolder: state.discoveredFolder,
+    discoveredRepos: state.discoveredRepos,
+    openError: state.openError,
+    errorDialog: state.errorDialog,
+    dismissError: state.dismissError,
+    showError: state.showError,
+    openRepoByPath: state.openRepoByPath,
+    closeRepo: state.closeRepo,
+    openFromUrl: state.openFromUrl,
+    performRefAction: state.performRefAction,
+    showCommitMessages: state.showCommitMessages,
+    setShowCommitMessages: state.setShowCommitMessages,
+    viewMode: state.viewMode,
+    setViewMode: state.setViewMode,
+    worktreeChanges: state.worktreeChanges,
+    reloadFromServer: state.reloadFromServer,
+  })))
 
   const handleFetch = async () => {
     if (fetching) return
@@ -91,12 +108,6 @@ export function App() {
     catch (err) { showError('Fetch failed', err) }
     finally { setFetching(false) }
   }
-
-  const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
-  const selectedCIRuns = selectedCIStatus?.runs ?? []
-  const selectedStash = selectedStashSha
-    ? stashes.find((stash) => stash.sha === selectedStashSha) ?? null
-    : null
 
   useEffect(() => {
     const handleHashChange = () => openFromUrl()
@@ -224,34 +235,6 @@ export function App() {
     && pathSuggestionAnchor !== null
     && (pathSuggestionsLoading || (pathSuggestionsOpen && pathSuggestions.length > 0))
 
-  // Find branch name for selected commit by tracing first-parent from branch tips
-  const selectedBranchName = useMemo(() => {
-    if (!selectedSha || !historyWindow) return null
-    const rows = historyWindow.rows
-    const shaToRow = new Map(rows.map(r => [r.sha, r]))
-
-    for (const row of rows) {
-      if (row.refNames.length === 0) continue
-      // Pick best ref: prefer local over remote, skip bare names
-      const local = row.refNames.find(r => !r.includes('/'))
-      const remote = row.refNames.find(r => r.includes('/') && r !== 'origin' && r !== 'HEAD')
-      const refName = local ?? remote
-      if (!refName) continue
-
-      // Walk first-parent chain to see if selectedSha is on this branch
-      let sha: string | undefined = row.sha
-      const visited = new Set<string>()
-      while (sha && !visited.has(sha)) {
-        if (sha === selectedSha) return refName
-        visited.add(sha)
-        const r = shaToRow.get(sha)
-        if (!r || r.parentShas.length === 0) break
-        sha = r.parentShas[0]
-      }
-    }
-    return null
-  }, [selectedSha, historyWindow])
-
   if (status === 'no-repo') {
     return (
       <>
@@ -306,14 +289,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden', background: '#1e1e2e' }}>
       {refsSidebarOpen && (
-        <RefsSidebar
-          refs={refs}
-          stashes={stashes}
-          onSelectRef={selectRef}
-          onSelectStash={selectStash}
-          onSelectStashParent={(sha) => { void navigateTo(sha) }}
-          selectedStashSha={selectedStashSha}
-          selectedSha={selectedSha}
+        <ConnectedRefsSidebar
           onClose={() => setRefsSidebarOpen(false)}
           onOpenSettings={() => setSettingsOpen(true)}
           settingsOpen={settingsOpen}
@@ -620,37 +596,18 @@ export function App() {
           </button>
         </div>
 
-        {viewMode === 'reflog' ? <ReflogGraph /> : <GraphCanvas />}
+        {viewMode === 'reflog' ? (
+          <ReflogGraph />
+        ) : import.meta.env.DEV ? (
+          <Profiler id="graph-canvas" onRender={recordGraphRender}>
+            <GraphCanvas />
+          </Profiler>
+        ) : (
+          <GraphCanvas />
+        )}
       </div>
 
-      {selectedStash ? (
-        <StashDetail
-          stash={selectedStash}
-          diff={stashDiff}
-          busy={pendingMutation}
-          onApply={applyStash}
-          onDrop={dropStash}
-          onNavigate={(sha) => { void navigateTo(sha) }}
-        />
-      ) : worktreeSelected ? (
-        <WorkingTreeDetail />
-      ) : (
-        <CommitDetail
-          commit={commitDetail}
-          diff={commitDiff}
-          branchName={selectedBranchName}
-          prs={commitPRs}
-          authorAvatarUrl={commitDetail ? commitAuthorAvatars[commitDetail.sha] : undefined}
-          ciState={selectedCIStatus?.state}
-          ciRuns={selectedCIRuns}
-          githubUrl={githubUrl}
-          onNavigate={navigateTo}
-          onCheckout={async (sha) => {
-            try { await checkoutSha(sha) }
-            catch (err) { showError('Checkout failed', err) }
-          }}
-        />
-      )}
+      <RepositoryDetailPane />
 
       <ErrorDialog error={errorDialog} onDismiss={dismissError} />
       {settingsOpen && (
@@ -659,6 +616,161 @@ export function App() {
         </Suspense>
       )}
     </div>
+  )
+}
+
+function ConnectedRefsSidebar({
+  onClose,
+  onOpenSettings,
+  settingsOpen,
+}: {
+  onClose: () => void
+  onOpenSettings: () => void
+  settingsOpen: boolean
+}) {
+  const {
+    refs,
+    stashes,
+    selectRef,
+    selectStash,
+    navigateTo,
+    selectedStashSha,
+    selectedSha,
+  } = useAppStore(useShallow((state) => ({
+    refs: state.refs,
+    stashes: state.stashes,
+    selectRef: state.selectRef,
+    selectStash: state.selectStash,
+    navigateTo: state.navigateTo,
+    selectedStashSha: state.selectedStashSha,
+    selectedSha: state.selectedSha,
+  })))
+
+  return (
+    <RefsSidebar
+      refs={refs}
+      stashes={stashes}
+      onSelectRef={selectRef}
+      onSelectStash={selectStash}
+      onSelectStashParent={(sha) => { void navigateTo(sha) }}
+      selectedStashSha={selectedStashSha}
+      selectedSha={selectedSha}
+      onClose={onClose}
+      onOpenSettings={onOpenSettings}
+      settingsOpen={settingsOpen}
+    />
+  )
+}
+
+function RepositoryDetailPane() {
+  const {
+    selectedStashSha,
+    stashes,
+    stashDiff,
+    pendingMutation,
+    applyStash,
+    dropStash,
+    navigateTo,
+    worktreeSelected,
+    selectedSha,
+    historyWindow,
+    commitDetail,
+    commitDiff,
+    commitPRs,
+    commitAuthorAvatars,
+    commitCIStatus,
+    githubUrl,
+    checkoutSha,
+    showError,
+  } = useAppStore(useShallow((state) => ({
+    selectedStashSha: state.selectedStashSha,
+    stashes: state.stashes,
+    stashDiff: state.stashDiff,
+    pendingMutation: state.pendingMutation,
+    applyStash: state.applyStash,
+    dropStash: state.dropStash,
+    navigateTo: state.navigateTo,
+    worktreeSelected: state.worktreeSelected,
+    selectedSha: state.selectedSha,
+    historyWindow: state.historyWindow,
+    commitDetail: state.commitDetail,
+    commitDiff: state.commitDiff,
+    commitPRs: state.commitPRs,
+    commitAuthorAvatars: state.commitAuthorAvatars,
+    commitCIStatus: state.commitCIStatus,
+    githubUrl: state.githubUrl,
+    checkoutSha: state.checkoutSha,
+    showError: state.showError,
+  })))
+
+  const selectedStash = selectedStashSha
+    ? stashes.find((stash) => stash.sha === selectedStashSha) ?? null
+    : null
+  const selectedCIStatus = selectedSha ? commitCIStatus[selectedSha] : undefined
+  const selectedCIRuns = selectedCIStatus?.runs ?? []
+
+  // Find the best branch label whose first-parent chain contains the selection.
+  const selectedBranchName = useMemo(() => {
+    if (!selectedSha || !historyWindow) return null
+    const rows = historyWindow.rows
+    const shaToRow = new Map(rows.map((row) => [row.sha, row]))
+
+    for (const row of rows) {
+      if (row.refNames.length === 0) continue
+      const local = row.refNames.find((refName) => !refName.includes('/'))
+      const remote = row.refNames.find(
+        (refName) => refName.includes('/') && refName !== 'origin' && refName !== 'HEAD',
+      )
+      const refName = local ?? remote
+      if (!refName) continue
+
+      let sha: string | undefined = row.sha
+      const visited = new Set<string>()
+      while (sha && !visited.has(sha)) {
+        if (sha === selectedSha) return refName
+        visited.add(sha)
+        const current = shaToRow.get(sha)
+        if (!current || current.parentShas.length === 0) break
+        sha = current.parentShas[0]
+      }
+    }
+    return null
+  }, [selectedSha, historyWindow])
+
+  if (selectedStash) {
+    return (
+      <StashDetail
+        stash={selectedStash}
+        diff={stashDiff}
+        busy={pendingMutation}
+        onApply={applyStash}
+        onDrop={dropStash}
+        onNavigate={(sha) => { void navigateTo(sha) }}
+      />
+    )
+  }
+
+  if (worktreeSelected) return <WorkingTreeDetail />
+
+  return (
+    <CommitDetail
+      commit={commitDetail}
+      diff={commitDiff}
+      branchName={selectedBranchName}
+      prs={commitPRs}
+      authorAvatarUrl={commitDetail ? commitAuthorAvatars[commitDetail.sha] : undefined}
+      ciState={selectedCIStatus?.state}
+      ciRuns={selectedCIRuns}
+      githubUrl={githubUrl}
+      onNavigate={navigateTo}
+      onCheckout={async (sha) => {
+        try {
+          await checkoutSha(sha)
+        } catch (err) {
+          showError('Checkout failed', err)
+        }
+      }}
+    />
   )
 }
 
