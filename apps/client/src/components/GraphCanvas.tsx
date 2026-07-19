@@ -46,7 +46,8 @@ const NODE_FILL = '#11111b'
 const REF_PILL_HEIGHT = 20
 const COMMIT_ACTION_HEIGHT = 30
 const DEFAULT_REF_ACTION_HEIGHT = 28
-const ADD_REF_BUTTON_SIZE = 24
+const ADD_REF_BUTTON_SIZE = COMMIT_ACTION_HEIGHT
+const ADD_REF_HIDE_DELAY_MS = 400
 const ADD_REF_MENU_WIDTH = 112
 const GAUGE_RADIUS = NODE_RADIUS - 5
 const GAUGE_BACKGROUND_FILL = '#1e1e2e'
@@ -2445,7 +2446,7 @@ export function GraphCanvas() {
     addRefHoverTimeoutRef.current = setTimeout(() => {
       setHoveredAddRefSha((current) => current === sha ? null : current)
       addRefHoverTimeoutRef.current = null
-    }, 120)
+    }, ADD_REF_HIDE_DELAY_MS)
   }, [clearAddRefHoverTimer])
 
   useEffect(() => {
@@ -4591,7 +4592,9 @@ export function GraphCanvas() {
                     alignItems: 'flex-start',
                     gap: 10,
                     flexWrap: 'nowrap',
-                    zIndex: openAddRefSha === node.row.sha ? 40 : 20,
+                    // The selected-node halo lives in the node SVG at z-index
+                    // 30, so raise the add-ref control above it while visible.
+                    zIndex: rowShowsAddRef || openAddRefSha === node.row.sha ? 40 : 20,
                   }}
                 >
               {visibleRowRefActions.length > 0 && (
