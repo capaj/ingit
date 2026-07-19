@@ -236,6 +236,20 @@ function fetchRefsAndHistory(repoId: string): Promise<[RefSummary[], HistoryWind
   ])
 }
 
+async function fetchCheckoutState(repoId: string): Promise<[
+  RefSummary[],
+  HistoryWindowResponse,
+  WorktreeChangesResponse,
+  WorktreeSummary[],
+]> {
+  const [[refs, history], changes, worktrees] = await Promise.all([
+    fetchRefsAndHistory(repoId),
+    getWorktreeChanges(repoId),
+    getWorktrees(repoId),
+  ])
+  return [refs, history, changes, worktrees]
+}
+
 function fetchRepositoryState(repoId: string): Promise<[
   RefSummary[],
   HistoryWindowResponse,
@@ -1742,6 +1756,36 @@ export const useAppStore = create<AppState>((set, get) => ({
       throw err
     }
 
+    // Checkout completion used to publish refs/history, worktree changes, and
+    // worktree metadata as three independent async updates. Await them together
+    // and publish one authoritative snapshot so React only reconciles the graph
+    // once while its optimistic animation is still running.
+    if (action === 'checkout') {
+      const [refs, hist, changes, worktrees] = await fetchCheckoutState(repoId)
+      set((s) => ({
+        pendingMutation: false,
+        pendingCheckout: false,
+        graphAnimationSuppressToken: predicted
+          ? s.graphAnimationSuppressToken + 1
+          : s.graphAnimationSuppressToken,
+        refs,
+        historyWindow: hist,
+        totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+        worktreeChanges: changes,
+        worktreeFileDiffs: {},
+        worktreeSelected: conflictedFileCount(changes) > 0
+          ? true
+          : worktreeFileCount(changes) > 0
+            ? s.worktreeSelected
+            : false,
+        worktrees,
+        selectedRefName: null,
+        mergePreview: null,
+      }))
+      if (get().viewMode === 'reflog') void get().loadReflog()
+      return
+    }
+
     // Reconcile against the authoritative reload. Suppress the relayout
     // animation only when we already animated to a prediction.
     const [refs, hist] = await fetchRefsAndHistory(repoId)
@@ -2270,7 +2314,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       throw err
     }
 
-    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    const [refs, hist, changes, worktrees] = await fetchCheckoutState(repoId)
     set((s) => ({
       pendingMutation: false,
       pendingCheckout: false,
@@ -2279,10 +2323,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         : s.graphAnimationSuppressToken,
       refs,
       historyWindow: hist,
+      totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
+      worktreeChanges: changes,
+      worktreeFileDiffs: {},
+      worktreeSelected: conflictedFileCount(changes) > 0
+        ? true
+        : worktreeFileCount(changes) > 0
+          ? s.worktreeSelected
+          : false,
+      worktrees,
       selectedRefName: null,
       mergePreview: null,
     }))
-    void get().loadWorktreeChanges()
     if (get().viewMode === 'reflog') void get().loadReflog()
   },
 }))
