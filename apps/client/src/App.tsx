@@ -68,7 +68,7 @@ export function App() {
   } | null>(null)
   const repoPathInputRef = useRef<HTMLInputElement>(null)
   const {
-    status, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, openError,
+    status, repoId, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, openError,
     errorDialog, dismissError, showError,
     openRepoByPath, closeRepo, openFromUrl, performRefAction,
     showCommitMessages, setShowCommitMessages,
@@ -77,6 +77,7 @@ export function App() {
     reloadFromServer,
   } = useAppStore(useShallow((state) => ({
     status: state.status,
+    repoId: state.repoId,
     repoPath: state.repoPath,
     currentWorktreePath: state.currentWorktreePath,
     worktrees: state.worktrees,
@@ -115,6 +116,11 @@ export function App() {
     openFromUrl()
     return () => window.removeEventListener('hashchange', handleHashChange)
   }, [openFromUrl])
+
+  useEffect(() => {
+    if (status !== 'ready' || !repoId) return
+    void handleFetch()
+  }, [repoId, status])
 
   useEffect(() => {
     setRepoPathInput(repoPath ?? '')
