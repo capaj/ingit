@@ -779,7 +779,9 @@ const clips: Clip[] = [
     run: async (page) => {
       await page.clickText('staging')
       await sleep(500)
-      await page.clickButtonNearSvgTitle('Move', 'feat: polish keyboard shortcuts')
+      await page.hoverSvgTitle('feat: polish keyboard shortcuts')
+      await sleep(350)
+      await page.clickButtonNearSvgTitle('Move staging here', 'feat: polish keyboard shortcuts')
       await sleep(350)
       await page.clickDialogButton('Move')
       await sleep(1800)

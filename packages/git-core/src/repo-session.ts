@@ -975,11 +975,10 @@ export class RepoSession {
     }
 
     const status = await this.getStatus()
-    if (status.branch && resolved.refName === status.branch) {
-      throw new Error('Cannot move the checked out branch')
-    }
-
-    const { stdout, stderr } = await runGit(['branch', '-f', ref, sha], this.rootPath)
+    const isCurrent = !!status.branch && resolved.refName === status.branch
+    const { stdout, stderr } = isCurrent
+      ? await runGit(['reset', '--hard', sha], this.rootPath)
+      : await runGit(['branch', '-f', ref, sha], this.rootPath)
     return {
       message: (stdout + stderr).trim() || `Moved ${ref} to ${sha.slice(0, 8)}`,
     }

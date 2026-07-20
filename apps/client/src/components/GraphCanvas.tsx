@@ -18,6 +18,8 @@ import {
   buildLayout,
   colorForBranchName,
   COMMIT_MESSAGE_GUTTER,
+  compactRowsToLaneRadius,
+  fitGraphToBrowserWindow,
   GRAPH_TOP_HEADROOM,
   hashText,
   laneColor,
@@ -27,6 +29,7 @@ import {
   PAD_TOP,
   pickBestRef,
   type GraphLayout,
+  type GraphViewportFit,
   type LayoutNode,
 } from './graph-canvas/layout'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
@@ -416,10 +419,23 @@ function sameParents(left: CommitRow, right: CommitRow) {
 function buildActionPreviewGeometry(
   baseLayout: GraphLayout,
   prediction: OptimisticGraph,
-  extraLeftGutter: number,
+  viewportFit: GraphViewportFit,
   preview: ActionPreviewState,
 ): ActionPreviewGeometry | null {
-  const previewLayout = buildLayout(prediction.rows, extraLeftGutter)
+  const previewRows = compactRowsToLaneRadius(
+    prediction.rows,
+    viewportFit.maxLaneRadius,
+  )
+  const previewLayout = buildLayout(
+    previewRows,
+    viewportFit.extraLeftGutter,
+    viewportFit.rightGutter,
+    {
+      laneCenterX: viewportFit.laneCenterX,
+      laneRadius: viewportFit.maxLaneRadius,
+      totalWidth: viewportFit.layoutWidth,
+    },
+  )
 
   if (preview.kind === 'commit') {
     const newNode = previewLayout.nodes.find((node) => !baseLayout.shaToNode.has(node.row.sha))
@@ -2127,6 +2143,10 @@ export function GraphCanvas() {
   const pendingScrollTopRef = useRef(0)
   const [zoom, setZoom] = useState(1)
   const [scrollTop, setScrollTop] = useState(0)
+  const [browserWidth, setBrowserWidth] = useState(
+    () => (typeof window === 'undefined' ? 0 : window.innerWidth),
+  )
+  const [graphLeft, setGraphLeft] = useState(0)
   const [clientHeight, setClientHeight] = useState(0)
   const [graphAnimation, setGraphAnimation] = useState<GraphAnimationSnapshot | null>(null)
   const graphAnimationRef = useRef<GraphAnimationSnapshot | null>(null)
@@ -2159,13 +2179,59 @@ export function GraphCanvas() {
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
   const lastRenderedRange = useRef({ firstIdx: 0, lastIdx: 100 })
 
-  // Projection and layout are derived when graph inputs enter the store, not
-  // during React render. The graph model cache also reuses optimistic geometry
-  // when the authoritative checkout response has the same topology.
+  useEffect(() => {
+    const syncBrowserWidth = () => setBrowserWidth(window.innerWidth)
+    window.addEventListener('resize', syncBrowserWidth)
+    return () => window.removeEventListener('resize', syncBrowserWidth)
+  }, [])
+
+  // The store retains the semantic, viewport-independent lanes. Rendering
+  // compacts those segments into a hard physical gutter budget so resizing or
+  // zooming cannot create horizontal scroll.
   const currentBranch = graphModel?.currentBranch
     ?? refs.find((ref) => ref.isCurrent)?.shortName
     ?? null
-  const layout = graphModel?.layout ?? null
+  const effectiveBrowserWidth = browserWidth > 0
+    ? browserWidth
+    : (graphModel?.layout.totalWidth ?? 0) * Math.max(zoom, 0.1)
+  const viewportFit = useMemo(
+    () => fitGraphToBrowserWindow(
+      effectiveBrowserWidth,
+      graphLeft,
+      zoom,
+      showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0,
+    ),
+    [effectiveBrowserWidth, graphLeft, showCommitMessages, zoom],
+  )
+  const compactedRows = useMemo(
+    () => (graphModel
+      ? compactRowsToLaneRadius(
+          graphModel.renderedRows,
+          viewportFit.maxLaneRadius,
+        )
+      : null),
+    [graphModel, viewportFit.maxLaneRadius],
+  )
+  const layout = useMemo(() => {
+    if (!compactedRows) return null
+    return buildLayout(
+      compactedRows,
+      viewportFit.extraLeftGutter,
+      viewportFit.rightGutter,
+      {
+        laneCenterX: viewportFit.laneCenterX,
+        laneRadius: viewportFit.maxLaneRadius,
+        totalWidth: viewportFit.layoutWidth,
+      },
+    )
+  }, [
+    compactedRows,
+    viewportFit.extraLeftGutter,
+    viewportFit.laneCenterX,
+    viewportFit.layoutWidth,
+    viewportFit.maxLaneRadius,
+    viewportFit.rightGutter,
+  ])
 
   const refMap = useMemo(
     () => new Map(refs.map((ref) => [ref.shortName, ref])),
@@ -2228,10 +2294,10 @@ export function GraphCanvas() {
     return buildActionPreviewGeometry(
       layout,
       actionPreviewPrediction,
-      showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0,
+      viewportFit,
       actionPreview,
     )
-  }, [layout, actionPreview, actionPreviewPrediction, showCommitMessages])
+  }, [layout, actionPreview, actionPreviewPrediction, viewportFit])
 
   const rebasePreviewCamera = useMemo(() => {
     if (
@@ -2550,13 +2616,23 @@ export function GraphCanvas() {
   )
 
   const gutterBackgrounds = useMemo(() => {
-    if (!layout || !showGutterColors) return []
-    const xByLane = new Map<number, number>()
-    for (const node of layout.nodes) xByLane.set(node.row.lane, node.x)
-    return [...xByLane]
-      .sort(([leftLane], [rightLane]) => leftLane - rightLane)
-      .map(([lane, x]) => ({ lane, x, color: laneColor(lane) }))
-  }, [layout, showGutterColors])
+    if (!showGutterColors) return []
+    return Array.from(
+      { length: viewportFit.maxLaneRadius * 2 + 1 },
+      (_, index) => {
+        const lane = index - viewportFit.maxLaneRadius
+        return {
+          lane,
+          x: viewportFit.laneCenterX + lane * LANE_WIDTH,
+          color: laneColor(lane),
+        }
+      },
+    )
+  }, [
+    showGutterColors,
+    viewportFit.laneCenterX,
+    viewportFit.maxLaneRadius,
+  ])
 
   const currentBranchEdgeKeys = useMemo(
     () => buildCurrentBranchEdgeKeys(layout, currentBranch),
@@ -2606,7 +2682,10 @@ export function GraphCanvas() {
       if (!layout) return
       const nextScrollTop = el.scrollTop
       const didScroll = Math.abs(nextScrollTop - lastObservedScrollTopRef.current) > 0.5
+      if (el.scrollLeft !== 0) el.scrollLeft = 0
       viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
+      setBrowserWidth(window.innerWidth)
+      setGraphLeft(el.getBoundingClientRect().left)
       setClientHeight(el.clientHeight)
       lastObservedScrollTopRef.current = nextScrollTop
       // A user scroll cancels the morph, but a programmatic follow-scroll riding
@@ -3117,7 +3196,7 @@ export function GraphCanvas() {
   }, [selectedRef, selectedRefWorktree, canPushSelectedRef, canResetSelectedRef])
 
   const movableBranchRefName = useMemo(() => {
-    if (!selectedRef || selectedRef.kind !== 'head' || selectedRef.isCurrent || selectedRefWorktree) return null
+    if (!selectedRef || selectedRef.kind !== 'head' || selectedRefWorktree) return null
     return selectedRef.shortName
   }, [selectedRef, selectedRefWorktree])
 
@@ -3293,9 +3372,12 @@ export function GraphCanvas() {
   const handleMoveBranch = useCallback((targetSha: string) => {
     if (!movableBranchRefName) return
     if (pendingMutation) return
+    const movesCurrentBranch = selectedRef?.kind === 'head' && selectedRef.isCurrent
     setConfirmDialog({
       title: 'Move branch',
-      message: `Move branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}?`,
+      message: movesCurrentBranch
+        ? `Move checked-out branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}? This resets the working tree and discards tracked changes.`
+        : `Move branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}?`,
       confirmLabel: 'Move',
       onConfirm: () => {
         setMergePreviewVisible(false)
@@ -3304,7 +3386,7 @@ export function GraphCanvas() {
         })
       },
     })
-  }, [movableBranchRefName, performRefAction, showError, pendingMutation])
+  }, [movableBranchRefName, selectedRef, performRefAction, showError, pendingMutation])
 
   const handleCreateRef = useCallback((kind: CreateRefKind, targetSha: string) => {
     if (pendingMutation) return
@@ -3698,7 +3780,15 @@ export function GraphCanvas() {
   return (
     <div
       ref={scrollRef}
-      style={{ flex: 1, height: '100%', overflow: 'auto', position: 'relative', background: '#1e1e2e', touchAction: 'pan-x pan-y' }}
+      style={{
+        flex: 1,
+        height: '100%',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        position: 'relative',
+        background: '#1e1e2e',
+        touchAction: 'pan-y',
+      }}
       onClick={() => {
         setMergePreviewVisible(false)
         setActionPreview(null)
@@ -3843,7 +3933,7 @@ export function GraphCanvas() {
                   (y) => y * renderedZoom + graphTranslateY - 7,
                 ),
                 opacity: worktreeOpacity,
-                maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * renderedZoom,
+                maxWidth: (LANE_ORIGIN_X_BASE + viewportFit.extraLeftGutter - 40) * renderedZoom,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -3893,7 +3983,7 @@ export function GraphCanvas() {
                   position: 'absolute',
                   left: 20,
                   top: label.y - 7,
-                  maxWidth: (LANE_ORIGIN_X_BASE + COMMIT_MESSAGE_GUTTER - 40) * renderedZoom,
+                  maxWidth: (LANE_ORIGIN_X_BASE + viewportFit.extraLeftGutter - 40) * renderedZoom,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -4531,11 +4621,13 @@ export function GraphCanvas() {
             ? (pendingRowRefAction ? [pendingRowRefAction] : [])
             : rowRefActions
           const rowShowsMerge = !refActionInFlight && !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
-          const rowShowsMove = !refActionInFlight && !!movableBranchRefName && node.row.sha !== selectedRef?.targetSha
           const rowShowsAddRef = !pendingMutation
             && !refActionInFlight
             && !isGraphAnimating
             && (hoveredAddRefSha === node.row.sha || openAddRefSha === node.row.sha)
+          const rowShowsMove = rowShowsAddRef
+            && !!movableBranchRefName
+            && node.row.sha !== selectedRef?.targetSha
           const rowRebaseTargetRef = !refActionInFlight && selectedCurrentBranchRef && node.row.sha !== selectedCurrentBranchRef.targetSha
             ? pickBestRef(node.row.refNames.filter((refName) => refName !== selectedCurrentBranchRef.shortName))
             : null
@@ -4617,17 +4709,6 @@ export function GraphCanvas() {
                   ))}
                 </div>
               )}
-              {rowShowsMove && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 7 }}>
-                  <RefActionButton
-                    label="Move"
-                    tone="neutral"
-                    size="compact"
-                    variant="ghost"
-                    onClick={() => handleMoveBranch(node.row.sha)}
-                  />
-                </div>
-              )}
               {visibleRowRebaseTargetRef && (
                 <div style={{
                   display: 'flex',
@@ -4663,6 +4744,17 @@ export function GraphCanvas() {
                     onClick={handleMergeClick}
                     onMouseEnter={handleMergeHoverStart}
                     onMouseLeave={handleMergeHoverEnd}
+                  />
+                </div>
+              )}
+              {rowShowsMove && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 7 }}>
+                  <RefActionButton
+                    label={`Move ${movableBranchRefName} here`}
+                    tone="neutral"
+                    size="compact"
+                    variant="ghost"
+                    onClick={() => handleMoveBranch(node.row.sha)}
                   />
                 </div>
               )}

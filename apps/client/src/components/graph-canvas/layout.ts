@@ -1,4 +1,5 @@
 import type { CommitRow } from '@ingit/rpc-contract'
+import { orderLaneSegmentsByContinuity } from '@ingit/graph-core'
 
 export const NODE_SPACING_Y = 56
 export const LANE_WIDTH = 80
@@ -9,6 +10,9 @@ export const GRAPH_TOP_HEADROOM = NODE_SPACING_Y * 2
 export const PAD_LEFT = 40
 export const COMMIT_MESSAGE_GUTTER = 260
 export const LANE_ORIGIN_X_BASE = PAD_LEFT + GRAPH_LEFT_GUTTER
+const MIN_RESPONSIVE_RIGHT_GUTTER = 80
+const RESPONSIVE_RIGHT_GUTTER_RATIO = 0.2
+const MIN_RESPONSIVE_GUTTER_COUNT = 3
 
 export const LANE_COLORS = [
   '#89b4fa', '#a6e3a1', '#f9e2af', '#f38ba8', '#cba6f7',
@@ -49,6 +53,110 @@ export function colorForBranchName(name: string): string {
   return LANE_COLORS[hashText(name) % LANE_COLORS.length]
 }
 
+export interface GraphViewportFit {
+  extraLeftGutter: number
+  rightGutter: number
+  maxLaneRadius: number
+  laneCenterX: number
+  layoutWidth: number
+}
+
+export interface GraphLaneFrame {
+  laneCenterX: number
+  laneRadius: number
+  totalWidth: number
+}
+
+/**
+ * Convert physical viewport width into a symmetric lane budget. Side reserves
+ * shrink before gutters do on narrow screens, while retaining enough room for
+ * ref pills and row actions when space is available.
+ */
+export function fitGraphToViewport(
+  viewportWidth: number,
+  requestedExtraLeftGutter: number,
+): GraphViewportFit {
+  const width = Math.max(0, viewportWidth)
+  const laneCenterX = width / 2
+  const minimumLaneRadius = width >= 480
+    ? Math.floor(MIN_RESPONSIVE_GUTTER_COUNT / 2)
+    : 0
+  const minimumLaneHalfWidth = minimumLaneRadius * LANE_WIDTH + LANE_WIDTH / 2
+  const maxSideReserve = Math.max(0, laneCenterX - minimumLaneHalfWidth)
+  const fixedLeftReserve = LANE_ORIGIN_X_BASE - LANE_WIDTH / 2
+  const fixedRightReserve = PAD_LEFT * 2
+  const requestedExtra = Math.max(0, requestedExtraLeftGutter)
+  const extraLeftGutter = Math.min(
+    requestedExtra,
+    Math.max(0, maxSideReserve - fixedLeftReserve),
+  )
+  const desiredRightGutter = Math.min(
+    GRAPH_RIGHT_GUTTER,
+    Math.max(MIN_RESPONSIVE_RIGHT_GUTTER, width * RESPONSIVE_RIGHT_GUTTER_RATIO),
+  )
+  const rightGutter = Math.min(
+    desiredRightGutter,
+    Math.max(0, maxSideReserve - fixedRightReserve),
+  )
+  const leftReserve = fixedLeftReserve + extraLeftGutter
+  const rightReserve = fixedRightReserve + rightGutter
+  const laneHalfWidth = Math.max(
+    LANE_WIDTH / 2,
+    Math.min(laneCenterX - leftReserve, width - laneCenterX - rightReserve),
+  )
+  const maxLaneRadius = Math.max(
+    0,
+    Math.floor((laneHalfWidth - LANE_WIDTH / 2) / LANE_WIDTH),
+  )
+
+  return {
+    extraLeftGutter,
+    rightGutter,
+    maxLaneRadius,
+    laneCenterX,
+    layoutWidth: width,
+  }
+}
+
+/**
+ * Fit lanes against the whole browser window, not the graph element. Opening a
+ * sibling panel can shrink the graph canvas without changing this lane budget.
+ * The local lane center compensates for a left sidebar so the rendered center
+ * lane remains anchored to the browser's horizontal midpoint.
+ */
+export function fitGraphToBrowserWindow(
+  browserWidth: number,
+  graphLeft: number,
+  zoom: number,
+  requestedExtraLeftGutter: number,
+): GraphViewportFit {
+  const scale = Math.max(zoom, 0.1)
+  const width = Math.max(0, browserWidth)
+  const left = Math.max(0, graphLeft)
+  const fit = fitGraphToViewport(width / scale, requestedExtraLeftGutter)
+
+  return {
+    ...fit,
+    laneCenterX: (width / 2 - left) / scale,
+    layoutWidth: Math.max(0, width - left) / scale,
+  }
+}
+
+export function compactRowsToLaneRadius(
+  rows: CommitRow[],
+  maxLaneRadius: number,
+): CommitRow[] {
+  const laneBySha = orderLaneSegmentsByContinuity(rows, maxLaneRadius)
+  let changed = false
+  const compacted = rows.map((row) => {
+    const lane = laneBySha.get(row.sha) ?? 0
+    if (lane === row.lane) return row
+    changed = true
+    return { ...row, lane }
+  })
+  return changed ? compacted : rows
+}
+
 function stableColorForNode(sha: string, shaToBranch: Map<string, string>): string {
   const branch = shaToBranch.get(sha)
   return branch ? colorForBranchName(branch) : LANE_COLORS[hashText(sha) % LANE_COLORS.length]
@@ -65,7 +173,12 @@ export function pickBestRef(refNames: string[]): string | null {
   return remote ?? null
 }
 
-export function buildLayout(rows: CommitRow[], extraLeftGutter = 0): GraphLayout {
+export function buildLayout(
+  rows: CommitRow[],
+  extraLeftGutter = 0,
+  rightGutter = GRAPH_RIGHT_GUTTER,
+  laneFrame?: GraphLaneFrame,
+): GraphLayout {
   let minLane = Infinity
   let maxLane = -Infinity
   const nodes: LayoutNode[] = []
@@ -81,14 +194,17 @@ export function buildLayout(rows: CommitRow[], extraLeftGutter = 0): GraphLayout
 
   const leftmostLane = Number.isFinite(minLane) ? minLane : 0
   const rightmostLane = Number.isFinite(maxLane) ? maxLane : 0
-  const laneRadius = Math.max(Math.abs(leftmostLane), Math.abs(rightmostLane))
+  const laneRadius = laneFrame?.laneRadius
+    ?? Math.max(Math.abs(leftmostLane), Math.abs(rightmostLane))
   const laneOriginX = LANE_ORIGIN_X_BASE + extraLeftGutter
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const node: LayoutNode = {
       row,
-      x: laneOriginX + (row.lane + laneRadius) * LANE_WIDTH,
+      x: laneFrame
+        ? laneFrame.laneCenterX + row.lane * LANE_WIDTH
+        : laneOriginX + (row.lane + laneRadius) * LANE_WIDTH,
       y: PAD_TOP + GRAPH_TOP_HEADROOM + i * NODE_SPACING_Y,
       idx: i,
     }
@@ -122,11 +238,12 @@ export function buildLayout(rows: CommitRow[], extraLeftGutter = 0): GraphLayout
     shaToBranch,
     shaToColor,
     maxLane,
-    totalWidth: PAD_LEFT * 2
-      + GRAPH_LEFT_GUTTER
-      + extraLeftGutter
-      + (laneRadius * 2 + 1) * LANE_WIDTH
-      + GRAPH_RIGHT_GUTTER,
+    totalWidth: laneFrame?.totalWidth
+      ?? PAD_LEFT * 2
+        + GRAPH_LEFT_GUTTER
+        + extraLeftGutter
+        + (laneRadius * 2 + 1) * LANE_WIDTH
+        + rightGutter,
     totalHeight: rows.length * NODE_SPACING_Y + PAD_TOP * 2 + GRAPH_TOP_HEADROOM,
   }
 }

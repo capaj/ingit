@@ -49,13 +49,18 @@ describe('lane ordering', () => {
   })
 
   test('keeps equally continuous non-overlapping segments in the inner gutter', () => {
-    const lanes = orderLaneSegmentsByContinuity([
+    const rows = [
       { sha: 'early', parentShas: [], row: 1, lane: 1 },
-      { sha: 'late', parentShas: [], row: 10, lane: 2 },
-    ])
+      { sha: 'late', parentShas: [], row: 10, lane: 12 },
+    ]
+    const lanes = orderLaneSegmentsByContinuity(rows)
 
     expect(lanes.get('early')).toBe(1)
     expect(lanes.get('late')).toBe(1)
+
+    const compacted = orderLaneSegmentsByContinuity(rows, 1)
+    expect(compacted.get('early')).toBe(1)
+    expect(compacted.get('late')).toBe(1)
   })
 
   test('does not reuse a gutter while an earlier branch rail is still reconnecting', () => {
@@ -86,5 +91,35 @@ describe('lane ordering', () => {
     expect(lanes.get('red-root')).toBe(2)
     expect(lanes.get('yellow-tip')).toBe(1)
     expect(lanes.get('yellow-root')).toBe(1)
+  })
+
+  test('places a nested branch outside its non-center first-parent gutter', () => {
+    const rows = [
+      { sha: 'main', parentShas: ['main-base'], row: 0, lane: 0 },
+      { sha: 'side-a', parentShas: ['a-root'], row: 1, lane: 1 },
+      { sha: 'side-b', parentShas: ['b-root'], row: 2, lane: -1 },
+      { sha: 'other', parentShas: ['dev'], row: 3, lane: 2 },
+      { sha: 'prompt-4', parentShas: ['prompt-3'], row: 4, lane: -2 },
+      { sha: 'prompt-3', parentShas: ['prompt-2'], row: 5, lane: -2 },
+      { sha: 'prompt-2', parentShas: ['prompt-1'], row: 6, lane: -2 },
+      { sha: 'prompt-1', parentShas: ['dev'], row: 7, lane: -2 },
+      { sha: 'dev', parentShas: ['dev-parent'], row: 8, lane: 2 },
+      { sha: 'a-root', parentShas: [], row: 9, lane: 1 },
+      { sha: 'b-root', parentShas: [], row: 10, lane: -1 },
+      { sha: 'main-base', parentShas: ['main-root'], row: 11, lane: 0 },
+      { sha: 'dev-parent', parentShas: [], row: 12, lane: 2 },
+      { sha: 'main-root', parentShas: [], row: 13, lane: 0 },
+    ]
+    const lanes = orderLaneSegmentsByContinuity(rows)
+
+    expect(lanes.get('dev')).toBe(2)
+    expect(lanes.get('prompt-4')).toBe(3)
+    expect(lanes.get('prompt-1')).toBe(3)
+
+    const compacted = orderLaneSegmentsByContinuity(rows, 2)
+    expect(Math.max(...compacted.values().map((lane) => Math.abs(lane)))).toBe(2)
+    expect(compacted.get('dev')).toBe(2)
+    expect(compacted.get('prompt-4')).toBe(1)
+    expect(compacted.get('prompt-1')).toBe(1)
   })
 })

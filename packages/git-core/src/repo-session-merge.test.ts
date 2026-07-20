@@ -247,18 +247,29 @@ describe('RepoSession.moveBranch', () => {
     }
   })
 
-  test('rejects moving the checked out branch', async () => {
+  test('moves the checked out branch and resets its working tree', async () => {
     const repoDir = await makeTempDir('ingit-move-current-')
     await initRepo(repoDir)
 
     await Bun.write(join(repoDir, 'base.txt'), 'base\n')
     await runGit(['add', '.'], repoDir)
     await runGit(['commit', '-m', 'base'], repoDir)
+    const baseSha = await currentHeadSha(repoDir)
+
+    await Bun.write(join(repoDir, 'later.txt'), 'later\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'later'], repoDir)
+    await Bun.write(join(repoDir, 'later.txt'), 'uncommitted change\n')
 
     const session = await RepoSession.open(repoDir)
 
     try {
-      await expect(session.moveBranch('main', 'HEAD')).rejects.toThrow('checked out branch')
+      const result = await session.moveBranch('main', baseSha)
+
+      expect(result.message).toContain(baseSha.slice(0, 7))
+      expect(await currentBranch(repoDir)).toBe('main')
+      expect(await currentHeadSha(repoDir)).toBe(baseSha)
+      expect(await Bun.file(join(repoDir, 'later.txt')).exists()).toBe(false)
     } finally {
       session.close()
     }
