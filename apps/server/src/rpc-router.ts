@@ -9,6 +9,7 @@ import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl, resolveGithubToken 
 import { fetchGithubCommitAuthor } from './github-author-handler.js'
 import { discoverRepos, listDirectory } from './discover-repos.js'
 import { listAgentSessions, focusAgentSession, installWindowCalls } from './agent-sessions.js'
+import { openDefaultTerminal } from './open-terminal.js'
 
 const sessionManager = new SessionManager()
 
@@ -43,6 +44,19 @@ function rethrowWithDetail(err: unknown): never {
 export const router = os.router({
   openRepo: os.openRepo.handler(async ({ input }) => {
     return sessionManager.openRepo(input.path)
+  }),
+
+  openTerminal: os.openTerminal.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    try {
+      await openDefaultTerminal(session.rootPath)
+      return { ok: true }
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Could not open a terminal',
+      }
+    }
   }),
 
   getRecentRepos: os.getRecentRepos.handler(async () => {

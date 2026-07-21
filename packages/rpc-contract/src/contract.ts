@@ -204,6 +204,13 @@ export const contract = {
       head: HeadInfo,
     })),
 
+  openTerminal: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.object({
+      ok: z.boolean(),
+      error: z.string().optional(),
+    })),
+
   getRecentRepos: oc
     .input(z.object({}))
     .output(z.array(z.string())),

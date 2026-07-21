@@ -47,6 +47,11 @@ export function openRepo(req: { path: string }) {
   return ensureClient().openRepo(req)
 }
 
+export async function openTerminal(repoId: string): Promise<void> {
+  const result = await ensureClient().openTerminal({ repoId })
+  if (!result.ok) throw new Error(result.error ?? 'Could not open a terminal')
+}
+
 export function getRecentRepos() {
   return ensureClient().getRecentRepos({})
 }

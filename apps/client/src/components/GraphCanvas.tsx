@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse, WorktreeSummary } from '@ingit/rpc-contract'
+import { openTerminal } from '../api'
 import { useAppStore } from '../store'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
@@ -54,6 +55,7 @@ const DEFAULT_REF_ACTION_HEIGHT = 28
 const ADD_REF_BUTTON_SIZE = COMMIT_ACTION_HEIGHT
 const ADD_REF_HIDE_DELAY_MS = 400
 const ADD_REF_MENU_WIDTH = 112
+const ZOOM_INDICATOR_HIDE_DELAY_MS = 1_000
 const GAUGE_RADIUS = NODE_RADIUS - 5
 const GAUGE_BACKGROUND_FILL = '#1e1e2e'
 const GAUGE_TRACK_STROKE = '#45475a'
@@ -2203,6 +2205,7 @@ export function GraphCanvas() {
   const worktreeSelected = useAppStore((state) => state.worktreeSelected)
   const selectWorktree = useAppStore((state) => state.selectWorktree)
   const openRepoByPath = useAppStore((state) => state.openRepoByPath)
+  const repoId = useAppStore((state) => state.repoId)
   const [pendingRefAction, setPendingRefAction] = useState<PendingRefAction | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -2217,6 +2220,7 @@ export function GraphCanvas() {
   const addRefHoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingScrollTopRef = useRef(0)
   const [zoom, setZoom] = useState(1)
+  const [zoomIndicatorVisible, setZoomIndicatorVisible] = useState(false)
   const [scrollTop, setScrollTop] = useState(0)
   const [browserWidth, setBrowserWidth] = useState(
     () => (typeof window === 'undefined' ? 0 : window.innerWidth),
@@ -2238,6 +2242,7 @@ export function GraphCanvas() {
     config: GRAPH_SPRING_CONFIG,
   }))
   const zoomRef = useRef(1)
+  const zoomIndicatorHideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suppressAutoScrollUntilRef = useRef(0)
   const lastAppliedCommitScrollKeyRef = useRef<number | null>(null)
   // While a programmatic scroll-to-commit is in flight we must not treat the
@@ -2258,6 +2263,47 @@ export function GraphCanvas() {
     const syncBrowserWidth = () => setBrowserWidth(window.innerWidth)
     window.addEventListener('resize', syncBrowserWidth)
     return () => window.removeEventListener('resize', syncBrowserWidth)
+  }, [])
+
+  // Chrome normally reserves Ctrl+Shift+C for element inspection. While the
+  // history graph is mounted, override it with ingit's repository terminal.
+  useEffect(() => {
+    const handleOpenTerminalShortcut = (event: KeyboardEvent) => {
+      if (
+        event.code !== 'KeyC'
+        || !event.ctrlKey
+        || !event.shiftKey
+        || event.altKey
+      ) return
+
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (event.repeat || !repoId) return
+
+      void openTerminal(repoId).catch((err) => {
+        showError('Open terminal failed', err)
+      })
+    }
+
+    document.addEventListener('keydown', handleOpenTerminalShortcut, { capture: true })
+    return () => document.removeEventListener('keydown', handleOpenTerminalShortcut, { capture: true })
+  }, [repoId, showError])
+
+  const showZoomIndicator = useCallback(() => {
+    if (zoomIndicatorHideTimeoutRef.current !== null) {
+      clearTimeout(zoomIndicatorHideTimeoutRef.current)
+    }
+    setZoomIndicatorVisible(true)
+    zoomIndicatorHideTimeoutRef.current = setTimeout(() => {
+      zoomIndicatorHideTimeoutRef.current = null
+      setZoomIndicatorVisible(false)
+    }, ZOOM_INDICATOR_HIDE_DELAY_MS)
+  }, [])
+
+  useEffect(() => () => {
+    if (zoomIndicatorHideTimeoutRef.current !== null) {
+      clearTimeout(zoomIndicatorHideTimeoutRef.current)
+    }
   }, [])
 
   // The store retains the semantic, viewport-independent lanes. Rendering
@@ -2826,6 +2872,26 @@ export function GraphCanvas() {
     refreshViewport(el, zoom)
   }, [layout, zoom, refreshViewport])
 
+  const applyUserZoom = useCallback((newZoom: number, viewportAnchorY: number) => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const oldZoom = zoomRef.current
+    showZoomIndicator()
+    if (newZoom === oldZoom) return
+
+    const graphAnchorY = (el.scrollTop + viewportAnchorY) / oldZoom
+    zoomRef.current = newZoom
+    setZoom(newZoom)
+    el.scrollTop = Math.max(0, graphAnchorY * newZoom - viewportAnchorY)
+  }, [showZoomIndicator])
+
+  const resetZoom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    applyUserZoom(1, el.clientHeight / 2)
+  }, [applyUserZoom])
+
   // Ctrl+wheel zoom — capture phase on document so we intercept before the
   // browser's native page-zoom handler processes it.
   // Read scrollRef lazily inside the handler so we don't miss it when
@@ -2839,22 +2905,16 @@ export function GraphCanvas() {
       e.stopPropagation()
 
       const rect = el.getBoundingClientRect()
-      const mouseY = e.clientY - rect.top + el.scrollTop
-
       const oldZoom = zoomRef.current
       const delta = e.deltaY > 0 ? -0.1 : 0.1
-      const newZoom = Math.max(0.1, Math.min(3, oldZoom + delta))
+      const newZoom = Math.max(0.1, Math.min(3, Math.round((oldZoom + delta) * 10) / 10))
 
-      zoomRef.current = newZoom
-      setZoom(newZoom)
-
-      // Adjust scroll to keep the point under the cursor stable
-      const newScrollTop = (mouseY / oldZoom) * newZoom - (e.clientY - rect.top)
-      el.scrollTop = Math.max(0, newScrollTop)
+      // Keep the graph point under the cursor stable while scaling.
+      applyUserZoom(newZoom, e.clientY - rect.top)
     }
     document.addEventListener('wheel', handler, { passive: false, capture: true })
     return () => document.removeEventListener('wheel', handler, { capture: true })
-  }, [])
+  }, [applyUserZoom])
 
   // Request more commits when zoomed out far enough to see beyond loaded range
   useEffect(() => {
@@ -3894,6 +3954,73 @@ export function GraphCanvas() {
         }}
         onClose={() => setConfirmDialog(null)}
       />
+
+      {zoomIndicatorVisible && (
+        <div
+          style={{
+            position: 'sticky',
+            top: 'calc(100% - 54px)',
+            left: 0,
+            zIndex: 30,
+            width: '100%',
+            height: 0,
+            display: 'flex',
+            justifyContent: 'center',
+            overflow: 'visible',
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            aria-live="polite"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              minHeight: 34,
+              padding: Math.abs(zoom - 1) > 0.001 ? '4px 5px 4px 12px' : '4px 12px',
+              border: '1px solid #45475a',
+              borderRadius: 8,
+              background: '#181825ee',
+              color: '#cdd6f4',
+              fontSize: 11,
+              fontWeight: 700,
+              fontVariantNumeric: 'tabular-nums',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+              backdropFilter: 'blur(8px)',
+              pointerEvents: 'auto',
+              userSelect: 'none',
+            }}
+          >
+            <span aria-label={`Zoom ${Math.round(zoom * 100)} percent`}>
+              {Math.round(zoom * 100)}%
+            </span>
+            {Math.abs(zoom - 1) > 0.001 && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  resetZoom()
+                }}
+                style={{
+                  height: 26,
+                  padding: '0 8px',
+                  border: '1px solid #45475a',
+                  borderRadius: 5,
+                  background: '#313244',
+                  color: '#bac2de',
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Reset zoom
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {rebaseHoverLock && createPortal(
         <div
