@@ -10,9 +10,10 @@ function fail(message: string): never {
   process.exit(1)
 }
 
-function run(command: string[], capture = false): string {
+function run(command: string[], capture = false, env?: Record<string, string>): string {
   const proc = Bun.spawnSync(command, {
     cwd: ROOT,
+    env: env ? { ...process.env, ...env } : undefined,
     stdin: 'inherit',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -76,6 +77,8 @@ function main(): void {
 
   if (run(['git', 'tag', '--list', tag], true)) fail(`${tag} already exists`)
 
+  run(['bun', 'run', 'cli:release'], false, { INGIT_VERSION: version })
+
   packageJson.version = version
   writeFileSync(PACKAGE_JSON, `${JSON.stringify(packageJson, null, 2)}\n`)
 
@@ -84,7 +87,7 @@ function main(): void {
   run(['git', 'tag', '-a', tag, '-m', `Release ${tag}`])
   run(['git', 'push', '--atomic', 'origin', branch, tag])
 
-  console.log(`\nReleased ${tag}. GitHub Actions will build and publish the npm packages.`)
+  console.log(`\nReleased ${tag}. Local artifacts are in apps/cli/release; GitHub Actions will build and publish the npm packages.`)
 }
 
 main()
