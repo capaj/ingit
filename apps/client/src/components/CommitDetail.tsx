@@ -89,12 +89,18 @@ export function CommitDetail({ commit, diff, branchName, prs, authorAvatarUrl, c
 
   return (
     <div
+      data-testid="commit-detail"
       style={{
+        position: 'absolute',
+        right: 0,
+        bottom: 0,
+        zIndex: 40,
         width: 400,
-        flexShrink: 0,
-        height: '100%',
+        height: 'fit-content',
+        maxHeight: '100%',
         background: '#181825',
         borderLeft: '1px solid #313244',
+        borderTop: '1px solid #313244',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -303,7 +309,7 @@ export function CommitDetail({ commit, diff, branchName, prs, authorAvatarUrl, c
       )}
 
       {/* Changed files */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
         {diff && diff.changedPaths.length > 0 ? (
           <>
             <div

@@ -140,8 +140,6 @@ function Section({
   area,
   bulkLabel,
   onBulk,
-  secondaryBulkLabel,
-  onSecondaryBulk,
   rowActionLabel,
   onRowAction,
   onDiscard,
@@ -149,10 +147,8 @@ function Section({
   title: string
   files: WorktreeFile[]
   area: WorktreeDiffArea
-  bulkLabel: string
-  onBulk: () => void
-  secondaryBulkLabel?: string
-  onSecondaryBulk?: () => void
+  bulkLabel?: string
+  onBulk?: () => void
   rowActionLabel: string | ((file: WorktreeFile) => string)
   onRowAction: (file: WorktreeFile) => void
   onDiscard: (file: WorktreeFile) => void
@@ -164,18 +160,9 @@ function Section({
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: '#a6adc8' }}>
           {title} <span style={{ color: '#6c7086' }}>({files.length})</span>
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {bulkLabel && onBulk && (
           <RefActionButton label={bulkLabel} tone="neutral" size="compact" variant="ghost" onClick={onBulk} />
-          {secondaryBulkLabel && onSecondaryBulk && (
-            <RefActionButton
-              label={secondaryBulkLabel}
-              tone="neutral"
-              size="compact"
-              variant="ghost"
-              onClick={onSecondaryBulk}
-            />
-          )}
-        </div>
+        )}
       </div>
       {files.map((file) => (
         <FileRow
@@ -616,11 +603,17 @@ export function WorkingTreeDetail() {
 
   return (
     <div
+      data-testid="working-tree-detail"
       style={{
+        position: 'absolute',
+        right: 0,
+        bottom: 0,
+        zIndex: 40,
         width: 480,
-        flexShrink: 0,
-        height: '100%',
+        height: 'fit-content',
+        maxHeight: '100%',
         borderLeft: '1px solid #313244',
+        borderTop: '1px solid #313244',
         background: '#181825',
         display: 'flex',
         flexDirection: 'column',
@@ -658,14 +651,13 @@ export function WorkingTreeDetail() {
               </span>
             )}
           </div>
-          {total > 0 && (
+          {unstaged.length > 0 && (
             <RefActionButton
-              label="Discard all"
-              tone="danger"
+              label="Stage all"
+              tone="success"
               size="compact"
-              variant="ghost"
               disabled={pendingMutation}
-              onClick={requestDiscardAll}
+              onClick={() => runStageAction('stage-all', [])}
             />
           )}
         </div>
@@ -681,7 +673,7 @@ export function WorkingTreeDetail() {
         amendable={!operation && !!changes?.headSha}
       />
 
-      <div style={{ flex: 1, overflow: 'auto', padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {operation && <OperationBanner operation={operation} conflictedCount={conflictedCount} />}
         {total === 0 ? (
           <div style={{ color: '#45475a', fontSize: 13, textAlign: 'center', marginTop: 28 }}>
@@ -703,10 +695,6 @@ export function WorkingTreeDetail() {
               title="Changes"
               files={unstaged}
               area="unstaged"
-              bulkLabel="Stage all"
-              onBulk={() => runStageAction('stage-all', [])}
-              secondaryBulkLabel="Stash"
-              onSecondaryBulk={() => setStashDialogOpen(true)}
               rowActionLabel={(file) => (file.status === 'U' ? 'Mark resolved' : 'Stage')}
               onRowAction={(file) => runStageAction('stage', [file.path])}
               onDiscard={requestDiscardFile}
@@ -714,6 +702,34 @@ export function WorkingTreeDetail() {
           </>
         )}
       </div>
+
+      {total > 0 && (
+        <div
+          style={{
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 8,
+            padding: '10px 12px',
+            borderTop: '1px solid #313244',
+          }}
+        >
+          <RefActionButton
+            label="Stash all"
+            tone="neutral"
+            disabled={pendingMutation}
+            onClick={() => setStashDialogOpen(true)}
+          />
+          <RefActionButton
+            label="Discard all"
+            tone="danger"
+            variant="ghost"
+            disabled={pendingMutation}
+            onClick={requestDiscardAll}
+          />
+        </div>
+      )}
     </div>
   )
 }

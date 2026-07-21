@@ -2377,6 +2377,10 @@ export function GraphCanvas() {
 
   const selectedRefWorktree = useMemo(() => {
     if (!selectedRef) return null
+    // Checkout is blocked by a branch being checked out in another worktree,
+    // not merely by a worktree marker sharing the ref's commit. Markers are
+    // placed by head SHA, so a detached worktree at the same commit must not
+    // replace Checkout with Open worktree.
     if (selectedRef.kind === 'head') {
       return worktreesByBranch.get(selectedRef.shortName)?.find((worktree) => !worktree.isCurrent) ?? null
     }
