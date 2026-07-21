@@ -49,6 +49,8 @@ export interface WorktreeSlice {
 
   setWorktreeCommitMessage: (message: string) => void
   loadWorktrees: () => Promise<void>
+  /** Remove a linked worktree. Git refuses dirty worktrees unless the user cleans them first. */
+  removeWorktree: (path: string) => Promise<boolean>
   loadWorktreeChanges: () => Promise<void>
   /** Stash all tracked and untracked changes. */
   createStash: (message?: string) => Promise<boolean>
@@ -73,6 +75,7 @@ export type WorktreeSliceState = Omit<
   WorktreeSlice,
   | 'setWorktreeCommitMessage'
   | 'loadWorktrees'
+  | 'removeWorktree'
   | 'loadWorktreeChanges'
   | 'createStash'
   | 'applyStash'

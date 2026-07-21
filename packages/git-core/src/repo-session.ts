@@ -205,6 +205,18 @@ export class RepoSession {
     return parseWorktreeList(stdout, this.rootPath)
   }
 
+  async removeWorktree(path: string): Promise<WorktreeSummary[]> {
+    const requestedPath = resolve(path)
+    const worktrees = await this.getWorktrees()
+    const target = worktrees.find((worktree) => resolve(worktree.path) === requestedPath)
+
+    if (!target) throw new Error(`Worktree is not registered: ${path}`)
+    if (target.isCurrent) throw new Error('The current worktree cannot be removed')
+
+    await runGit(['worktree', 'remove', target.path], this.rootPath)
+    return this.getWorktrees()
+  }
+
   getStatus(): Promise<WorktreeStatusResponse> {
     return parseStatus(this.rootPath)
   }

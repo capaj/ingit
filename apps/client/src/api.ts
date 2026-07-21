@@ -72,6 +72,10 @@ export function getWorktrees(repoId: string) {
   return ensureClient().getWorktrees({ repoId })
 }
 
+export function removeWorktree(repoId: string, path: string) {
+  return ensureClient().removeWorktree({ repoId, path })
+}
+
 export function getStatus(repoId: string) {
   return ensureClient().getStatus({ repoId })
 }

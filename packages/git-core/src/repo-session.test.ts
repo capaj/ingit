@@ -132,7 +132,7 @@ describe('RepoSession.checkout', () => {
     expect(devRef2?.isCurrent).toBeUndefined()
   })
 
-  test('lists linked worktrees and reports an occupied branch before checkout', async () => {
+  test('lists and removes linked worktrees and reports an occupied branch before checkout', async () => {
     const worktreeParent = await mkdtemp(join(tmpdir(), 'ingit-linked-worktree-'))
     const worktreePath = join(worktreeParent, 'dev tree')
 
@@ -157,6 +157,12 @@ describe('RepoSession.checkout', () => {
         worktreePath,
       } satisfies Partial<BranchCheckedOutError>)
       expect(await currentBranch(repoDir)).toBe('main')
+
+      await expect(session.removeWorktree(repoDir)).rejects.toThrow('current worktree')
+      const remainingWorktrees = await session.removeWorktree(worktreePath)
+      expect(remainingWorktrees).toHaveLength(1)
+      expect(remainingWorktrees[0]?.path).toBe(repoDir)
+      expect(await Bun.file(join(worktreePath, 'dev.txt')).exists()).toBe(false)
     } finally {
       await runGit(['worktree', 'remove', '--force', worktreePath], repoDir, { okCodes: [128] })
       await rm(worktreeParent, { recursive: true, force: true })

@@ -121,8 +121,10 @@ function FileRow({
             textAlign: 'left',
           }}
         >
-          <span style={{ color: '#6c7086' }}>{dir}</span>
-          <span style={{ color: '#cdd6f4' }}>{base}</span>
+          <bdi dir="ltr">
+            <span style={{ color: '#6c7086' }}>{dir}</span>
+            <span style={{ color: '#cdd6f4' }}>{base}</span>
+          </bdi>
         </span>
         <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
           <RefActionButton label={actionLabel} tone="neutral" size="compact" variant="ghost" iconOnly onClick={onAction} />

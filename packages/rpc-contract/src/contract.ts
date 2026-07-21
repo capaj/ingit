@@ -240,6 +240,13 @@ export const contract = {
     .input(z.object({ repoId: RepoId }))
     .output(z.array(WorktreeSummary)),
 
+  removeWorktree: oc
+    .input(z.object({ repoId: RepoId, path: z.string() }))
+    .output(z.object({
+      ok: z.boolean(),
+      worktrees: z.array(WorktreeSummary),
+    })),
+
   getStatus: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.object({

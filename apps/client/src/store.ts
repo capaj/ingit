@@ -19,6 +19,7 @@ import {
   discoverRepos,
   getRefs,
   getWorktrees,
+  removeWorktree as removeWorktreeApi,
   queryHistory,
   getCommitDetail,
   getCommitAuthor,
@@ -699,6 +700,19 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       if (get().repoId === repoId) set({ worktrees })
     } catch (err) {
       console.error('Failed to load linked worktrees:', err)
+    }
+  },
+
+  removeWorktree: async (path) => {
+    const { repoId } = get()
+    if (!repoId) return false
+    try {
+      const result = await removeWorktreeApi(repoId, path)
+      if (get().repoId === repoId) set({ worktrees: result.worktrees })
+      return true
+    } catch (err) {
+      get().showError('Remove worktree failed', err)
+      return false
     }
   },
 

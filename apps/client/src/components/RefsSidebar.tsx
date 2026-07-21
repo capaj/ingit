@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import type { RefSummary, StashSummary } from '@ingit/rpc-contract'
+import type { RefSummary, StashSummary, WorktreeSummary } from '@ingit/rpc-contract'
 
 interface RefsSidebarProps {
   refs: RefSummary[]
   stashes: StashSummary[]
+  worktrees: WorktreeSummary[]
   onSelectRef: (ref: RefSummary) => void
   onSelectStash: (stashSha: string) => void
   onSelectStashParent: (parentSha: string) => void
+  onOpenWorktree: (path: string) => void
+  onRemoveWorktree: (path: string) => Promise<boolean>
   selectedStashSha?: string | null
   selectedSha?: string | null
   onClose: () => void
@@ -27,9 +30,12 @@ const KIND_ORDER: RefKind[] = ['head', 'remote', 'tag']
 export function RefsSidebar({
   refs,
   stashes,
+  worktrees,
   onSelectRef,
   onSelectStash,
   onSelectStashParent,
+  onOpenWorktree,
+  onRemoveWorktree,
   selectedStashSha,
   selectedSha,
   onClose,
@@ -39,8 +45,13 @@ export function RefsSidebar({
   const [collapsed, setCollapsed] = useState<Partial<Record<RefKind, boolean>>>({ head: true, remote: true, tag: true })
   const [filter, setFilter] = useState('')
   const [stashesExpanded, setStashesExpanded] = useState(false)
+  const [worktreesExpanded, setWorktreesExpanded] = useState(true)
+  const [removingWorktreePath, setRemovingWorktreePath] = useState<string | null>(null)
 
   const filterLower = filter.toLowerCase()
+  const filteredWorktrees = worktrees.filter((worktree) => !filterLower
+    || worktree.path.toLowerCase().includes(filterLower)
+    || worktree.branchShortName?.toLowerCase().includes(filterLower))
   const groups: Record<RefKind, RefSummary[]> = { head: [], remote: [], tag: [] }
   for (const ref of refs) {
     if (filterLower && !ref.shortName.toLowerCase().includes(filterLower)) continue
@@ -49,6 +60,21 @@ export function RefsSidebar({
 
   function toggleGroup(kind: RefKind) {
     setCollapsed((prev) => ({ ...prev, [kind]: !prev[kind] }))
+  }
+
+  async function removeWorktree(worktree: WorktreeSummary) {
+    if (worktree.isCurrent || removingWorktreePath) return
+    const confirmed = window.confirm(
+      `Remove the worktree at ${worktree.path}? Git will refuse if it contains uncommitted changes.`,
+    )
+    if (!confirmed) return
+
+    setRemovingWorktreePath(worktree.path)
+    try {
+      await onRemoveWorktree(worktree.path)
+    } finally {
+      setRemovingWorktreePath(null)
+    }
   }
 
   return (
@@ -102,7 +128,7 @@ export function RefsSidebar({
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter branches..."
+          placeholder="Filter refs and worktrees..."
           style={{
             width: '100%',
             background: '#1e1e2e',
@@ -265,6 +291,154 @@ export function RefsSidebar({
                 })}
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <button
+          type="button"
+          onClick={() => setWorktreesExpanded((expanded) => !expanded)}
+          aria-expanded={filter ? true : worktreesExpanded}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 14px',
+            background: 'none',
+            border: 'none',
+            color: '#a6adc8',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            textAlign: 'left',
+            fontFamily: 'inherit',
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              display: 'inline-block',
+              transform: !filter && !worktreesExpanded ? 'rotate(-90deg)' : 'rotate(0deg)',
+              transition: 'transform 0.15s',
+              fontSize: 10,
+              lineHeight: 1,
+            }}
+          >
+            ▼
+          </span>
+          Worktrees
+          <span
+            style={{
+              marginLeft: 'auto',
+              background: '#313244',
+              borderRadius: 8,
+              padding: '1px 6px',
+              fontSize: 10,
+              color: '#6c7086',
+              fontWeight: 500,
+            }}
+          >
+            {filteredWorktrees.length}
+          </span>
+        </button>
+
+        {(filter || worktreesExpanded) && (
+          <div>
+            {filteredWorktrees.length === 0 ? (
+              <div style={{ padding: '5px 14px 7px 28px', color: '#6c7086', fontSize: 11 }}>
+                No matching worktrees
+              </div>
+            ) : filteredWorktrees.map((worktree) => {
+              const displayName = worktreeDisplayName(worktree)
+              const removing = removingWorktreePath === worktree.path
+              return (
+                <div
+                  key={worktree.path}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'stretch',
+                    paddingLeft: 20,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!worktree.isCurrent) onOpenWorktree(worktree.path)
+                    }}
+                    title={worktree.isCurrent ? `${worktree.path} (current worktree)` : `Open ${worktree.path}`}
+                    disabled={worktree.isCurrent}
+                    style={{
+                      minWidth: 0,
+                      flex: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      padding: '5px 6px 5px 8px',
+                      background: 'none',
+                      border: 'none',
+                      color: worktree.isCurrent ? '#a6e3a1' : '#cdd6f4',
+                      cursor: worktree.isCurrent ? 'default' : 'pointer',
+                      textAlign: 'left',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    <WorktreeIcon current={worktree.isCurrent} />
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span
+                        style={{
+                          display: 'block',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontSize: 12,
+                          fontWeight: worktree.isCurrent ? 700 : 500,
+                        }}
+                      >
+                        {displayName}
+                      </span>
+                      <span
+                        style={{
+                          display: 'block',
+                          marginTop: 1,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          color: '#6c7086',
+                          fontSize: 9.5,
+                        }}
+                      >
+                        {worktree.path}
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void removeWorktree(worktree) }}
+                    disabled={worktree.isCurrent || removingWorktreePath !== null}
+                    title={worktree.isCurrent
+                      ? 'The current worktree cannot be removed'
+                      : `Remove worktree ${worktree.path}`}
+                    aria-label={removing ? `Removing worktree ${displayName}` : `Remove worktree ${displayName}`}
+                    style={{
+                      width: 32,
+                      flexShrink: 0,
+                      display: 'grid',
+                      placeItems: 'center',
+                      padding: 0,
+                      border: 'none',
+                      background: 'none',
+                      color: removing ? '#f9e2af' : '#f38ba8',
+                      cursor: worktree.isCurrent || removingWorktreePath !== null ? 'default' : 'pointer',
+                      opacity: worktree.isCurrent ? 0.25 : removingWorktreePath && !removing ? 0.4 : 0.8,
+                    }}
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
@@ -435,4 +609,31 @@ function RefIcon({ kind, isCurrent }: { kind: RefKind; isCurrent?: boolean }) {
   if (kind === 'head') return <span style={{ ...style, color: isCurrent ? '#a6e3a1' : '#89b4fa' }}>{isCurrent ? '●' : '⎇'}</span>
   if (kind === 'remote') return <span style={{ ...style, color: '#94e2d5' }}>◉</span>
   return <span style={{ ...style, color: '#f9e2af' }}>◆</span>
+}
+
+function worktreeDisplayName(worktree: WorktreeSummary): string {
+  if (worktree.branchShortName) return worktree.branchShortName
+  if (worktree.detached && worktree.headSha) return `Detached at ${worktree.headSha.slice(0, 8)}`
+  const normalized = worktree.path.replace(/[\\/]+$/, '')
+  return normalized.split(/[\\/]+/).at(-1) || worktree.path
+}
+
+function WorktreeIcon({ current }: { current: boolean }) {
+  return (
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+      <circle cx="4" cy="3" r="2" fill={current ? '#a6e3a1' : '#94e2d5'} />
+      <circle cx="12" cy="5" r="2" fill={current ? '#a6e3a1' : '#94e2d5'} />
+      <circle cx="8" cy="13" r="2" fill={current ? '#a6e3a1' : '#94e2d5'} />
+      <path d="M4 5v2.5A2.5 2.5 0 0 0 6.5 10H8m4-3v.5A2.5 2.5 0 0 1 9.5 10H8v1" stroke={current ? '#a6e3a1' : '#94e2d5'} strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none">
+      <path d="M3.5 5h9m-6-2h3l.75 2h-4.5l.75-2Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 5.5 5.5 13h5l.5-7.5M7 7.5v3.5m2-3.5v3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }

@@ -81,6 +81,12 @@ export const router = os.router({
     return session.getWorktrees()
   }),
 
+  removeWorktree: os.removeWorktree.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    const worktrees = await session.removeWorktree(input.path).catch(rethrowWithDetail)
+    return { ok: true, worktrees }
+  }),
+
   getStatus: os.getStatus.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     return session.getStatus()

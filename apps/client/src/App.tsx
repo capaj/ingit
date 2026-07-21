@@ -637,17 +637,23 @@ function ConnectedRefsSidebar({
   const {
     refs,
     stashes,
+    worktrees,
     selectRef,
     selectStash,
     navigateTo,
+    openRepoByPath,
+    removeWorktree,
     selectedStashSha,
     selectedSha,
   } = useAppStore(useShallow((state) => ({
     refs: state.refs,
     stashes: state.stashes,
+    worktrees: state.worktrees,
     selectRef: state.selectRef,
     selectStash: state.selectStash,
     navigateTo: state.navigateTo,
+    openRepoByPath: state.openRepoByPath,
+    removeWorktree: state.removeWorktree,
     selectedStashSha: state.selectedStashSha,
     selectedSha: state.selectedSha,
   })))
@@ -656,9 +662,12 @@ function ConnectedRefsSidebar({
     <RefsSidebar
       refs={refs}
       stashes={stashes}
+      worktrees={worktrees}
       onSelectRef={selectRef}
       onSelectStash={selectStash}
       onSelectStashParent={(sha) => { void navigateTo(sha) }}
+      onOpenWorktree={(path) => { void openRepoByPath(path) }}
+      onRemoveWorktree={removeWorktree}
       selectedStashSha={selectedStashSha}
       selectedSha={selectedSha}
       onClose={onClose}
