@@ -16,7 +16,7 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@orpc/contract": "^1.14.7",
+    "@orpc/contract": "^1.14.8",
     "zod": "^4.4.3"
   }
 }
