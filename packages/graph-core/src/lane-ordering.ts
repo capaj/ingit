@@ -39,7 +39,7 @@ export function orderLaneSegmentsByContinuity(
 
   const segments = buildSegments(rows)
   const segmentById = new Map(segments.map((segment) => [segment.id, segment]))
-  const sideBySegment = resolveSegmentSides(segments, segmentById)
+  const sideBySegment = resolveSegmentSides(segments, segmentById, boundedRadius)
   const laneBySha = new Map<string, number>()
 
   for (const segment of segments) {
@@ -171,6 +171,7 @@ type LaneSide = 'left' | 'right'
 function resolveSegmentSides(
   segments: LaneSegment[],
   segmentById: Map<string, LaneSegment>,
+  maxLaneRadius?: number,
 ): Map<string, LaneSide> {
   const sideBySegment = new Map<string, LaneSide>()
   const resolving = new Set<string>()
@@ -201,7 +202,129 @@ function resolveSegmentSides(
     if (segment.lane !== 0) resolve(segment)
   }
 
+  // A bounded viewport has a fixed number of physical gutters on both sides.
+  // The semantic allocator can produce many more lanes on one side than the
+  // other, especially near the tips of a busy repository. Fill an empty
+  // opposite-side gutter before stacking overlapping rail families in the
+  // same physical lane. A root and all of its nested branches move together.
+  if (maxLaneRadius !== undefined) {
+    balanceRootSegmentSides(
+      segments,
+      segmentById,
+      maxLaneRadius,
+      sideBySegment,
+    )
+  }
+
   return sideBySegment
+}
+
+function balanceRootSegmentSides(
+  segments: LaneSegment[],
+  segmentById: Map<string, LaneSegment>,
+  maxLaneRadius: number,
+  sideBySegment: Map<string, LaneSide>,
+): void {
+  const assignedBySide: Record<LaneSide, Map<number, LaneSegment[]>> = {
+    left: new Map(),
+    right: new Map(),
+  }
+  const rootBySegmentId = new Map<string, string>()
+  const findingRoots = new Set<string>()
+  const findRootId = (segment: LaneSegment): string => {
+    const cached = rootBySegmentId.get(segment.id)
+    if (cached) return cached
+    if (findingRoots.has(segment.id)) return segment.id
+    findingRoots.add(segment.id)
+    const inwardSegment = segment.inwardSegmentId
+      ? segmentById.get(segment.inwardSegmentId)
+      : undefined
+    const rootId = inwardSegment && inwardSegment.lane !== 0
+      ? findRootId(inwardSegment)
+      : segment.id
+    findingRoots.delete(segment.id)
+    rootBySegmentId.set(segment.id, rootId)
+    return rootId
+  }
+  const familiesByRootId = new Map<string, LaneSegment[]>()
+  for (const segment of segments) {
+    if (segment.lane === 0) continue
+    const rootId = findRootId(segment)
+    const family = familiesByRootId.get(rootId)
+    if (family) family.push(segment)
+    else familiesByRootId.set(rootId, [segment])
+  }
+  const families = [...familiesByRootId.entries()].sort((left, right) => {
+    const leftContinuity = left[1]
+      .reduce((total, segment) => total + segment.continuity, 0)
+    const rightContinuity = right[1]
+      .reduce((total, segment) => total + segment.continuity, 0)
+    return rightContinuity - leftContinuity
+      || compareSegmentsByContinuity(
+        segmentById.get(left[0]) as LaneSegment,
+        segmentById.get(right[0]) as LaneSegment,
+      )
+  })
+
+  for (const [rootId, family] of families) {
+    const root = segmentById.get(rootId) as LaneSegment
+    const preferredSide: LaneSide = root.lane < 0 ? 'left' : 'right'
+    const oppositeSide: LaneSide = preferredSide === 'left' ? 'right' : 'left'
+    const preferredOverlap = familyPlacementOverlap(
+      family,
+      assignedBySide[preferredSide],
+      maxLaneRadius,
+    )
+    const oppositeOverlap = familyPlacementOverlap(
+      family,
+      assignedBySide[oppositeSide],
+      maxLaneRadius,
+    )
+    const side = oppositeOverlap < preferredOverlap
+      ? oppositeSide
+      : preferredSide
+    for (const segment of family) sideBySegment.set(segment.id, side)
+    placeFamilyInSlots(
+      family,
+      assignedBySide[side],
+      maxLaneRadius,
+    )
+  }
+}
+
+function familyPlacementOverlap(
+  family: LaneSegment[],
+  assignedBySlot: Map<number, LaneSegment[]>,
+  maxLaneRadius: number,
+): number {
+  const trialSlots = new Map(
+    [...assignedBySlot].map(([slot, assigned]) => [slot, [...assigned]]),
+  )
+  return placeFamilyInSlots(family, trialSlots, maxLaneRadius)
+}
+
+function placeFamilyInSlots(
+  family: LaneSegment[],
+  assignedBySlot: Map<number, LaneSegment[]>,
+  maxLaneRadius: number,
+): number {
+  let totalOverlap = 0
+  for (const segment of [...family].sort(compareSegmentsByContinuity)) {
+    const slot = findLeastConflictingSlot(
+      segment,
+      assignedBySlot,
+      maxLaneRadius,
+      Math.min(Math.abs(segment.lane), maxLaneRadius),
+    )
+    const assigned = assignedBySlot.get(slot) ?? []
+    totalOverlap += assigned.reduce(
+      (total, candidate) => total + segmentOverlapRows(segment, candidate),
+      0,
+    )
+    if (assigned.length > 0) assigned.push(segment)
+    else assignedBySlot.set(slot, [segment])
+  }
+  return totalOverlap
 }
 
 function orderSide(
@@ -227,13 +350,7 @@ function orderSide(
   computeMaxConcurrency(rootSegments)
   const maxSlot = maxLaneRadius
     ?? Math.max(0, ...rootSegments.map((segment) => Math.abs(segment.lane)))
-  const longestFirst = [...rootSegments].sort((left, right) => (
-    right.continuity - left.continuity
-    || (right.endRow - right.startRow) - (left.endRow - left.startRow)
-    || left.startRow - right.startRow
-    || Math.abs(left.lane) - Math.abs(right.lane)
-    || left.id.localeCompare(right.id)
-  ))
+  const longestFirst = [...rootSegments].sort(compareSegmentsByContinuity)
 
   for (const segment of longestFirst) {
     const preferredSlot = maxLaneRadius === undefined
@@ -305,6 +422,14 @@ function orderSide(
       pending.delete(segment)
     }
   }
+}
+
+function compareSegmentsByContinuity(left: LaneSegment, right: LaneSegment): number {
+  return right.continuity - left.continuity
+    || (right.endRow - right.startRow) - (left.endRow - left.startRow)
+    || left.startRow - right.startRow
+    || Math.abs(left.lane) - Math.abs(right.lane)
+    || left.id.localeCompare(right.id)
 }
 
 function computeMaxConcurrency(segments: LaneSegment[]): void {

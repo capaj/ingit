@@ -63,6 +63,24 @@ describe('lane ordering', () => {
     expect(compacted.get('late')).toBe(1)
   })
 
+  test('uses an empty opposite gutter before overlapping bounded root rails', () => {
+    const lanes = orderLaneSegmentsByContinuity([
+      { sha: 'long-a-tip', parentShas: ['long-a-root'], row: 0, lane: -1 },
+      { sha: 'long-b-tip', parentShas: ['long-b-root'], row: 1, lane: -2 },
+      { sha: 'short-tip', parentShas: ['short-root'], row: 2, lane: -3 },
+      { sha: 'short-root', parentShas: [], row: 8, lane: -3 },
+      { sha: 'long-b-root', parentShas: [], row: 9, lane: -2 },
+      { sha: 'long-a-root', parentShas: [], row: 10, lane: -1 },
+    ], 2)
+
+    expect(new Set([
+      lanes.get('long-a-tip'),
+      lanes.get('long-b-tip'),
+    ])).toEqual(new Set([-1, -2]))
+    expect(lanes.get('short-tip')).toBe(1)
+    expect(lanes.get('short-root')).toBe(1)
+  })
+
   test('does not reuse a gutter while an earlier branch rail is still reconnecting', () => {
     const lanes = orderLaneSegmentsByContinuity([
       { sha: 'red-tip', parentShas: ['red-root'], row: 0, lane: 1 },
@@ -118,8 +136,8 @@ describe('lane ordering', () => {
 
     const compacted = orderLaneSegmentsByContinuity(rows, 2)
     expect(Math.max(...compacted.values().map((lane) => Math.abs(lane)))).toBe(2)
-    expect(compacted.get('dev')).toBe(2)
-    expect(compacted.get('prompt-4')).toBe(1)
-    expect(compacted.get('prompt-1')).toBe(1)
+    expect(compacted.get('dev')).toBe(1)
+    expect(compacted.get('prompt-4')).toBe(2)
+    expect(compacted.get('prompt-1')).toBe(2)
   })
 })
