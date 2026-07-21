@@ -4,6 +4,7 @@ import {
   mergePreviewGutterX,
   placeWorktreeAbovePreview,
   stackPreviewChainAboveTarget,
+  uncommitCrossLines,
 } from './action-preview-layout'
 
 describe('mergePreviewGutterX', () => {
@@ -88,6 +89,15 @@ describe('placeWorktreeAbovePreview', () => {
       y: 544,
       idx: 7,
     })
+  })
+})
+
+describe('uncommitCrossLines', () => {
+  test('crosses the commit center with two opposite diagonals', () => {
+    expect(uncommitCrossLines({ x: 400, y: 240 }, 20)).toEqual([
+      { x1: 380, y1: 220, x2: 420, y2: 260 },
+      { x1: 420, y1: 220, x2: 380, y2: 260 },
+    ])
   })
 })
 

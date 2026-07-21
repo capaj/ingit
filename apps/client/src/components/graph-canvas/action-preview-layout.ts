@@ -20,6 +20,13 @@ interface ViewportSize {
   height: number
 }
 
+export interface CrossLine {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
 export interface PreviewCamera {
   zoom: number
   translateX: number
@@ -95,6 +102,27 @@ export function placeWorktreeAbovePreview<T extends VerticalPosition>(
     y: anchor.y - rowSpacing,
     idx: anchor.idx - 1,
   }
+}
+
+/** Build the two diagonal strokes used to cross out an uncommit preview. */
+export function uncommitCrossLines(
+  node: { x: number; y: number },
+  radius: number,
+): [CrossLine, CrossLine] {
+  return [
+    {
+      x1: node.x - radius,
+      y1: node.y - radius,
+      x2: node.x + radius,
+      y2: node.y + radius,
+    },
+    {
+      x1: node.x + radius,
+      y1: node.y - radius,
+      x2: node.x - radius,
+      y2: node.y + radius,
+    },
+  ]
 }
 
 /**

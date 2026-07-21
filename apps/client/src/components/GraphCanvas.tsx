@@ -13,6 +13,7 @@ import {
   mergePreviewGutterX,
   placeWorktreeAbovePreview,
   stackPreviewChainAboveTarget,
+  uncommitCrossLines,
 } from './graph-canvas/action-preview-layout'
 import { findClearEndpointRail, findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
 import {
@@ -61,6 +62,7 @@ const GAUGE_TRACK_FILL_SELECTED = '#cdd6f422'
 const GAUGE_ADDITIONS_FILL = '#a6e3a1'
 const GAUGE_DELETIONS_FILL = '#f38ba8'
 const ACTION_PREVIEW_COLOR = '#a6e3a1'
+const UNCOMMIT_PREVIEW_COLOR = '#f38ba8'
 const GAUGE_MIN_FILL_HEIGHT = 2
 const GAUGE_SCALE_PERCENTILE = 0.85
 const EDGE_CORNER_RADIUS = 12
@@ -76,6 +78,10 @@ const GRAPH_CAMERA_TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
 const REF_PILL_GAP = 6
 const REF_PILL_HORIZONTAL_PADDING = 14
 const REF_PILL_FONT = '600 11px system-ui, -apple-system, sans-serif'
+const WORKTREE_MARKER_GAP = 6
+const WORKTREE_MARKER_ICON_SIZE = 13
+const WORKTREE_MARKER_HORIZONTAL_PADDING = 12
+const WORKTREE_MARKER_MAX_WIDTH = 150
 const GRAPH_ENTER_OFFSET_Y = NODE_SPACING_Y * 0.55
 const GRAPH_EXIT_OFFSET_Y = NODE_SPACING_Y * 0.3
 const PRIMARY_LANE_HIGHLIGHT_WIDTH = 54
@@ -145,6 +151,7 @@ interface ConfirmDialogState {
 
 type ActionPreviewState =
   | { kind: 'commit'; action: 'cherry-pick' | 'revert'; sha: string }
+  | { kind: 'uncommit'; sha: string }
   | { kind: 'rebase'; targetRefName: string }
 
 interface ActionPreviewGeometry {
@@ -191,6 +198,30 @@ function pathBaseName(path: string): string {
   return normalized.split(/[\\/]+/).at(-1) || path
 }
 
+function WorktreeTreeIcon({ color, size = WORKTREE_MARKER_ICON_SIZE }: { color: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      style={{ display: 'block', flexShrink: 0 }}
+    >
+      <path
+        d="M8 13V9M8 9H4V5M8 9h4V5"
+        stroke={color}
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="4" cy="3.5" r="1.5" fill={NODE_FILL} stroke={color} strokeWidth="1.4" />
+      <circle cx="12" cy="3.5" r="1.5" fill={NODE_FILL} stroke={color} strokeWidth="1.4" />
+      <circle cx="8" cy="13" r="1.5" fill={NODE_FILL} stroke={color} strokeWidth="1.4" />
+    </svg>
+  )
+}
+
 function parseVersionTag(name: string): ParsedVersionTag | null {
   const match = /^(v?)(\d+)\.(\d+)\.(\d+)$/.exec(name)
   if (!match) return null
@@ -235,14 +266,14 @@ interface RefPlacement {
   isCurrent: boolean
   isSelected: boolean
   isRemote: boolean
-  linkedWorktrees: WorktreeSummary[]
 }
 
-interface DetachedWorktreePlacement {
+interface WorktreePlacement {
   worktree: WorktreeSummary
   nodeSha: string
   x: number
   y: number
+  width: number
 }
 
 interface VisibleEdgeItem {
@@ -423,6 +454,8 @@ function buildActionPreviewGeometry(
   viewportFit: GraphViewportFit,
   preview: ActionPreviewState,
 ): ActionPreviewGeometry | null {
+  if (preview.kind === 'uncommit') return null
+
   const previewRows = compactRowsToLaneRadius(
     prediction.rows,
     viewportFit.maxLaneRadius,
@@ -1496,17 +1529,12 @@ function measureRefPillText(text: string): number {
   return width
 }
 
-function linkedWorktreeSuffix(worktrees: WorktreeSummary[]) {
-  return worktrees.map((worktree) => `  ▣ ${pathBaseName(worktree.path)}`).join('')
-}
-
 function estimateRefPillWidth(
   refName: string,
   isRemote: boolean,
   isCurrent: boolean,
-  linkedWorktrees: WorktreeSummary[],
 ) {
-  const text = refBadgePrefix(isRemote, isCurrent) + refName + linkedWorktreeSuffix(linkedWorktrees)
+  const text = refBadgePrefix(isRemote, isCurrent) + refName
   return REF_PILL_HORIZONTAL_PADDING + Math.ceil(measureRefPillText(text))
 }
 
@@ -1515,7 +1543,6 @@ function buildRefPlacements(
   currentBranch: string | null,
   selectedRefName: string | null,
   shaToColor: Map<string, string>,
-  worktrees: WorktreeSummary[],
   nodeRadii?: ReadonlyMap<string, number>,
 ) {
   const placements: RefPlacement[] = []
@@ -1529,12 +1556,6 @@ function buildRefPlacements(
     for (const refName of node.row.refNames) {
       const isCurrent = currentBranch !== null && refName === currentBranch
       const isRemote = isRemoteRef(refName)
-      const linkedWorktrees = worktrees.filter(
-        (worktree) => !worktree.isCurrent
-          && !worktree.bare
-          && !worktree.prunable
-          && worktree.branchShortName === refName,
-      )
       placements.push({
         refName,
         nodeSha: node.row.sha,
@@ -1544,9 +1565,8 @@ function buildRefPlacements(
         isCurrent,
         isSelected: refName === selectedRefName,
         isRemote,
-        linkedWorktrees,
       })
-      cursorX += estimateRefPillWidth(refName, isRemote, isCurrent, linkedWorktrees) + REF_PILL_GAP
+      cursorX += estimateRefPillWidth(refName, isRemote, isCurrent) + REF_PILL_GAP
     }
 
     rowWidths.set(
@@ -1556,6 +1576,60 @@ function buildRefPlacements(
   }
 
   return { placements, rowWidths }
+}
+
+function estimateWorktreeMarkerWidth(worktree: WorktreeSummary) {
+  return Math.min(
+    WORKTREE_MARKER_MAX_WIDTH,
+    WORKTREE_MARKER_HORIZONTAL_PADDING
+      + WORKTREE_MARKER_ICON_SIZE
+      + 5
+      + Math.ceil(measureRefPillText(pathBaseName(worktree.path))),
+  )
+}
+
+function buildWorktreePlacements(
+  nodes: LayoutNode[],
+  worktrees: WorktreeSummary[],
+  nodeRadii?: ReadonlyMap<string, number>,
+) {
+  const worktreesBySha = new Map<string, WorktreeSummary[]>()
+  for (const worktree of worktrees) {
+    if (
+      !worktree.headSha
+      || worktree.bare
+      || worktree.prunable
+      || (worktree.isCurrent && !worktree.detached)
+    ) continue
+
+    const existing = worktreesBySha.get(worktree.headSha) ?? []
+    existing.push(worktree)
+    worktreesBySha.set(worktree.headSha, existing)
+  }
+
+  const placements: WorktreePlacement[] = []
+  for (const node of nodes) {
+    const nodeWorktrees = worktreesBySha.get(node.row.sha)
+    if (!nodeWorktrees) continue
+
+    nodeWorktrees.sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent)
+      || left.path.localeCompare(right.path))
+    let cursorRight = node.x - (nodeRadii?.get(node.row.sha) ?? NODE_RADIUS) - 8
+
+    for (const worktree of nodeWorktrees) {
+      const width = estimateWorktreeMarkerWidth(worktree)
+      placements.push({
+        worktree,
+        nodeSha: node.row.sha,
+        x: cursorRight - width,
+        y: node.y - REF_PILL_HEIGHT / 2,
+        width,
+      })
+      cursorRight -= width + WORKTREE_MARKER_GAP
+    }
+  }
+
+  return placements
 }
 
 function lerp(from: number, toValue: number, progress: number) {
@@ -2278,6 +2352,7 @@ export function GraphCanvas() {
 
   const actionPreviewPrediction = useMemo(() => {
     if (!actionPreview || !histWindow) return null
+    if (actionPreview.kind === 'uncommit') return null
     if (actionPreview.kind === 'rebase') {
       return predictRebase(histWindow.rows, refs, actionPreview.targetRefName)
     }
@@ -2299,6 +2374,14 @@ export function GraphCanvas() {
       actionPreview,
     )
   }, [layout, actionPreview, actionPreviewPrediction, viewportFit])
+
+  const uncommitPreviewCross = useMemo(() => {
+    if (!layout || actionPreview?.kind !== 'uncommit') return null
+    const node = layout.shaToNode.get(actionPreview.sha)
+    return node
+      ? uncommitCrossLines(node, NODE_RADIUS * 1.45)
+      : null
+  }, [layout, actionPreview])
 
   const rebasePreviewCamera = useMemo(() => {
     if (
@@ -2803,43 +2886,26 @@ export function GraphCanvas() {
       currentBranch,
       selectedRefName,
       layout?.shaToColor ?? EMPTY_SHA_COLOR,
-      worktrees,
       edgeRouting.targetNodeRadii,
     ),
-    [visibleNodes, currentBranch, selectedRefName, layout, worktrees, edgeRouting],
+    [visibleNodes, currentBranch, selectedRefName, layout, edgeRouting],
   )
 
-  const { detachedWorktreePlacements, rowWidths: rowRefWidths } = useMemo(() => {
-    const placements: DetachedWorktreePlacement[] = []
-    const rowWidths = new Map(refRowWidths)
-    const detachedBySha = new Map<string, WorktreeSummary[]>()
-
-    for (const worktree of worktrees) {
-      if (!worktree.detached || !worktree.headSha || worktree.bare || worktree.prunable) continue
-      const existing = detachedBySha.get(worktree.headSha) ?? []
-      existing.push(worktree)
-      detachedBySha.set(worktree.headSha, existing)
+  const worktreePlacements = useMemo(
+    () => buildWorktreePlacements(visibleNodes, worktrees, edgeRouting.targetNodeRadii),
+    [visibleNodes, worktrees, edgeRouting],
+  )
+  const worktreeLeftEdges = useMemo(() => {
+    const leftEdges = new Map<string, number>()
+    for (const placement of worktreePlacements) {
+      leftEdges.set(
+        placement.nodeSha,
+        Math.min(leftEdges.get(placement.nodeSha) ?? Infinity, placement.x),
+      )
     }
-
-    for (const node of visibleNodes) {
-      const detached = detachedBySha.get(node.row.sha) ?? []
-      if (detached.length === 0) continue
-      const baseX = node.x + (edgeRouting.targetNodeRadii.get(node.row.sha) ?? NODE_RADIUS) + 8
-      let width = rowWidths.get(node.row.sha) ?? 0
-      let cursorX = baseX + width + (width > 0 ? REF_PILL_GAP : 0)
-
-      for (const worktree of detached) {
-        const text = `▣ ${pathBaseName(worktree.path)}`
-        placements.push({ worktree, nodeSha: node.row.sha, x: cursorX, y: node.y - 10 })
-        const chipWidth = REF_PILL_HORIZONTAL_PADDING + Math.ceil(measureRefPillText(text))
-        width = cursorX - baseX + chipWidth
-        cursorX += chipWidth + REF_PILL_GAP
-      }
-      rowWidths.set(node.row.sha, width)
-    }
-
-    return { detachedWorktreePlacements: placements, rowWidths }
-  }, [visibleNodes, refRowWidths, worktrees, edgeRouting])
+    return leftEdges
+  }, [worktreePlacements])
+  const rowRefWidths = refRowWidths
 
   const visibleEdgeItems = useMemo(
     () => buildVisibleEdgeItems(visibleEdges, edgeRouting, occupiedLanes, currentBranchEdgeKeys, layout?.shaToColor ?? EMPTY_SHA_COLOR),
@@ -2883,7 +2949,6 @@ export function GraphCanvas() {
       graphAnimation.fromCurrentBranch,
       selectedRefName,
       graphAnimation.fromLayout.shaToColor,
-      worktrees,
       fromRouting.targetNodeRadii,
     ).placements
     const toRefPlacements = buildRefPlacements(
@@ -2891,7 +2956,6 @@ export function GraphCanvas() {
       graphAnimation.toCurrentBranch,
       selectedRefName,
       graphAnimation.toLayout.shaToColor,
-      worktrees,
       toRouting.targetNodeRadii,
     ).placements
     const fromLaneHighlight = buildCurrentLaneHighlight(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch)
@@ -3037,7 +3101,7 @@ export function GraphCanvas() {
       : null
 
     return { nodes, edges, refs, lane }
-  }, [graphAnimation, selectedRefName, zoom, worktrees])
+  }, [graphAnimation, selectedRefName, zoom])
 
   const renderedNodeItems = useMemo(
     () => graphAnimationRenderData?.nodes ?? visibleNodes.map((node) => ({
@@ -3438,10 +3502,11 @@ export function GraphCanvas() {
   }, [])
 
   const handleCommitActionHoverStart = useCallback((action: CommitActionKind, sha: string) => {
-    if (action === 'uncommit') return
     setMergePreviewVisible(false)
     setRebaseHoverLock(null)
-    setActionPreview({ kind: 'commit', action, sha })
+    setActionPreview(action === 'uncommit'
+      ? { kind: 'uncommit', sha }
+      : { kind: 'commit', action, sha })
   }, [])
 
   const handleRebaseHoverStart = useCallback((
@@ -4399,6 +4464,23 @@ export function GraphCanvas() {
               <circle cx={node.x} cy={node.y} r={2.5} fill={color} />
             </g>
           ))}
+          {uncommitPreviewCross && (
+            <g
+              data-testid="uncommit-preview-cross"
+              pointerEvents="none"
+            >
+              {uncommitPreviewCross.map((line, index) => (
+                <line
+                  key={`uncommit-cross-${index}`}
+                  {...line}
+                  stroke={UNCOMMIT_PREVIEW_COLOR}
+                  strokeWidth={3.25}
+                  strokeLinecap="round"
+                  strokeDasharray="6 4"
+                />
+              ))}
+            </g>
+          )}
           {renderedWorktreeNode && (
             <animated.g
               onClick={(e) => { e.stopPropagation(); selectWorktree() }}
@@ -4557,34 +4639,19 @@ export function GraphCanvas() {
               }}
             >
               {refBadgePrefix(placement.isRemote, placement.isCurrent)}{placement.refName}
-              {placement.linkedWorktrees.map((worktree) => (
-                <span
-                  key={worktree.path}
-                  title={`Open linked worktree\n${worktree.path}${worktree.lockedReason ? `\nLocked: ${worktree.lockedReason}` : ''}`}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void openRepoByPath(worktree.path)
-                  }}
-                  style={{
-                    display: 'inline-block',
-                    marginLeft: 7,
-                    paddingLeft: 7,
-                    borderLeft: `1px solid ${placement.color}55`,
-                    color: '#a6adc8',
-                  }}
-                >
-                  ▣ {pathBaseName(worktree.path)}
-                </span>
-              ))}
             </animated.div>
           )
         })}
-        {!isGraphAnimating && detachedWorktreePlacements.map((placement) => {
+        {!isGraphAnimating && worktreePlacements.map((placement) => {
           const { worktree } = placement
+          const worktreeName = pathBaseName(worktree.path)
+          const markerColor = worktree.isCurrent ? '#f9e2af' : '#94e2d5'
           return (
             <div
-              key={`detached-worktree:${worktree.path}`}
-              title={`${worktree.isCurrent ? 'Current detached worktree' : 'Open detached worktree'}\n${worktree.path}\n${worktree.headSha?.slice(0, 12) ?? ''}`}
+              key={`worktree:${worktree.path}`}
+              data-testid="worktree-marker"
+              title={worktreeName}
+              aria-label={`${worktree.isCurrent ? 'Current detached worktree' : 'Open linked worktree'} ${worktree.path}`}
               onClick={(event) => {
                 event.stopPropagation()
                 if (!worktree.isCurrent) void openRepoByPath(worktree.path)
@@ -4595,23 +4662,29 @@ export function GraphCanvas() {
                 position: 'absolute',
                 left: placement.x,
                 top: placement.y,
-                zIndex: 20,
-                height: 20,
-                padding: '0 7px',
-                borderRadius: 4,
-                border: `1px solid ${worktree.isCurrent ? '#f9e2af99' : '#6c708666'}`,
-                background: worktree.isCurrent ? '#f9e2af18' : 'rgba(24,24,37,0.72)',
-                color: worktree.isCurrent ? '#f9e2af' : '#a6adc8',
+                zIndex: 40,
+                boxSizing: 'border-box',
+                width: placement.width,
+                height: REF_PILL_HEIGHT,
+                display: 'flex',
+                alignItems: 'center',
+                padding: '0 5px 0 7px',
+                borderRadius: '4px 1px 1px 4px',
+                borderRight: `2px solid ${markerColor}aa`,
+                background: `linear-gradient(90deg, rgba(17,17,27,0.82), ${markerColor}14)`,
+                color: '#cdd6f4',
                 fontSize: 11,
                 fontWeight: 600,
-                lineHeight: '20px',
                 whiteSpace: 'nowrap',
                 cursor: worktree.isCurrent ? 'default' : 'pointer',
                 userSelect: 'none',
-                boxShadow: '0 2px 5px rgba(0,0,0,0.18)',
+                boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
               }}
             >
-              ▣ {pathBaseName(worktree.path)}
+              <WorktreeTreeIcon color={markerColor} />
+              <span style={{ marginLeft: 5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {worktreeName}
+              </span>
             </div>
           )
         })}
@@ -4659,7 +4732,7 @@ export function GraphCanvas() {
               {nodeActions.length > 0 && (
                 <div style={{
                   position: 'absolute',
-                  left: node.x - NODE_RADIUS - 12,
+                  left: (worktreeLeftEdges.get(node.row.sha) ?? node.x - NODE_RADIUS) - 12,
                   top: node.y,
                   transform: 'translate(-100%, -50%)',
                   display: 'flex',
