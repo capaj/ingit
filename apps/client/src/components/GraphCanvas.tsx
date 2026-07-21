@@ -4168,7 +4168,7 @@ export function GraphCanvas() {
           ))}
         </svg>
 
-        {/* Nodes sit above ref pills; edges and gutter rails stay below them. */}
+        {/* Nodes sit above graph rails and edges. Ref pills render in the HTML layer above node focus halos. */}
         <svg
           width={fullWidth}
           height={fullHeight}
@@ -4517,7 +4517,9 @@ export function GraphCanvas() {
                 position: 'absolute',
                 left: 0,
                 top: 0,
-                zIndex: 20,
+                // Keep the complete branch chip clickable where it overlaps a
+                // selected node's SVG focus halo (z-index 30).
+                zIndex: 40,
                 height: 20,
                 padding: '0 7px',
                 borderRadius: 4,
