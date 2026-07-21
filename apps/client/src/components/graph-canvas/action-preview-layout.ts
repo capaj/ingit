@@ -83,6 +83,20 @@ export function stackPreviewChainAboveTarget<T extends VerticalPosition>(
   })
 }
 
+/** Keep pending worktree changes one row above an appended commit preview. */
+export function placeWorktreeAbovePreview<T extends VerticalPosition>(
+  headNode: T,
+  previewNode: T | null,
+  rowSpacing: number,
+): { anchor: T; y: number; idx: number } {
+  const anchor = previewNode ?? headNode
+  return {
+    anchor,
+    y: anchor.y - rowSpacing,
+    idx: anchor.idx - 1,
+  }
+}
+
 /**
  * Fit preview bounds into the graph viewport with the smallest possible
  * camera movement. Short previews that only cross one viewport edge should

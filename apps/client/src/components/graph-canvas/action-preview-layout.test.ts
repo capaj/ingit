@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   fitPreviewCamera,
   mergePreviewGutterX,
+  placeWorktreeAbovePreview,
   stackPreviewChainAboveTarget,
 } from './action-preview-layout'
 
@@ -66,6 +67,27 @@ describe('stackPreviewChainAboveTarget', () => {
     expect(stacked.map((node) => node.idx)).toEqual([5, 6, 7])
     expect(stacked.map((node) => node.id)).toEqual([0, 1, 2])
     expect(stacked.every((node) => node.y < 600)).toBe(true)
+  })
+})
+
+describe('placeWorktreeAbovePreview', () => {
+  test('moves uncommitted changes above an appended commit preview', () => {
+    const head = { id: 'head', y: 600, idx: 8 }
+    const preview = { id: 'revert', y: 544, idx: 7 }
+
+    const placement = placeWorktreeAbovePreview(head, preview, 56)
+
+    expect(placement).toEqual({ anchor: preview, y: 488, idx: 6 })
+  })
+
+  test('stays one row above HEAD without a commit preview', () => {
+    const head = { id: 'head', y: 600, idx: 8 }
+
+    expect(placeWorktreeAbovePreview(head, null, 56)).toEqual({
+      anchor: head,
+      y: 544,
+      idx: 7,
+    })
   })
 })
 

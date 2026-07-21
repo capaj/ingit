@@ -11,6 +11,7 @@ import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-c
 import {
   fitPreviewCamera,
   mergePreviewGutterX,
+  placeWorktreeAbovePreview,
   stackPreviewChainAboveTarget,
 } from './graph-canvas/action-preview-layout'
 import { findClearEndpointRail, findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
@@ -2353,15 +2354,23 @@ export function GraphCanvas() {
         ? 'rebase'
         : 'worktree'
     const conflictedCount = countConflictedWorktreeFiles(worktreeChanges)
-    const y = headNode.y - NODE_SPACING_Y
     const color = operation === 'worktree'
       ? layout.shaToColor.get(headNode.row.sha) ?? laneColor(headNode.row.lane)
       : '#fab387'
+    const commitPreviewNode = operation === 'worktree' && actionPreview?.kind === 'commit'
+      ? actionPreviewGeometry?.nodes[0]?.node ?? null
+      : null
+    const placement = placeWorktreeAbovePreview(
+      headNode,
+      commitPreviewNode,
+      NODE_SPACING_Y,
+    )
+    const anchorNode = placement.anchor
     const pendingNode: LayoutNode = {
       row: {
-        row: headNode.row.row - 1,
+        row: anchorNode.row.row - 1,
         sha: `${operation}:${worktreeChanges.headSha}:${worktreeChanges.mergeHeadShas?.[0] ?? worktreeChanges.rebaseHeadSha ?? 'dirty'}`,
-        parentShas: [headNode.row.sha, ...(worktreeChanges.mergeHeadShas?.slice(0, 1) ?? [])],
+        parentShas: [anchorNode.row.sha, ...(worktreeChanges.mergeHeadShas?.slice(0, 1) ?? [])],
         authorName: '',
         authorEmail: '',
         authorUnix: 0,
@@ -2375,15 +2384,15 @@ export function GraphCanvas() {
         deletions: 0,
         locChanged: 0,
         refNames: [],
-        lane: headNode.row.lane,
+        lane: anchorNode.row.lane,
       },
-      x: headNode.x,
-      y,
-      idx: headNode.idx - 1,
+      x: anchorNode.x,
+      y: placement.y,
+      idx: placement.idx,
     }
     const occupied = layout.nodes.map((node) => node.row.lane)
-    const targetKey = `${pendingNode.row.sha}-${headNode.row.sha}`
-    const targetPlan = planEdgeRoute(pendingNode, headNode, targetKey, occupied)
+    const targetKey = `${pendingNode.row.sha}-${anchorNode.row.sha}`
+    const targetPlan = planEdgeRoute(pendingNode, anchorNode, targetKey, occupied)
     const sourceSha = worktreeChanges.mergeHeadShas?.[0]
     const sourceNode = sourceSha ? layout.shaToNode.get(sourceSha) ?? null : null
     const sourcePath = sourceNode
@@ -2400,15 +2409,15 @@ export function GraphCanvas() {
       y: pendingNode.y,
       idx: pendingNode.idx,
       lane: pendingNode.row.lane,
-      headX: headNode.x,
-      headY: headNode.y,
+      headX: anchorNode.x,
+      headY: anchorNode.y,
       color,
       count,
       conflictedCount,
       targetPlan,
       sourcePath,
     }
-  }, [layout, worktreeChanges, currentBranch])
+  }, [layout, worktreeChanges, currentBranch, actionPreview, actionPreviewGeometry])
 
   const renderedWorktreeNode = worktreeNode
     ?? (pendingCheckout ? retainedWorktreeNodeRef.current : null)
