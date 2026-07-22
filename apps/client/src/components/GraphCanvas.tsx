@@ -12,6 +12,7 @@ import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-c
 import {
   fitPreviewCamera,
   mergePreviewGutterX,
+  placeMergePreviewAboveGraph,
   placeWorktreeAbovePreview,
   stackPreviewChainAboveTarget,
   uncommitCrossLines,
@@ -2468,8 +2469,9 @@ export function GraphCanvas() {
     ? REBASE_PREVIEW_CAMERA_TRANSITION_MS
     : GRAPH_CAMERA_TRANSITION_MS}ms ${GRAPH_CAMERA_TRANSITION_EASING}`
 
-  // The working-tree / in-progress operation node floats one row above HEAD,
-  // in HEAD's lane. Merge conflicts also draw a dashed second-parent edge.
+  // Pending worktree changes float above HEAD. An in-progress merge instead
+  // sits above the newest graph row, matching where its completed merge commit
+  // will be inserted, while its parent edges remain anchored to HEAD/source.
   const worktreeNode = useMemo<WorktreeNodeGeometry | null>(() => {
     if (!layout || !worktreeChanges) return null
     const count = worktreeChanges.staged.length + worktreeChanges.unstaged.length
@@ -2493,12 +2495,15 @@ export function GraphCanvas() {
     const commitPreviewNode = operation === 'worktree' && actionPreview?.kind === 'commit'
       ? actionPreviewGeometry?.nodes[0]?.node ?? null
       : null
-    const placement = placeWorktreeAbovePreview(
+    const worktreePlacement = placeWorktreeAbovePreview(
       headNode,
       commitPreviewNode,
       NODE_SPACING_Y,
     )
-    const anchorNode = placement.anchor
+    const placement = operation === 'merge'
+      ? placeMergePreviewAboveGraph(layout.nodes[0] ?? headNode, NODE_SPACING_Y)
+      : worktreePlacement
+    const anchorNode = operation === 'worktree' ? worktreePlacement.anchor : headNode
     const pendingNode: LayoutNode = {
       row: {
         row: anchorNode.row.row - 1,
@@ -4373,38 +4378,12 @@ export function GraphCanvas() {
           ))}
         </svg>
 
-        {/* Nodes sit above graph rails and edges. Ref pills render in the HTML layer above node focus halos. */}
+        {/* Regular nodes sit above graph rails and edges but below ref pills. */}
         <svg
           width={fullWidth}
           height={fullHeight}
           style={{ position: 'absolute', top: 0, left: 0, zIndex: 30, pointerEvents: 'none', overflow: 'visible' }}
         >
-          {previewOverlay && (
-            <g>
-              <circle
-                cx={previewOverlay.previewNode.x}
-                cy={previewOverlay.previewNode.y}
-                r={NODE_RADIUS * 1.9}
-                fill={previewOverlay.color}
-                opacity={0.12}
-              />
-              <circle
-                cx={previewOverlay.previewNode.x}
-                cy={previewOverlay.previewNode.y}
-                r={NODE_RADIUS}
-                fill={NODE_FILL}
-                stroke={previewOverlay.color}
-                strokeWidth={3}
-                strokeDasharray="6 4"
-              />
-              <circle
-                cx={previewOverlay.previewNode.x}
-                cy={previewOverlay.previewNode.y}
-                r={2.5}
-                fill={previewOverlay.color}
-              />
-            </g>
-          )}
           {renderedNodeItems.map((node) => {
             const { row } = node
             const selected = row.sha === selectedSha
@@ -4574,6 +4553,76 @@ export function GraphCanvas() {
               </animated.g>
             )
           })}
+          {renderedWorktreeNode && (
+            <animated.g
+              opacity={worktreeOpacity}
+              style={{ pointerEvents: 'none' }}
+            >
+              {renderedWorktreeNode.sourcePath && (
+                <path
+                  d={renderedWorktreeNode.sourcePath}
+                  stroke={renderedWorktreeNode.color}
+                  strokeWidth={2.25}
+                  strokeLinecap="round"
+                  strokeDasharray="3 5"
+                  fill="none"
+                  opacity={0.55}
+                />
+              )}
+              <animated.path
+                d={to(
+                  [worktreeX, worktreeY, worktreeHeadX, worktreeHeadY],
+                  (x, y, headX, headY) => routedEdgePath(
+                    { x, y },
+                    { x: headX, y: headY },
+                    renderedWorktreeNode.targetPlan,
+                    0,
+                  ),
+                )}
+                stroke={renderedWorktreeNode.color}
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeDasharray="3 5"
+                fill="none"
+                opacity={0.7}
+              />
+            </animated.g>
+          )}
+        </svg>
+
+        {/* Preview nodes must remain visually above branch chips (z-index 40). */}
+        <svg
+          data-testid="preview-node-layer"
+          width={fullWidth}
+          height={fullHeight}
+          style={{ position: 'absolute', top: 0, left: 0, zIndex: 50, pointerEvents: 'none', overflow: 'visible' }}
+        >
+          {previewOverlay && (
+            <g>
+              <circle
+                cx={previewOverlay.previewNode.x}
+                cy={previewOverlay.previewNode.y}
+                r={NODE_RADIUS * 1.9}
+                fill={previewOverlay.color}
+                opacity={0.12}
+              />
+              <circle
+                cx={previewOverlay.previewNode.x}
+                cy={previewOverlay.previewNode.y}
+                r={NODE_RADIUS}
+                fill={NODE_FILL}
+                stroke={previewOverlay.color}
+                strokeWidth={3}
+                strokeDasharray="6 4"
+              />
+              <circle
+                cx={previewOverlay.previewNode.x}
+                cy={previewOverlay.previewNode.y}
+                r={2.5}
+                fill={previewOverlay.color}
+              />
+            </g>
+          )}
           {actionPreviewGeometry?.nodes.map(({ node, color }) => (
             <g key={`action-preview:${node.row.sha}`}>
               <circle
@@ -4614,39 +4663,12 @@ export function GraphCanvas() {
           )}
           {renderedWorktreeNode && (
             <animated.g
+              data-testid="pending-operation-node"
               onClick={(e) => { e.stopPropagation(); selectWorktree() }}
               opacity={worktreeOpacity}
               style={{ cursor: 'pointer', pointerEvents: 'auto' }}
             >
               <title>{worktreeTitle}</title>
-              {renderedWorktreeNode.sourcePath && (
-                <path
-                  d={renderedWorktreeNode.sourcePath}
-                  stroke={renderedWorktreeNode.color}
-                  strokeWidth={2.25}
-                  strokeLinecap="round"
-                  strokeDasharray="3 5"
-                  fill="none"
-                  opacity={0.55}
-                />
-              )}
-              <animated.path
-                d={to(
-                  [worktreeX, worktreeY, worktreeHeadX, worktreeHeadY],
-                  (x, y, headX, headY) => routedEdgePath(
-                    { x, y },
-                    { x: headX, y: headY },
-                    renderedWorktreeNode.targetPlan,
-                    0,
-                  ),
-                )}
-                stroke={renderedWorktreeNode.color}
-                strokeWidth={2.5}
-                strokeLinecap="round"
-                strokeDasharray="3 5"
-                fill="none"
-                opacity={0.7}
-              />
               {worktreeSelected && (
                 <animated.circle
                   cx={worktreeX}

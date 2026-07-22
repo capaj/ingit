@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   fitPreviewCamera,
   mergePreviewGutterX,
+  placeMergePreviewAboveGraph,
   placeWorktreeAbovePreview,
   stackPreviewChainAboveTarget,
   uncommitCrossLines,
@@ -89,6 +90,14 @@ describe('placeWorktreeAbovePreview', () => {
       y: 544,
       idx: 7,
     })
+  })
+})
+
+describe('placeMergePreviewAboveGraph', () => {
+  test('places an in-progress merge above the newest graph row', () => {
+    const top = { y: 152, idx: 0 }
+
+    expect(placeMergePreviewAboveGraph(top, 56)).toEqual({ y: 96, idx: -1 })
   })
 })
 

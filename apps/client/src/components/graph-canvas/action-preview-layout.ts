@@ -104,6 +104,17 @@ export function placeWorktreeAbovePreview<T extends VerticalPosition>(
   }
 }
 
+/** Place an in-progress merge where its completed merge commit will be inserted. */
+export function placeMergePreviewAboveGraph(
+  topNode: VerticalPosition,
+  rowSpacing: number,
+): VerticalPosition {
+  return {
+    y: topNode.y - rowSpacing,
+    idx: topNode.idx - 1,
+  }
+}
+
 /** Build the two diagonal strokes used to cross out an uncommit preview. */
 export function uncommitCrossLines(
   node: { x: number; y: number },
