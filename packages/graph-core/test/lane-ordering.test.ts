@@ -140,4 +140,19 @@ describe('lane ordering', () => {
     expect(compacted.get('prompt-4')).toBe(2)
     expect(compacted.get('prompt-1')).toBe(2)
   })
+
+  test('uses the opposite gutter before collapsing a bounded nested branch', () => {
+    const lanes = orderLaneSegmentsByContinuity([
+      { sha: 'child-tip', parentShas: ['child-root'], row: 0, lane: 2 },
+      { sha: 'child-root', parentShas: ['parent-tip'], row: 1, lane: 2 },
+      { sha: 'parent-tip', parentShas: ['base'], row: 2, lane: 1 },
+      { sha: 'base', parentShas: [], row: 3, lane: 0 },
+    ], 1)
+
+    expect(new Set([
+      lanes.get('parent-tip'),
+      lanes.get('child-tip'),
+    ])).toEqual(new Set([-1, 1]))
+    expect(lanes.get('child-root')).toBe(lanes.get('child-tip'))
+  })
 })

@@ -62,6 +62,13 @@ export function orderLaneSegmentsByContinuity(
     segmentById,
     boundedRadius,
   )
+  if (boundedRadius !== undefined) {
+    spreadBoundedSegmentsIntoAvailableLanes(
+      segments,
+      laneBySha,
+      boundedRadius,
+    )
+  }
   return laneBySha
 }
 
@@ -461,6 +468,91 @@ function assignSegment(
 
   const lane = side === 'left' ? -slot : slot
   for (const sha of segment.shas) laneBySha.set(sha, lane)
+}
+
+/**
+ * Side-aware ordering is the best first choice, but a narrow viewport can
+ * exhaust every slot on one side while another physical gutter is idle. Move
+ * the shorter rail in a collision to any lane with less vertical overlap,
+ * even across lane 0. This preserves side and continuity preferences whenever
+ * they fit while avoiding two simultaneous branches sharing one gutter.
+ */
+function spreadBoundedSegmentsIntoAvailableLanes(
+  segments: LaneSegment[],
+  laneBySha: Map<string, number>,
+  maxLaneRadius: number,
+): void {
+  if (maxLaneRadius < 1) return
+
+  const sideSegments = segments.filter((segment) => segment.lane !== 0)
+  const laneBySegmentId = new Map(
+    sideSegments.map((segment) => [
+      segment.id,
+      laneBySha.get(segment.shas[0]) ?? 0,
+    ]),
+  )
+  const physicalLanes = Array.from(
+    { length: maxLaneRadius * 2 },
+    (_, index) => {
+      const slot = index % maxLaneRadius + 1
+      return index < maxLaneRadius ? slot : -slot
+    },
+  )
+  const shortestFirst = [...sideSegments].sort((left, right) => (
+    left.continuity - right.continuity
+    || (left.endRow - left.startRow) - (right.endRow - right.startRow)
+    || right.startRow - left.startRow
+    || left.id.localeCompare(right.id)
+  ))
+  const overlapInLane = (segment: LaneSegment, lane: number): number => (
+    sideSegments.reduce((total, candidate) => {
+      if (
+        candidate.id === segment.id
+        || laneBySegmentId.get(candidate.id) !== lane
+      ) {
+        return total
+      }
+      return total + segmentOverlapRows(segment, candidate)
+    }, 0)
+  )
+
+  let changed = true
+  while (changed) {
+    changed = false
+
+    for (const segment of shortestFirst) {
+      const currentLane = laneBySegmentId.get(segment.id) as number
+      const currentOverlap = overlapInLane(segment, currentLane)
+      if (currentOverlap === 0) continue
+
+      let bestLane = currentLane
+      let bestOverlap = currentOverlap
+      let bestDistance = Infinity
+
+      for (const lane of physicalLanes) {
+        const overlap = overlapInLane(segment, lane)
+        const distance = Math.abs(lane - currentLane)
+        if (
+          overlap < bestOverlap
+          || (
+            overlap === bestOverlap
+            && overlap < currentOverlap
+            && distance < bestDistance
+          )
+        ) {
+          bestLane = lane
+          bestOverlap = overlap
+          bestDistance = distance
+        }
+      }
+
+      if (bestLane === currentLane || bestOverlap >= currentOverlap) continue
+
+      laneBySegmentId.set(segment.id, bestLane)
+      for (const sha of segment.shas) laneBySha.set(sha, bestLane)
+      changed = true
+    }
+  }
 }
 
 function findBoundedNestedSlot(
