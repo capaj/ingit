@@ -483,6 +483,65 @@ describe('outer rail path', () => {
     })
   })
 
+  test('gives a merge first-parent hook the centered source attachment', () => {
+    const rows = [
+      row('source', 2),
+      row('filler-1', 3),
+      row('merge-parent', 1),
+      row('merge-parent-parent', 1),
+      row('filler-4', 3),
+      row('filler-5', 3),
+      row('first-parent', 1),
+    ]
+    const layout = buildLayout(rows)
+    const routing = buildEdgeRoutingData(
+      [
+        {
+          key: 'source-first-parent',
+          from: layout.nodes[0],
+          to: layout.nodes[6],
+          isMerge: false,
+        },
+        {
+          key: 'source-merge-parent',
+          from: layout.nodes[0],
+          to: layout.nodes[2],
+          isMerge: true,
+        },
+        {
+          key: 'merge-parent-continuation',
+          from: layout.nodes[2],
+          to: layout.nodes[3],
+          isMerge: false,
+        },
+      ],
+      rows.map((entry) => entry.lane),
+    )
+
+    expect(routing.plans.get('source-first-parent')).toEqual({
+      mode: 'adjacent-hook',
+      laneA: 1,
+      laneB: 2,
+      track: 'from',
+      centeredSource: true,
+    })
+    expect(routing.plans.get('source-merge-parent')).toEqual({
+      mode: 'curve',
+      targetSide: 'right',
+      sourceSide: 'left',
+    })
+
+    const firstParentPath = buildAdjacentHookPath(
+      layout.nodes[0],
+      layout.nodes[6],
+      layout.nodes[0].x,
+      0,
+      16,
+      true,
+    )
+    expect(firstParentPath).toStartWith(`M${layout.nodes[0].x},${layout.nodes[0].y + 15}`)
+  })
+
   test('keeps connected first-parent segments on one vertical track', () => {
     const offsets = buildVerticalBundleOffsets([
       {

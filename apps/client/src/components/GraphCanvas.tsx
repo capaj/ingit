@@ -435,9 +435,27 @@ type EdgeRoutePlan =
     targetSide?: 'left' | 'right'
     sourceSide?: 'left' | 'right'
   }
-  | { mode: 'adjacent-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
-  | { mode: 'occlusion-hook'; laneA: number; laneB: number; track: 'from' | 'to' }
-  | { mode: 'target-hook'; laneA: number; laneB: number; track: 'from' }
+  | {
+    mode: 'adjacent-hook'
+    laneA: number
+    laneB: number
+    track: 'from' | 'to'
+    centeredSource?: boolean
+  }
+  | {
+    mode: 'occlusion-hook'
+    laneA: number
+    laneB: number
+    track: 'from' | 'to'
+    centeredSource?: boolean
+  }
+  | {
+    mode: 'target-hook'
+    laneA: number
+    laneB: number
+    track: 'from'
+    centeredSource?: boolean
+  }
   | { mode: 'inside-rail'; minLane: number; maxLane: number; sourceRailX: number; targetRailX: number; crossoverY: number }
   | {
     mode: 'outer-rail'
@@ -446,6 +464,7 @@ type EdgeRoutePlan =
     innerLane: number
     outerRailX: number
     horizontalTargetJoin?: boolean
+    centeredSource?: boolean
   }
 
 function sameParents(left: CommitRow, right: CommitRow) {
@@ -703,6 +722,7 @@ export function buildOuterRailPath(
   horizontalTargetJoin = false,
   targetJoinOffset = 0,
   targetNodeRadius = NODE_RADIUS,
+  centeredSource = false,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
@@ -746,7 +766,8 @@ export function buildOuterRailPath(
   }
 
   const usesSourceRail = (
-    Math.abs(outerRailX - from.x) < 0.001
+    !centeredSource
+    && Math.abs(outerRailX - from.x) < 0.001
     && Math.abs(from.x - to.x) > 0.001
   )
   let routeRailX = outerRailX
@@ -811,6 +832,7 @@ export function buildAdjacentHookPath(
   trackX: number,
   targetJoinOffset = 0,
   targetNodeRadius = NODE_RADIUS,
+  centeredSource = false,
 ) {
   const verticalDirection = to.y > from.y ? 1 : -1
   const sourceJoinY = from.y + verticalDirection * (NODE_RADIUS + 8)
@@ -854,7 +876,8 @@ export function buildAdjacentHookPath(
   }
 
   const usesSourceTrack = (
-    Math.abs(trackX - from.x) < 0.001
+    !centeredSource
+    && Math.abs(trackX - from.x) < 0.001
     && Math.abs(from.x - to.x) > 0.001
   )
   let routeTrackX = trackX
@@ -1250,6 +1273,7 @@ function routedEdgePath(
         (plan.track === 'to' ? to.x : from.x) + bundleOffset,
         targetJoinOffset,
         targetNodeRadius,
+        plan.centeredSource,
       )
     case 'inside-rail':
       return buildInsideRailPath(
@@ -1267,6 +1291,7 @@ function routedEdgePath(
         plan.horizontalTargetJoin,
         targetJoinOffset,
         targetNodeRadius,
+        plan.centeredSource,
       )
   }
 }
@@ -2016,6 +2041,41 @@ export function buildEdgeRoutingData(
     })
   }
 
+  // At a merge commit, the first-parent edge owns the centered bottom
+  // attachment while the additional parent edges peel away diagonally. A
+  // cross-lane first parent can still run on a source-side hook, so mark that
+  // hook as the centered continuation instead of letting it compete with the
+  // merge edge for the same attachment point.
+  const mergeSourceShas = new Set(
+    visibleEdges
+      .filter((edge) => edge.isMerge && edge.from.idx < edge.to.idx)
+      .map((edge) => edge.from.row.sha),
+  )
+  for (const edge of visibleEdges) {
+    if (
+      edge.isMerge
+      || edge.from.idx >= edge.to.idx
+      || !mergeSourceShas.has(edge.from.row.sha)
+    ) continue
+
+    const plan = plans.get(edge.key)
+    if (
+      (
+        plan?.mode === 'adjacent-hook'
+        || plan?.mode === 'occlusion-hook'
+        || plan?.mode === 'target-hook'
+      )
+      && plan.track === 'from'
+    ) {
+      plans.set(edge.key, { ...plan, centeredSource: true })
+    } else if (
+      plan?.mode === 'outer-rail'
+      && Math.abs(plan.outerRailX - edge.from.x) < 0.001
+    ) {
+      plans.set(edge.key, { ...plan, centeredSource: true })
+    }
+  }
+
   const verticalRailCandidates = visibleEdges.flatMap((edge) => {
     const plan = plans.get(edge.key)
     if (!plan) return []
@@ -2061,10 +2121,21 @@ export function buildEdgeRoutingData(
   const targetsWithCenteredContinuation = new Set<string>()
   for (const edge of visibleEdges) {
     const plan = plans.get(edge.key)
-    if (
+    const hasCenteredSource = (
       plan?.mode === 'straight'
+      || (
+        (
+          plan?.mode === 'adjacent-hook'
+          || plan?.mode === 'occlusion-hook'
+          || plan?.mode === 'target-hook'
+          || plan?.mode === 'outer-rail'
+        )
+        && plan.centeredSource === true
+      )
+    )
+    if (
+      hasCenteredSource
       && edge.from.idx < edge.to.idx
-      && Math.abs(edge.from.x - edge.to.x) < 0.001
     ) {
       targetsWithCenteredContinuation.add(edge.from.row.sha)
     }
