@@ -1,7 +1,8 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { CommitDetailResponse, CommitDiffResponse, ChangedPath } from '@ingit/rpc-contract'
 import { commitFileDiffKey, useAppStore } from '../store'
 import { DiffView } from './DiffView'
+import { shouldShowCommitDetailAtTop } from './commit-detail-placement'
 
 interface PRInfo {
   number: number
@@ -81,6 +82,41 @@ function formatDate(unix: number): string {
 }
 
 export function CommitDetail({ commit, diff, branchName, prs, authorAvatarUrl, ciState, ciRuns, githubUrl, onCheckout, onNavigate }: CommitDetailProps) {
+  const detailRef = useRef<HTMLDivElement>(null)
+  const [edge, setEdge] = useState<'top' | 'bottom'>('bottom')
+
+  const updateEdge = useCallback(() => {
+    const detail = detailRef.current
+    if (!commit || !detail) return
+
+    const node = document.querySelector<SVGGElement>(`[data-commit-sha="${commit.sha}"]`)
+    const container = detail.parentElement
+    if (!node || !container) {
+      setEdge('bottom')
+      return
+    }
+
+    const nodeBounds = node.getBoundingClientRect()
+    const containerBounds = container.getBoundingClientRect()
+    const detailBounds = detail.getBoundingClientRect()
+    setEdge(shouldShowCommitDetailAtTop(nodeBounds, containerBounds, detailBounds) ? 'top' : 'bottom')
+  }, [commit])
+
+  useLayoutEffect(() => {
+    if (!commit || !detailRef.current) return
+
+    updateEdge()
+    const observer = new ResizeObserver(updateEdge)
+    observer.observe(detailRef.current)
+    window.addEventListener('resize', updateEdge)
+    document.addEventListener('scroll', updateEdge, true)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateEdge)
+      document.removeEventListener('scroll', updateEdge, true)
+    }
+  }, [commit, updateEdge])
+
   if (!commit) {
     return null
   }
@@ -89,11 +125,12 @@ export function CommitDetail({ commit, diff, branchName, prs, authorAvatarUrl, c
 
   return (
     <div
+      ref={detailRef}
       data-testid="commit-detail"
       style={{
         position: 'absolute',
         right: 0,
-        bottom: 0,
+        [edge]: 0,
         zIndex: 40,
         width: 400,
         height: 'fit-content',

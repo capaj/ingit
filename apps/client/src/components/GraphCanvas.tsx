@@ -5,6 +5,7 @@ import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
 import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse, WorktreeSummary } from '@ingit/rpc-contract'
 import { openTerminal } from '../api'
 import { useAppStore } from '../store'
+import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
@@ -2199,6 +2200,8 @@ export function GraphCanvas() {
   const graphAnimationSuppressToken = useAppStore((state) => state.graphAnimationSuppressToken)
   const showCommitMessages = useAppStore((state) => state.showCommitMessages)
   const showGutterColors = useAppStore((state) => state.showGutterColors)
+  const zoom = useAppStore((state) => state.graphZoom)
+  const setGraphZoom = useAppStore((state) => state.setGraphZoom)
   const showError = useAppStore((state) => state.showError)
   const commitCIStatus = useAppStore((state) => state.commitCIStatus)
   const fetchCommitCIStatusesIfNeeded = useAppStore((state) => state.fetchCommitCIStatusesIfNeeded)
@@ -2221,7 +2224,6 @@ export function GraphCanvas() {
   const worktreeMotionInitializedRef = useRef(false)
   const addRefHoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingScrollTopRef = useRef(0)
-  const [zoom, setZoom] = useState(1)
   const [zoomIndicatorVisible, setZoomIndicatorVisible] = useState(false)
   const [scrollTop, setScrollTop] = useState(0)
   const [browserWidth, setBrowserWidth] = useState(
@@ -2243,7 +2245,7 @@ export function GraphCanvas() {
     graphProgress: 1,
     config: GRAPH_SPRING_CONFIG,
   }))
-  const zoomRef = useRef(1)
+  const zoomRef = useRef(zoom)
   const zoomIndicatorHideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suppressAutoScrollUntilRef = useRef(0)
   const lastAppliedCommitScrollKeyRef = useRef<number | null>(null)
@@ -2908,9 +2910,9 @@ export function GraphCanvas() {
 
     const graphAnchorY = (el.scrollTop + viewportAnchorY) / oldZoom
     zoomRef.current = newZoom
-    setZoom(newZoom)
+    setGraphZoom(newZoom)
     el.scrollTop = Math.max(0, graphAnchorY * newZoom - viewportAnchorY)
-  }, [showZoomIndicator])
+  }, [setGraphZoom, showZoomIndicator])
 
   const resetZoom = useCallback(() => {
     const el = scrollRef.current
@@ -2933,7 +2935,10 @@ export function GraphCanvas() {
       const rect = el.getBoundingClientRect()
       const oldZoom = zoomRef.current
       const delta = e.deltaY > 0 ? -0.1 : 0.1
-      const newZoom = Math.max(0.1, Math.min(3, Math.round((oldZoom + delta) * 10) / 10))
+      const newZoom = Math.max(
+        MIN_GRAPH_ZOOM,
+        Math.min(MAX_GRAPH_ZOOM, Math.round((oldZoom + delta) * 10) / 10),
+      )
 
       // Keep the graph point under the cursor stable while scaling.
       applyUserZoom(newZoom, e.clientY - rect.top)
@@ -3649,10 +3654,10 @@ export function GraphCanvas() {
 
     suppressAutoScrollUntilRef.current = Date.now() + 500
     zoomRef.current = fitZoom
-    setZoom(fitZoom)
+    setGraphZoom(fitZoom)
     el.scrollTo({ top: 0, behavior: 'smooth' })
     requestAnimationFrame(() => refreshViewport(el, fitZoom))
-  }, [mergePreviewGeometry, refreshViewport])
+  }, [mergePreviewGeometry, refreshViewport, setGraphZoom])
 
   const handleMergeClick = useCallback(() => {
     if (!selectedRefName) return
@@ -4471,6 +4476,7 @@ export function GraphCanvas() {
             return (
               <animated.g
                 key={node.key}
+                data-commit-sha={row.sha}
                 onClick={node.interactive ? (e) => { e.stopPropagation(); selectCommit(row.sha) } : undefined}
                 onPointerEnter={node.interactive ? () => showAddRefControls(row.sha) : undefined}
                 onPointerLeave={node.interactive ? () => scheduleHideAddRefControls(row.sha) : undefined}

@@ -84,6 +84,7 @@ import {
 } from './store/worktree-slice'
 import {
   createUiSliceState,
+  persistGraphZoomPreference,
   type ErrorDialogAction,
   type UiSlice,
 } from './store/ui-slice'
@@ -628,6 +629,11 @@ export const useAppStore = create<AppState>((baseSet, get) => {
   setShowGutterColors: (value) => {
     try { localStorage.setItem('showGutterColors', String(value)) } catch {}
     set({ showGutterColors: value })
+  },
+
+  setGraphZoom: (value) => {
+    const graphZoom = persistGraphZoomPreference(value)
+    set({ graphZoom })
   },
 
   setWorktreeCommitMessage: (message) => set({ worktreeCommitMessage: message }),
