@@ -1,4 +1,4 @@
-import { oc } from '@orpc/contract'
+import { eventIterator, oc } from '@orpc/contract'
 import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -95,6 +95,25 @@ export const WorktreeChanges = z.object({
   staged: z.array(WorktreeFile),
   unstaged: z.array(WorktreeFile),
 })
+
+export const PackageManagerInstallEvent = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('start'),
+    command: z.string(),
+  }),
+  z.object({
+    type: z.literal('output'),
+    stream: z.enum(['stdout', 'stderr', 'status']),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal('complete'),
+    ok: z.boolean(),
+    exitCode: z.number().optional(),
+    error: z.string().optional(),
+    changes: WorktreeChanges.optional(),
+  }),
+])
 
 export const StageActionKind = z.enum([
   'stage',
@@ -322,6 +341,15 @@ export const contract = {
       paths: z.array(z.string()),
     }))
     .output(WorktreeChanges),
+
+  installAndResolveLockfile: oc
+    .input(z.object({
+      repoId: RepoId,
+      path: z.string(),
+      fileName: z.string().min(1).max(255),
+      command: z.string().min(1).max(1_000),
+    }))
+    .output(eventIterator(PackageManagerInstallEvent)),
 
   getWorktreeFileDiff: oc
     .input(z.object({

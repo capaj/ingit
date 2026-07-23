@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { InProgressOperationKind, WorktreeFile, WorktreeDiffArea } from '@ingit/rpc-contract'
+import {
+  type InProgressOperationKind,
+  type PackageManagerInstallEvent,
+  type WorktreeFile,
+  type WorktreeDiffArea,
+} from '@ingit/rpc-contract'
 import { useAppStore, worktreeDiffKey } from '../store'
-import { getCommitDetail } from '../api'
+import { getCommitDetail, installAndResolveLockfile } from '../api'
 import { RefActionButton } from './graph-canvas/ActionButtons'
 import { DiffView } from './DiffView'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
+import { InstallOutputDialog, type InstallOutputDialogState } from './InstallOutputDialog'
+import {
+  findConflictResolver,
+  useConflictResolvers,
+  type ConflictResolver,
+} from '../conflict-resolvers'
 
 const STATUS_COLOR: Record<string, string> = {
   A: '#a6e3a1',
@@ -34,12 +45,16 @@ function FileRow({
   actionLabel,
   onAction,
   onDiscard,
+  resolvingLockfile,
+  onInstallAndResolve,
 }: {
   file: WorktreeFile
   area: WorktreeDiffArea
   actionLabel: string
   onAction: () => void
   onDiscard: () => void
+  resolvingLockfile?: boolean
+  onInstallAndResolve?: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const loadWorktreeFileDiff = useAppStore((s) => s.loadWorktreeFileDiff)
@@ -127,6 +142,15 @@ function FileRow({
           </bdi>
         </span>
         <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
+          {onInstallAndResolve && (
+            <RefActionButton
+              label="run install & resolve"
+              tone="success"
+              size="compact"
+              loading={resolvingLockfile}
+              onClick={onInstallAndResolve}
+            />
+          )}
           <RefActionButton label={actionLabel} tone="neutral" size="compact" variant="ghost" iconOnly onClick={onAction} />
           <RefActionButton label="Discard" tone="danger" size="compact" variant="ghost" iconOnly onClick={onDiscard} />
         </span>
@@ -147,6 +171,9 @@ function Section({
   rowActionLabel,
   onRowAction,
   onDiscard,
+  resolvingLockfilePath,
+  conflictResolvers = [],
+  onInstallAndResolve,
 }: {
   title: string
   files: WorktreeFile[]
@@ -158,6 +185,9 @@ function Section({
   rowActionLabel: string | ((file: WorktreeFile) => string)
   onRowAction: (file: WorktreeFile) => void
   onDiscard: (file: WorktreeFile) => void
+  resolvingLockfilePath?: string
+  conflictResolvers?: readonly ConflictResolver[]
+  onInstallAndResolve?: (file: WorktreeFile, resolver: ConflictResolver) => void
 }) {
   if (files.length === 0) return null
   return (
@@ -170,16 +200,27 @@ function Section({
           <RefActionButton label={bulkLabel} tone={bulkTone} size="compact" disabled={bulkDisabled} onClick={onBulk} />
         )}
       </div>
-      {files.map((file) => (
-        <FileRow
-          key={`${file.status}:${file.path}`}
-          file={file}
-          area={area}
-          actionLabel={typeof rowActionLabel === 'function' ? rowActionLabel(file) : rowActionLabel}
-          onAction={() => onRowAction(file)}
-          onDiscard={() => onDiscard(file)}
-        />
-      ))}
+      {files.map((file) => {
+        const resolver = file.status === 'U'
+          ? findConflictResolver(file.path, conflictResolvers)
+          : null
+        return (
+          <FileRow
+            key={`${file.status}:${file.path}`}
+            file={file}
+            area={area}
+            actionLabel={typeof rowActionLabel === 'function' ? rowActionLabel(file) : rowActionLabel}
+            onAction={() => onRowAction(file)}
+            onDiscard={() => onDiscard(file)}
+            resolvingLockfile={resolvingLockfilePath === file.path}
+            onInstallAndResolve={
+              onInstallAndResolve && resolver
+                ? () => onInstallAndResolve(file, resolver)
+                : undefined
+            }
+          />
+        )
+      })}
     </div>
   )
 }
@@ -559,6 +600,8 @@ export function WorkingTreeDetail() {
   const runStageAction = useAppStore((s) => s.runStageAction)
   const createStash = useAppStore((s) => s.createStash)
   const pendingMutation = useAppStore((s) => s.pendingMutation)
+  const repoId = useAppStore((s) => s.repoId)
+  const conflictResolvers = useConflictResolvers()
   const [stashDialogOpen, setStashDialogOpen] = useState(false)
   const [discardDialog, setDiscardDialog] = useState<{
     title: string
@@ -566,6 +609,7 @@ export function WorkingTreeDetail() {
     paths: string[]
     all: boolean
   } | null>(null)
+  const [installDialog, setInstallDialog] = useState<InstallOutputDialogState | null>(null)
 
   const staged = changes?.staged ?? []
   const unstaged = changes?.unstaged ?? []
@@ -607,6 +651,76 @@ export function WorkingTreeDetail() {
     if (request) void runStageAction(request.all ? 'discard-all' : 'discard', request.paths)
   }
 
+  const runLockfileInstall = async (file: WorktreeFile, resolver: ConflictResolver) => {
+    if (!repoId || installDialog?.running) return
+
+    setInstallDialog({
+      path: file.path,
+      command: '',
+      output: '',
+      running: true,
+    })
+
+    const updateFromEvent = (event: PackageManagerInstallEvent) => {
+      if (event.type === 'start') {
+        setInstallDialog((current) => current ? { ...current, command: event.command } : current)
+        return
+      }
+
+      if (event.type === 'output') {
+        setInstallDialog((current) => current
+          ? { ...current, output: current.output + event.text }
+          : current)
+        return
+      }
+
+      if (event.ok && event.changes) {
+        useAppStore.setState({
+          worktreeChanges: event.changes,
+          worktreeFileDiffs: {},
+        })
+        setInstallDialog(null)
+        return
+      }
+
+      const error = event.error ?? 'Package manager install failed'
+      setInstallDialog((current) => current
+        ? {
+            ...current,
+            running: false,
+            error,
+            output: current.output.endsWith('\n')
+              ? `${current.output}\n${error}\n`
+              : `${current.output}\n\n${error}\n`,
+          }
+        : current)
+    }
+
+    try {
+      const events = await installAndResolveLockfile(
+        repoId,
+        file.path,
+        resolver.fileName,
+        resolver.command,
+      )
+      while (true) {
+        const result = await events.next()
+        if (result.done) break
+        updateFromEvent(result.value)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setInstallDialog((current) => current
+        ? {
+            ...current,
+            running: false,
+            error: message,
+            output: `${current.output}\n\n${message}\n`,
+          }
+        : current)
+    }
+  }
+
   return (
     <div
       data-testid="working-tree-detail"
@@ -638,6 +752,10 @@ export function WorkingTreeDetail() {
           void createStash(message || undefined)
         }}
         onClose={() => setStashDialogOpen(false)}
+      />
+      <InstallOutputDialog
+        state={installDialog}
+        onClose={() => setInstallDialog(null)}
       />
       <NativeConfirmDialog
         open={!!discardDialog}
@@ -700,6 +818,9 @@ export function WorkingTreeDetail() {
               rowActionLabel={(file) => (file.status === 'U' ? 'Mark resolved' : 'Stage')}
               onRowAction={(file) => runStageAction('stage', [file.path])}
               onDiscard={requestDiscardFile}
+              resolvingLockfilePath={installDialog?.running ? installDialog.path : undefined}
+              conflictResolvers={conflictResolvers}
+              onInstallAndResolve={(file, resolver) => void runLockfileInstall(file, resolver)}
             />
           </>
         )}

@@ -356,6 +356,24 @@ export interface WorktreeChangesResponse {
   unstaged: WorktreeFile[]
 }
 
+export type PackageManagerInstallEvent =
+  | {
+      type: 'start'
+      command: string
+    }
+  | {
+      type: 'output'
+      stream: 'stdout' | 'stderr' | 'status'
+      text: string
+    }
+  | {
+      type: 'complete'
+      ok: boolean
+      exitCode?: number
+      error?: string
+      changes?: WorktreeChangesResponse
+    }
+
 export type StageActionKind =
   | 'stage'
   | 'unstage'

@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { parseCommandLine } from '@ingit/rpc-contract'
 import { useAppStore } from '../store'
+import {
+  cloneConflictResolvers,
+  DEFAULT_CONFLICT_RESOLVERS,
+  resetConflictResolvers,
+  saveConflictResolvers,
+  serializeConflictResolvers,
+  useConflictResolvers,
+  type ConflictResolver,
+} from '../conflict-resolvers'
 import {
   cloneCommitIconRules,
   COMMIT_ICON_NAMES,
@@ -59,6 +69,20 @@ const CUSTOM_SVG_TEMPLATE = `<svg viewBox="0 0 24 24" fill="none" stroke="curren
 
 function newRuleId(existingRules: readonly CommitIconRule[]): string {
   const existing = new Set(existingRules.map((rule) => rule.id))
+  const randomPart = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  let id = `custom-${randomPart}`
+  let suffix = 2
+  while (existing.has(id)) {
+    id = `custom-${randomPart}-${suffix}`
+    suffix += 1
+  }
+  return id
+}
+
+function newConflictResolverId(existingResolvers: readonly ConflictResolver[]): string {
+  const existing = new Set(existingResolvers.map((resolver) => resolver.id))
   const randomPart = typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -586,6 +610,216 @@ function CommitIconSettings({
   )
 }
 
+function normalizeConflictResolvers(
+  resolvers: readonly ConflictResolver[],
+): ConflictResolver[] {
+  return resolvers.map((resolver) => ({
+    ...resolver,
+    fileName: resolver.fileName.trim(),
+    command: resolver.command.trim(),
+  }))
+}
+
+function conflictResolverValidationError(
+  resolvers: readonly ConflictResolver[],
+): string | null {
+  const fileNames = new Set<string>()
+  for (const resolver of resolvers) {
+    const fileName = resolver.fileName.trim()
+    const command = resolver.command.trim()
+    if (!fileName) return 'Every resolver needs a file name.'
+    if (fileName === '.' || fileName === '..' || fileName.includes('/') || fileName.includes('\\')) {
+      return `“${fileName}” must be a file name, not a path.`
+    }
+    if (fileNames.has(fileName)) return `“${fileName}” has more than one resolver.`
+    if (!command) return `“${fileName}” needs a command.`
+    if (!parseCommandLine(command)) {
+      return `The command for “${fileName}” is empty or contains an unterminated quote.`
+    }
+    fileNames.add(fileName)
+  }
+  return null
+}
+
+function ConflictResolverSettings({
+  onClose,
+  onDirtyChange,
+}: {
+  onClose: () => void
+  onDirtyChange: (dirty: boolean) => void
+}) {
+  const activeResolvers = useConflictResolvers()
+  const [draftResolvers, setDraftResolvers] = useState<ConflictResolver[]>(
+    () => cloneConflictResolvers(activeResolvers),
+  )
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const dirty = useMemo(() => (
+    serializeConflictResolvers(normalizeConflictResolvers(draftResolvers))
+      !== serializeConflictResolvers(activeResolvers)
+  ), [activeResolvers, draftResolvers])
+
+  useEffect(() => {
+    onDirtyChange(dirty)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
+
+  const updateResolver = (id: string, update: Partial<ConflictResolver>) => {
+    setSaveError(null)
+    setDraftResolvers((resolvers) => resolvers.map(
+      (resolver) => resolver.id === id ? { ...resolver, ...update } : resolver,
+    ))
+  }
+
+  const addResolver = () => {
+    const next: ConflictResolver = {
+      id: newConflictResolverId(draftResolvers),
+      fileName: '',
+      command: '',
+    }
+    setDraftResolvers((resolvers) => [...resolvers, next])
+    setSaveError(null)
+  }
+
+  const restoreDefaults = () => {
+    setDraftResolvers(cloneConflictResolvers(DEFAULT_CONFLICT_RESOLVERS))
+    setSaveError(null)
+  }
+
+  const save = () => {
+    const normalized = normalizeConflictResolvers(draftResolvers)
+    const validationError = conflictResolverValidationError(normalized)
+    if (validationError) {
+      setSaveError(validationError)
+      return
+    }
+
+    const isDefault = serializeConflictResolvers(normalized)
+      === serializeConflictResolvers(DEFAULT_CONFLICT_RESOLVERS)
+    const saved = isDefault ? resetConflictResolvers() : saveConflictResolvers(normalized)
+    if (!saved) {
+      setSaveError('Could not save conflict resolver settings to local storage.')
+      return
+    }
+    onClose()
+  }
+
+  return (
+    <div style={{ display: 'flex', minWidth: 0, minHeight: 0, height: '100%', flexDirection: 'column' }}>
+      <div style={{ padding: '15px 18px 13px', borderBottom: '1px solid #313244' }}>
+        <h2 style={{ margin: 0, color: '#f5e0dc', fontSize: 16 }}>Lockfile conflict resolvers</h2>
+        <p style={{ margin: '5px 0 0', color: '#7f849c', fontSize: 11, lineHeight: 1.45 }}>
+          Show “run install &amp; resolve” for conflicted files with an exact matching name.
+          The command runs from that file&apos;s directory.
+        </p>
+      </div>
+
+      <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid #313244', background: '#181825' }}>
+        <span style={{ color: '#7f849c', fontSize: 10 }}>
+          Commands launch directly with your user permissions. Quotes are supported; no shell is added implicitly.
+        </span>
+        <button
+          type="button"
+          onClick={addResolver}
+          style={{ ...secondaryButtonStyle, height: 28, marginLeft: 'auto', flexShrink: 0 }}
+        >
+          ＋ Add resolver
+        </button>
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 14 }}>
+        <div
+          aria-hidden="true"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(170px, 0.7fr) minmax(280px, 1.3fr) 32px',
+            gap: 8,
+            padding: '0 8px 7px',
+            color: '#6c7086',
+            fontSize: 9,
+            fontWeight: 800,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}
+        >
+          <span>File name</span>
+          <span>Command</span>
+          <span />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {draftResolvers.map((resolver, index) => (
+            <div
+              key={resolver.id}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(170px, 0.7fr) minmax(280px, 1.3fr) 32px',
+                alignItems: 'center',
+                gap: 8,
+                padding: 8,
+                border: '1px solid #313244',
+                borderRadius: 7,
+                background: '#181825',
+              }}
+            >
+              <input
+                value={resolver.fileName}
+                aria-label={`Resolver ${index + 1} file name`}
+                placeholder="example.lock"
+                spellCheck={false}
+                onChange={(event) => updateResolver(resolver.id, { fileName: event.target.value })}
+                style={{ ...fieldStyle, height: 32, padding: '0 9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}
+              />
+              <input
+                value={resolver.command}
+                aria-label={`Resolver ${index + 1} command`}
+                placeholder="package-manager install"
+                spellCheck={false}
+                onChange={(event) => updateResolver(resolver.id, { command: event.target.value })}
+                style={{ ...fieldStyle, height: 32, padding: '0 9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}
+              />
+              <button
+                type="button"
+                aria-label={`Delete resolver for ${resolver.fileName || `row ${index + 1}`}`}
+                title="Delete resolver"
+                onClick={() => {
+                  setDraftResolvers((resolvers) => resolvers.filter((entry) => entry.id !== resolver.id))
+                  setSaveError(null)
+                }}
+                style={{
+                  width: 30,
+                  height: 30,
+                  padding: 0,
+                  border: '1px solid transparent',
+                  borderRadius: 6,
+                  background: 'transparent',
+                  color: '#f38ba8',
+                  fontSize: 15,
+                  cursor: 'pointer',
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {draftResolvers.length === 0 && (
+            <div style={{ padding: 36, border: '1px dashed #313244', borderRadius: 7, color: '#6c7086', fontSize: 11, textAlign: 'center' }}>
+              No resolvers configured. Conflicted files will use the normal “Mark resolved” action.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ minHeight: 52, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, borderTop: '1px solid #313244', background: '#11111b' }}>
+        <button type="button" onClick={restoreDefaults} style={secondaryButtonStyle}>Restore defaults</button>
+        <span style={{ color: saveError ? '#f38ba8' : '#585b70', fontSize: 10, marginLeft: 4 }}>
+          {saveError ?? `${draftResolvers.length} resolver${draftResolvers.length === 1 ? '' : 's'} · stored in this browser`}
+        </span>
+        <button type="button" onClick={onClose} style={{ ...secondaryButtonStyle, marginLeft: 'auto' }}>Cancel</button>
+        <button type="button" onClick={save} style={primaryButtonStyle}>Save settings</button>
+      </div>
+    </div>
+  )
+}
+
 function GraphAppearanceSettings({ onClose }: { onClose: () => void }) {
   const showGutterColors = useAppStore((state) => state.showGutterColors)
   const setShowGutterColors = useAppStore((state) => state.setShowGutterColors)
@@ -655,11 +889,15 @@ function settingsNavButtonStyle(active: boolean): CSSProperties {
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const [section, setSection] = useState<'appearance' | 'commit-icons'>('appearance')
+  const [section, setSection] = useState<'appearance' | 'commit-icons' | 'conflict-resolvers'>('appearance')
   const [commitIconsDirty, setCommitIconsDirty] = useState(false)
+  const [conflictResolversDirty, setConflictResolversDirty] = useState(false)
 
   const requestClose = () => {
-    if (commitIconsDirty && !window.confirm('Discard unsaved commit icon changes?')) return
+    if (
+      (commitIconsDirty || conflictResolversDirty)
+      && !window.confirm('Discard unsaved settings changes?')
+    ) return
     onClose()
   }
 
@@ -737,6 +975,15 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             >
               Commit icons{commitIconsDirty ? ' •' : ''}
             </button>
+            <div style={{ padding: '14px 8px 6px', color: '#585b70', fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Working tree</div>
+            <button
+              type="button"
+              onClick={() => setSection('conflict-resolvers')}
+              aria-current={section === 'conflict-resolvers' ? 'page' : undefined}
+              style={settingsNavButtonStyle(section === 'conflict-resolvers')}
+            >
+              Lockfile resolvers{conflictResolversDirty ? ' •' : ''}
+            </button>
           </div>
           <div style={{ marginTop: 'auto', padding: 12, borderTop: '1px solid #313244', color: '#45475a', fontSize: 9, lineHeight: 1.45 }}>
             Settings apply across repositories on this device.
@@ -750,6 +997,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
               </div>
               <div style={{ display: section === 'commit-icons' ? 'block' : 'none', height: '100%' }}>
                 <CommitIconSettings onClose={onClose} onDirtyChange={setCommitIconsDirty} />
+              </div>
+              <div style={{ display: section === 'conflict-resolvers' ? 'block' : 'none', height: '100%' }}>
+                <ConflictResolverSettings onClose={onClose} onDirtyChange={setConflictResolversDirty} />
               </div>
             </>
           )}

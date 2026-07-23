@@ -10,6 +10,7 @@ import { fetchGithubCommitAuthor } from './github-author-handler.js'
 import { discoverRepos, listDirectory } from './discover-repos.js'
 import { listAgentSessions, focusAgentSession, installWindowCalls } from './agent-sessions.js'
 import { openDefaultTerminal } from './open-terminal.js'
+import { installAndResolveLockfile } from './lockfile-install.js'
 
 const sessionManager = new SessionManager()
 
@@ -140,6 +141,11 @@ export const router = os.router({
       case 'discard-all':
         return session.discardAll()
     }
+  }),
+
+  installAndResolveLockfile: os.installAndResolveLockfile.handler(({ input }) => {
+    const session = getSession(input.repoId)
+    return installAndResolveLockfile(session, input.path, input.fileName, input.command)
   }),
 
   getWorktreeFileDiff: os.getWorktreeFileDiff.handler(async ({ input }) => {

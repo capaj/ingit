@@ -3,6 +3,7 @@ import { RPCLink } from '@orpc/client/websocket'
 import type {
   HistoryQuery,
   InProgressOperationKind,
+  PackageManagerInstallEvent,
   StageActionKind,
   StashActionResponse,
   StashSummary,
@@ -110,6 +111,15 @@ export function dropStash(repoId: string, stashSha: string): Promise<StashAction
 
 export function stageAction(repoId: string, action: StageActionKind, paths: string[]) {
   return ensureClient().stageAction({ repoId, action, paths })
+}
+
+export function installAndResolveLockfile(
+  repoId: string,
+  path: string,
+  fileName: string,
+  command: string,
+): Promise<AsyncIterator<PackageManagerInstallEvent>> {
+  return ensureClient().installAndResolveLockfile({ repoId, path, fileName, command })
 }
 
 export function getWorktreeFileDiff(repoId: string, path: string, area: WorktreeDiffArea, oldPath?: string) {
