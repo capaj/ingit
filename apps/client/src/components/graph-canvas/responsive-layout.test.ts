@@ -3,6 +3,7 @@ import type { CommitRow } from '@ingit/rpc-contract'
 import {
   buildLayout,
   fitGraphToBrowserWindow,
+  fitLaneFrameToRows,
   LANE_WIDTH,
   fitGraphToViewport,
 } from './layout'
@@ -103,5 +104,41 @@ describe('responsive graph layout', () => {
     const renderedScreenX = graphLeft + fit.laneCenterX * zoom
 
     expect(renderedScreenX).toBe(browserWidth / 2)
+  })
+
+  test('shifts lane zero to center the occupied gutters without leaving the viewport envelope', () => {
+    const fit = fitGraphToViewport(1440, 260)
+    const laneFrame = fitLaneFrameToRows([
+      row('center', 0),
+      row('right-1', 1),
+      row('right-2', 2),
+      row('right-3', 3),
+    ], fit)
+
+    expect(laneFrame.laneCenterX).toBe(fit.laneCenterX - 1.5 * LANE_WIDTH)
+    expect(laneFrame.laneCenterX).toBeLessThan(fit.laneCenterX)
+
+    const layout = buildLayout(
+      [row('center', 0), row('right-3', 3)],
+      fit.extraLeftGutter,
+      fit.rightGutter,
+      laneFrame,
+    )
+    const occupiedMidpoint = (
+      (layout.shaToNode.get('center')?.x ?? 0)
+      + (layout.shaToNode.get('right-3')?.x ?? 0)
+    ) / 2
+    expect(occupiedMidpoint).toBe(fit.laneCenterX)
+  })
+
+  test('leaves lane zero fixed when occupied gutters are already symmetric', () => {
+    const fit = fitGraphToViewport(1440, 260)
+    const laneFrame = fitLaneFrameToRows([
+      row('left', -2),
+      row('center', 0),
+      row('right', 2),
+    ], fit)
+
+    expect(laneFrame.laneCenterX).toBe(fit.laneCenterX)
   })
 })

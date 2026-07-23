@@ -135,11 +135,51 @@ describe('lane ordering', () => {
     ]).size).toBe(3)
 
     const compacted = orderLaneSegmentsByContinuity(rows, 2)
-    expect(new Set([
-      compacted.get('dev-tip'),
-      compacted.get('fix-tip'),
-      compacted.get('cors-tip'),
-    ]).size).toBe(3)
+    // A radius of two only provides two gutters on this side. Reusing one is
+    // preferable to moving a sibling across the checked-out lane.
+    expect(compacted.get('fix-tip')).not.toBe(compacted.get('dev-tip'))
+    for (const sha of ['dev-tip', 'fix-tip', 'cors-tip']) {
+      expect(compacted.get(sha)).toBeGreaterThan(0)
+    }
+  })
+
+  test('balances independent merge families across both sides of the center', () => {
+    const rows = [
+      { sha: 'c0', parentShas: ['c1', 'branch-a'], row: 0, lane: 0 },
+      { sha: 'branch-a', parentShas: [], row: 1, lane: 1 },
+      { sha: 'c1', parentShas: ['c2', 'branch-b'], row: 2, lane: 0 },
+      { sha: 'branch-b', parentShas: [], row: 3, lane: 2 },
+      { sha: 'c2', parentShas: ['c3', 'branch-c'], row: 4, lane: 0 },
+      { sha: 'branch-c', parentShas: [], row: 5, lane: 3 },
+      { sha: 'c3', parentShas: ['c4', 'branch-d'], row: 6, lane: 0 },
+      { sha: 'branch-d', parentShas: [], row: 7, lane: 4 },
+      { sha: 'c4', parentShas: [], row: 8, lane: 0 },
+    ]
+
+    for (const radius of [undefined, 2]) {
+      const lanes = orderLaneSegmentsByContinuity(rows, radius)
+      const branchLanes = ['branch-a', 'branch-b', 'branch-c', 'branch-d']
+        .map((sha) => lanes.get(sha) as number)
+      expect(branchLanes.filter((lane) => lane < 0)).toHaveLength(2)
+      expect(branchLanes.filter((lane) => lane > 0)).toHaveLength(2)
+    }
+  })
+
+  test('keeps labeled nested branches on their parent side in a bounded viewport', () => {
+    const rows = [
+      { sha: 'branch-a', parentShas: ['p0'], row: 0, lane: 2 },
+      { sha: 'branch-b', parentShas: ['p1'], row: 1, lane: 3 },
+      { sha: 'branch-c', parentShas: ['p2'], row: 2, lane: 4 },
+      { sha: 'p0', parentShas: ['p1'], row: 3, lane: 1 },
+      { sha: 'p1', parentShas: ['p2'], row: 4, lane: 1 },
+      { sha: 'p2', parentShas: ['base'], row: 5, lane: 1 },
+      { sha: 'base', parentShas: [], row: 6, lane: 0 },
+    ]
+
+    const lanes = orderLaneSegmentsByContinuity(rows, 2)
+    for (const sha of ['branch-a', 'branch-b', 'branch-c', 'p0', 'p1', 'p2']) {
+      expect(lanes.get(sha)).toBeGreaterThan(0)
+    }
   })
 
   test('pulls a center-line merge target to the inner gutter regardless of its lane', () => {
@@ -237,7 +277,7 @@ describe('lane ordering', () => {
     expect(compacted.get('prompt-1')).toBe(2)
   })
 
-  test('uses the opposite gutter before collapsing a bounded nested branch', () => {
+  test('does not move a bounded nested branch across the center when its side is full', () => {
     const lanes = orderLaneSegmentsByContinuity([
       { sha: 'child-tip', parentShas: ['child-root'], row: 0, lane: 2 },
       { sha: 'child-root', parentShas: ['parent-tip'], row: 1, lane: 2 },
@@ -245,10 +285,8 @@ describe('lane ordering', () => {
       { sha: 'base', parentShas: [], row: 3, lane: 0 },
     ], 1)
 
-    expect(new Set([
-      lanes.get('parent-tip'),
-      lanes.get('child-tip'),
-    ])).toEqual(new Set([-1, 1]))
+    expect(lanes.get('parent-tip')).toBe(1)
+    expect(lanes.get('child-tip')).toBe(1)
     expect(lanes.get('child-root')).toBe(lanes.get('child-tip'))
   })
 })

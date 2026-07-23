@@ -254,12 +254,27 @@ function resolveSegmentSides(
   const sideBySegment = new Map<string, LaneSide>()
   const resolving = new Set<string>()
 
-  // Center-line merge targets hug the right side of the center line. Seed
-  // their side up front so nested segments anchored on them follow along.
-  for (const segment of segments) {
-    if (segment.lane !== 0 && centerMergeTargetIds?.has(segment.id)) {
-      sideBySegment.set(segment.id, 'right')
-    }
+  // Center-line merge targets hug the center, but independent merged branch
+  // families should not all accumulate on the right. Alternate their seeded
+  // side by continuity so nested segments anchored on them follow a balanced
+  // distribution. The first (usually longest-lived) family stays on the right
+  // for a stable tie-break.
+  const pinnedSideLoad: Record<LaneSide, number> = { left: 0, right: 0 }
+  const pinnedSegments = segments
+    .filter((segment) => {
+      if (segment.lane === 0 || !centerMergeTargetIds?.has(segment.id)) return false
+      const inwardSegment = segment.inwardSegmentId
+        ? segmentById.get(segment.inwardSegmentId)
+        : undefined
+      return !inwardSegment || inwardSegment.lane === 0
+    })
+    .sort(compareSegmentsByContinuity)
+  for (const segment of pinnedSegments) {
+    const side: LaneSide = pinnedSideLoad.right <= pinnedSideLoad.left
+      ? 'right'
+      : 'left'
+    sideBySegment.set(segment.id, side)
+    pinnedSideLoad[side]++
   }
 
   const resolve = (segment: LaneSegment): LaneSide => {
@@ -289,10 +304,9 @@ function resolveSegmentSides(
   }
 
   // A bounded viewport has a fixed number of physical gutters on both sides.
-  // The semantic allocator can produce many more lanes on one side than the
-  // other, especially near the tips of a busy repository. Fill an empty
-  // opposite-side gutter before stacking overlapping rail families in the
-  // same physical lane. A root and all of its nested branches move together.
+  // Fill an empty opposite-side gutter before stacking overlapping rail
+  // families in the same physical lane. A root and all of its nested branches
+  // move together.
   if (maxLaneRadius !== undefined) {
     balanceRootSegmentSides(
       segments,
@@ -351,10 +365,10 @@ function balanceRootSegmentSides(
         segmentById.get(right[0]) as LaneSegment,
       )
   })
-
   for (const [rootId, family] of families) {
     const root = segmentById.get(rootId) as LaneSegment
-    const preferredSide: LaneSide = root.lane < 0 ? 'left' : 'right'
+    const preferredSide: LaneSide = sideBySegment.get(root.id)
+      ?? (root.lane < 0 ? 'left' : 'right')
     const oppositeSide: LaneSide = preferredSide === 'left' ? 'right' : 'left'
     const preferredOverlap = familyPlacementOverlap(
       family,
@@ -571,10 +585,10 @@ function assignSegment(
 
 /**
  * Side-aware ordering is the best first choice, but a narrow viewport can
- * exhaust every slot on one side while another physical gutter is idle. Move
- * the shorter rail in a collision to any lane with less vertical overlap,
- * even across lane 0. This preserves side and continuity preferences whenever
- * they fit while avoiding two simultaneous branches sharing one gutter.
+ * exhaust every slot on one side. Move the shorter rail in a collision to a
+ * less-conflicted gutter on that same side. Crossing lane 0 would make a
+ * nested branch edge cross the checked-out rail, which is more misleading
+ * than reusing a busy side gutter.
  */
 function spreadBoundedSegmentsIntoAvailableLanes(
   segments: LaneSegment[],
@@ -629,6 +643,7 @@ function spreadBoundedSegmentsIntoAvailableLanes(
       let bestDistance = Infinity
 
       for (const lane of physicalLanes) {
+        if (Math.sign(lane) !== Math.sign(currentLane)) continue
         const overlap = overlapInLane(segment, lane)
         const distance = Math.abs(lane - currentLane)
         if (

@@ -121,8 +121,8 @@ export function fitGraphToViewport(
 /**
  * Fit lanes against the whole browser window, not the graph element. Opening a
  * sibling panel can shrink the graph canvas without changing this lane budget.
- * The local lane center compensates for a left sidebar so the rendered center
- * lane remains anchored to the browser's horizontal midpoint.
+ * The local base center compensates for a left sidebar; occupied-lane fitting
+ * may subsequently move lane 0 away from that browser midpoint.
  */
 export function fitGraphToBrowserWindow(
   browserWidth: number,
@@ -139,6 +139,45 @@ export function fitGraphToBrowserWindow(
     ...fit,
     laneCenterX: (width / 2 - left) / scale,
     layoutWidth: Math.max(0, width - left) / scale,
+  }
+}
+
+/**
+ * Center the occupied lane span inside the viewport's existing gutter envelope.
+ * Lane 0 remains the checked-out branch semantically, but it may move away from
+ * the browser midpoint when most branch families live on one side. Keeping the
+ * occupied extrema inside the original symmetric envelope preserves the
+ * responsive side reserves for commit messages, ref pills, and actions.
+ */
+export function fitLaneFrameToRows(
+  rows: Pick<CommitRow, 'lane'>[],
+  viewportFit: GraphViewportFit,
+): GraphLaneFrame {
+  if (rows.length === 0) {
+    return {
+      laneCenterX: viewportFit.laneCenterX,
+      laneRadius: viewportFit.maxLaneRadius,
+      totalWidth: viewportFit.layoutWidth,
+    }
+  }
+
+  let minLane = Infinity
+  let maxLane = -Infinity
+  for (const row of rows) {
+    minLane = Math.min(minLane, row.lane)
+    maxLane = Math.max(maxLane, row.lane)
+  }
+
+  const radius = viewportFit.maxLaneRadius
+  const desiredShift = -((minLane + maxLane) / 2) * LANE_WIDTH
+  const minimumShift = (-radius - minLane) * LANE_WIDTH
+  const maximumShift = (radius - maxLane) * LANE_WIDTH
+  const shift = Math.max(minimumShift, Math.min(maximumShift, desiredShift))
+
+  return {
+    laneCenterX: viewportFit.laneCenterX + shift,
+    laneRadius: radius,
+    totalWidth: viewportFit.layoutWidth,
   }
 }
 

@@ -26,6 +26,7 @@ import {
   COMMIT_MESSAGE_GUTTER,
   compactRowsToLaneRadius,
   fitGraphToBrowserWindow,
+  fitLaneFrameToRows,
   GRAPH_TOP_HEADROOM,
   hashText,
   laneColor,
@@ -484,12 +485,14 @@ function buildActionPreviewGeometry(
     prediction.rows,
     viewportFit.maxLaneRadius,
   )
+  const baseLaneZeroX = baseLayout.nodes.find((node) => node.row.lane === 0)?.x
+    ?? viewportFit.laneCenterX
   const previewLayout = buildLayout(
     previewRows,
     viewportFit.extraLeftGutter,
     viewportFit.rightGutter,
     {
-      laneCenterX: viewportFit.laneCenterX,
+      laneCenterX: baseLaneZeroX,
       laneRadius: viewportFit.maxLaneRadius,
       totalWidth: viewportFit.layoutWidth,
     },
@@ -2424,24 +2427,22 @@ export function GraphCanvas() {
       viewportFit.maxLaneRadius,
     ) ?? compactedRows
   }, [compactedRows, actionPreview, refs, viewportFit.maxLaneRadius])
+  const laneFrame = useMemo(
+    () => (displayRows ? fitLaneFrameToRows(displayRows, viewportFit) : null),
+    [displayRows, viewportFit],
+  )
   const layout = useMemo(() => {
-    if (!displayRows) return null
+    if (!displayRows || !laneFrame) return null
     return buildLayout(
       displayRows,
       viewportFit.extraLeftGutter,
       viewportFit.rightGutter,
-      {
-        laneCenterX: viewportFit.laneCenterX,
-        laneRadius: viewportFit.maxLaneRadius,
-        totalWidth: viewportFit.layoutWidth,
-      },
+      laneFrame,
     )
   }, [
     displayRows,
+    laneFrame,
     viewportFit.extraLeftGutter,
-    viewportFit.laneCenterX,
-    viewportFit.layoutWidth,
-    viewportFit.maxLaneRadius,
     viewportFit.rightGutter,
   ])
 
@@ -2854,18 +2855,27 @@ export function GraphCanvas() {
 
   const gutterBackgrounds = useMemo(() => {
     if (!showGutterColors) return []
+    const laneCenterX = laneFrame?.laneCenterX ?? viewportFit.laneCenterX
+    const minLane = layout
+      ? Math.min(0, ...layout.nodes.map((node) => node.row.lane))
+      : -viewportFit.maxLaneRadius
+    const maxLane = layout
+      ? Math.max(0, ...layout.nodes.map((node) => node.row.lane))
+      : viewportFit.maxLaneRadius
     return Array.from(
-      { length: viewportFit.maxLaneRadius * 2 + 1 },
+      { length: maxLane - minLane + 1 },
       (_, index) => {
-        const lane = index - viewportFit.maxLaneRadius
+        const lane = index + minLane
         return {
           lane,
-          x: viewportFit.laneCenterX + lane * LANE_WIDTH,
+          x: laneCenterX + lane * LANE_WIDTH,
           color: laneColor(lane),
         }
       },
     )
   }, [
+    laneFrame?.laneCenterX,
+    layout,
     showGutterColors,
     viewportFit.laneCenterX,
     viewportFit.maxLaneRadius,
