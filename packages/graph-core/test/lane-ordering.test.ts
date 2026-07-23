@@ -113,6 +113,35 @@ describe('lane ordering', () => {
     expect(lanes.get('yellow-root')).toBe(2)
   })
 
+  test('keeps separately merged sibling branches in distinct gutters', () => {
+    const rows = [
+      { sha: 'c0', parentShas: ['c1', 'dev-tip'], row: 0, lane: 0 },
+      { sha: 'dev-tip', parentShas: ['dev'], row: 1, lane: -1 },
+      { sha: 'fix-tip', parentShas: ['base'], row: 2, lane: 1 },
+      { sha: 'c1', parentShas: ['c2', 'cors-tip'], row: 3, lane: 0 },
+      { sha: 'cors-tip', parentShas: ['dev'], row: 4, lane: -2 },
+      { sha: 'dev', parentShas: ['base'], row: 5, lane: -1 },
+      { sha: 'c2', parentShas: ['c3', 'base'], row: 6, lane: 0 },
+      { sha: 'base', parentShas: ['old'], row: 7, lane: 1 },
+      { sha: 'c3', parentShas: [], row: 8, lane: 0 },
+      { sha: 'old', parentShas: [], row: 9, lane: 1 },
+    ]
+
+    const lanes = orderLaneSegmentsByContinuity(rows)
+    expect(new Set([
+      lanes.get('dev-tip'),
+      lanes.get('fix-tip'),
+      lanes.get('cors-tip'),
+    ]).size).toBe(3)
+
+    const compacted = orderLaneSegmentsByContinuity(rows, 2)
+    expect(new Set([
+      compacted.get('dev-tip'),
+      compacted.get('fix-tip'),
+      compacted.get('cors-tip'),
+    ]).size).toBe(3)
+  })
+
   test('pulls a center-line merge target to the inner gutter regardless of its lane', () => {
     // The mainline lives far out on the right while shorter branches sit
     // between it and the center. Since the center merges it in, it should hug

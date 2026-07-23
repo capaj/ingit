@@ -87,6 +87,14 @@ export function orderLaneSegmentsByContinuity(
 
 function buildSegments(rows: LaneRow[]): SegmentModel {
   const rowBySha = new Map(rows.map((row) => [row.sha, row]))
+  const firstParentChildren = new Map<string, LaneRow[]>()
+  for (const row of rows) {
+    const firstParent = row.parentShas[0]
+    if (!firstParent) continue
+    const children = firstParentChildren.get(firstParent)
+    if (children) children.push(row)
+    else firstParentChildren.set(firstParent, [row])
+  }
   const rootBySha = new Map(rows.map((row) => [row.sha, row.sha]))
 
   const find = (sha: string): string => {
@@ -129,14 +137,25 @@ function buildSegments(rows: LaneRow[]): SegmentModel {
 
   // A pinned line can still fragment when another reservation steals its lane
   // mid-line. Stitch its first-parent-linked fragments back into one segment
-  // so it renders as a single straight rail. Unrelated branches rooted at the
-  // line's commits are never pinned, so they keep their own gutters.
+  // so it renders as a single straight rail. At a fork, however, two separately
+  // pinned children can converge on the same parent. Stitching both would turn
+  // the Y-shaped history into one misleading vertical rail, so keep those
+  // sibling branches as distinct segments.
   for (const row of rows) {
     if (row.lane === 0) continue
     const firstParent = row.parentShas[0]
     const parent = firstParent ? rowBySha.get(firstParent) : undefined
     if (!parent || parent.lane === 0 || parent.lane === row.lane) continue
-    if (pinnedRoots.has(find(row.sha)) && pinnedRoots.has(find(parent.sha))) {
+    const pinnedChildRoots = new Set(
+      (firstParentChildren.get(parent.sha) ?? [])
+        .map((child) => find(child.sha))
+        .filter((root) => pinnedRoots.has(root)),
+    )
+    if (
+      pinnedChildRoots.size === 1
+      && pinnedRoots.has(find(row.sha))
+      && pinnedRoots.has(find(parent.sha))
+    ) {
       union(row.sha, parent.sha)
     }
   }
