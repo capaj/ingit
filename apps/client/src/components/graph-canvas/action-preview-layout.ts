@@ -90,6 +90,61 @@ export function stackPreviewChainAboveTarget<T extends VerticalPosition>(
   })
 }
 
+/**
+ * While a rebase preview stacks the replayed commits on the target's gutter,
+ * slide the live branch line ascending from the target into a free side
+ * gutter. The ghost chain then shows exactly where the rebased commits land
+ * without covering the live commits they replace.
+ */
+export function displaceBranchAboveTarget<T extends { sha: string; parentShas: string[]; lane: number }>(
+  rows: T[],
+  headSha: string,
+  targetSha: string,
+  maxLaneRadius: number,
+): T[] | null {
+  if (maxLaneRadius < 1) return null
+
+  const rowBySha = new Map(rows.map((row) => [row.sha, row]))
+  const targetRow = rowBySha.get(targetSha)
+  if (!targetRow) return null
+
+  // The branch line ascending from the target: HEAD's first-parent chain down
+  // to (excluding) the target. If the target is not on that line there is no
+  // branch to move aside.
+  const chain: T[] = []
+  const seen = new Set<string>()
+  let sha: string | undefined = headSha
+  while (sha && sha !== targetSha && !seen.has(sha)) {
+    seen.add(sha)
+    const row = rowBySha.get(sha)
+    if (!row) return null
+    chain.push(row)
+    sha = row.parentShas[0]
+  }
+  if (sha !== targetSha || chain.length === 0) return null
+
+  const targetIdx = rows.indexOf(targetRow)
+  const spanStart = Math.min(rows.indexOf(chain[0]), targetIdx)
+  const spanEnd = Math.max(rows.indexOf(chain[chain.length - 1]), targetIdx)
+  const laneFree = (lane: number): boolean => {
+    for (let i = spanStart; i <= spanEnd; i++) {
+      if (rows[i].lane === lane) return false
+    }
+    return true
+  }
+
+  // Prefer the right side, then left, nearest gutter first.
+  let gutter = 0
+  for (let distance = 1; distance <= maxLaneRadius && gutter === 0; distance++) {
+    if (laneFree(distance)) gutter = distance
+    else if (laneFree(-distance)) gutter = -distance
+  }
+  if (gutter === 0) return null
+
+  const displacedShas = new Set(chain.map((row) => row.sha))
+  return rows.map((row) => displacedShas.has(row.sha) ? { ...row, lane: gutter } : row)
+}
+
 /** Keep pending worktree changes one row above an appended commit preview. */
 export function placeWorktreeAbovePreview<T extends VerticalPosition>(
   headNode: T,

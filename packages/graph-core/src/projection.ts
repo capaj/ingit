@@ -25,6 +25,7 @@ export class Projection {
 
   private entries: TopoEntry[] = []
   private shaIndex: Map<string, number> = new Map() // sha -> index in entries array
+  private firstParentChildren: Map<string, string[]> = new Map()
 
   constructor(
     id: string,
@@ -49,6 +50,13 @@ export class Projection {
       const row = startRow + i
       this.entries.push({ sha, parentShas, row })
       this.shaIndex.set(sha, row)
+
+      const firstParent = parentShas[0]
+      if (firstParent) {
+        const children = this.firstParentChildren.get(firstParent)
+        if (children) children.push(sha)
+        else this.firstParentChildren.set(firstParent, [sha])
+      }
     }
   }
 
@@ -95,7 +103,7 @@ export class Projection {
    */
   checkpoint(interval: number = 256): ProjectionCheckpoint[] {
     const checkpoints: ProjectionCheckpoint[] = []
-    const allocator = new LaneAllocator()
+    const allocator = new LaneAllocator(undefined, this.firstParentChildren)
 
     for (let i = 0; i < this.entries.length; i++) {
       const entry = this.entries[i]
@@ -139,7 +147,7 @@ export class Projection {
     const clampedStart = Math.max(0, startRow)
     const clampedEnd = Math.min(this.entries.length - 1, endRow)
 
-    const allocator = new LaneAllocator()
+    const allocator = new LaneAllocator(undefined, this.firstParentChildren)
 
     // Reserve lane 0 for the center line's entire first-parent chain so the
     // checked-out branch stays in the visual center while side branches fan

@@ -97,7 +97,7 @@ describe('lane ordering', () => {
     expect(lanes.get('yellow-root')).toBe(1)
   })
 
-  test('does not pack another branch under an active merge-parent rail', () => {
+  test('keeps a center-line merge target hugging the center over shorter branches', () => {
     const lanes = orderLaneSegmentsByContinuity([
       { sha: 'merge', parentShas: ['base', 'red-root'], row: 0, lane: 0 },
       { sha: 'yellow-tip', parentShas: ['yellow-root'], row: 1, lane: 1 },
@@ -106,9 +106,76 @@ describe('lane ordering', () => {
       { sha: 'base', parentShas: [], row: 5, lane: 0 },
     ])
 
-    expect(lanes.get('red-root')).toBe(2)
-    expect(lanes.get('yellow-tip')).toBe(1)
-    expect(lanes.get('yellow-root')).toBe(1)
+    // The merged-in rail hugs the center line so the merge edge stays a short
+    // hop; the shorter branch fans outside it. They still never share a gutter.
+    expect(lanes.get('red-root')).toBe(1)
+    expect(lanes.get('yellow-tip')).toBe(2)
+    expect(lanes.get('yellow-root')).toBe(2)
+  })
+
+  test('pulls a center-line merge target to the inner gutter regardless of its lane', () => {
+    // The mainline lives far out on the right while shorter branches sit
+    // between it and the center. Since the center merges it in, it should hug
+    // the center line so the merge edges stay short hops.
+    const rows = [
+      { sha: 'c0', parentShas: ['c1'], row: 0, lane: 0 },
+      { sha: 'm0', parentShas: ['m1'], row: 1, lane: 3 },
+      { sha: 's1', parentShas: ['c2'], row: 2, lane: -1 },
+      { sha: 'c1', parentShas: ['c2'], row: 3, lane: 0 },
+      { sha: 'c2', parentShas: ['c3', 'm2'], row: 4, lane: 0 },
+      { sha: 's2', parentShas: ['c4'], row: 5, lane: 1 },
+      { sha: 'c3', parentShas: ['c4'], row: 6, lane: 0 },
+      { sha: 'm1', parentShas: ['m2'], row: 7, lane: 3 },
+      { sha: 'c4', parentShas: ['c5'], row: 8, lane: 0 },
+      { sha: 'c5', parentShas: ['c6', 'm3'], row: 9, lane: 0 },
+      { sha: 's3', parentShas: ['c6'], row: 10, lane: -1 },
+      { sha: 'm2', parentShas: ['m3'], row: 11, lane: 3 },
+      { sha: 'c6', parentShas: ['c7'], row: 12, lane: 0 },
+      { sha: 'm3', parentShas: ['m4'], row: 13, lane: 3 },
+      { sha: 'c7', parentShas: [], row: 14, lane: 0 },
+      { sha: 'm4', parentShas: [], row: 15, lane: 3 },
+    ]
+    const lanes = orderLaneSegmentsByContinuity(rows)
+
+    expect(lanes.get('m0')).toBe(1)
+    expect(lanes.get('m1')).toBe(1)
+    expect(lanes.get('m2')).toBe(1)
+    expect(lanes.get('m3')).toBe(1)
+    expect(lanes.get('m4')).toBe(1)
+    // The side branches fan around the mainline without sharing its gutter.
+    expect(lanes.get('s2')).toBe(2)
+    expect(lanes.get('s1')).toBe(-1)
+    expect(lanes.get('s3')).toBe(-1)
+
+    const compacted = orderLaneSegmentsByContinuity(rows, 2)
+    expect(Math.max(...[...compacted.values()].map((lane) => Math.abs(lane)))).toBeLessThanOrEqual(2)
+    expect(compacted.get('m0')).toBe(1)
+    expect(compacted.get('m2')).toBe(1)
+    expect(compacted.get('m4')).toBe(1)
+  })
+
+  test('pulls a line that merges the center line into the inner gutter too', () => {
+    // main keeps merging the center branch into itself. Its rail belongs next
+    // to the center line (not four lanes out on the left) so each merge edge
+    // is a short hop instead of crossing the left-side gutters.
+    const lanes = orderLaneSegmentsByContinuity([
+      { sha: 'c0', parentShas: ['c1'], row: 0, lane: 0 },
+      { sha: 'main-tip', parentShas: ['merge-1'], row: 1, lane: -3 },
+      { sha: 's1', parentShas: ['c1'], row: 2, lane: 1 },
+      { sha: 'c1', parentShas: ['c2'], row: 3, lane: 0 },
+      { sha: 's2', parentShas: ['c2'], row: 4, lane: -1 },
+      { sha: 'merge-1', parentShas: ['merge-2', 'c2'], row: 5, lane: -3 },
+      { sha: 'c2', parentShas: ['c3'], row: 6, lane: 0 },
+      { sha: 'merge-2', parentShas: ['main-base', 'c3'], row: 7, lane: -3 },
+      { sha: 'c3', parentShas: [], row: 8, lane: 0 },
+      { sha: 'main-base', parentShas: [], row: 9, lane: -3 },
+    ])
+
+    expect(lanes.get('main-tip')).toBe(1)
+    expect(lanes.get('merge-1')).toBe(1)
+    expect(lanes.get('merge-2')).toBe(1)
+    expect(lanes.get('main-base')).toBe(1)
+    expect(lanes.get('c2')).toBe(0)
   })
 
   test('places a nested branch outside its non-center first-parent gutter', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  displaceBranchAboveTarget,
   fitPreviewCamera,
   mergePreviewGutterX,
   placeMergePreviewAboveGraph,
@@ -69,6 +70,62 @@ describe('stackPreviewChainAboveTarget', () => {
     expect(stacked.map((node) => node.idx)).toEqual([5, 6, 7])
     expect(stacked.map((node) => node.id)).toEqual([0, 1, 2])
     expect(stacked.every((node) => node.y < 600)).toBe(true)
+  })
+})
+
+describe('displaceBranchAboveTarget', () => {
+  const rows = [
+    { sha: 'tip', parentShas: ['mid'], lane: 0 },
+    { sha: 'mid', parentShas: ['target'], lane: 0 },
+    { sha: 'target', parentShas: ['base'], lane: 0 },
+    { sha: 'base', parentShas: [], lane: 0 },
+  ]
+
+  test('moves the branch line above the target to a free right gutter', () => {
+    const displaced = displaceBranchAboveTarget(rows, 'tip', 'target', 3)
+
+    expect(displaced?.map((row) => [row.sha, row.lane])).toEqual([
+      ['tip', 1],
+      ['mid', 1],
+      ['target', 0],
+      ['base', 0],
+    ])
+  })
+
+  test('falls back to the left side when the right gutter is occupied in range', () => {
+    const busyRight = [
+      { sha: 'tip', parentShas: ['mid'], lane: 0 },
+      { sha: 'other', parentShas: [], lane: 1 },
+      { sha: 'mid', parentShas: ['target'], lane: 0 },
+      { sha: 'target', parentShas: ['base'], lane: 0 },
+      { sha: 'base', parentShas: [], lane: 0 },
+    ]
+
+    const displaced = displaceBranchAboveTarget(busyRight, 'tip', 'target', 3)
+
+    expect(displaced?.find((row) => row.sha === 'tip')?.lane).toBe(-1)
+    expect(displaced?.find((row) => row.sha === 'mid')?.lane).toBe(-1)
+  })
+
+  test('returns null when the target is not on the branch line', () => {
+    expect(displaceBranchAboveTarget(rows, 'tip', 'unrelated', 3)).toBeNull()
+  })
+
+  test('returns null when no side gutter exists', () => {
+    expect(displaceBranchAboveTarget(rows, 'tip', 'target', 0)).toBeNull()
+  })
+
+  test('returns null when every gutter in range is occupied', () => {
+    const crowded = [
+      { sha: 'tip', parentShas: ['mid'], lane: 0 },
+      { sha: 'right', parentShas: [], lane: 1 },
+      { sha: 'left', parentShas: [], lane: -1 },
+      { sha: 'mid', parentShas: ['target'], lane: 0 },
+      { sha: 'target', parentShas: ['base'], lane: 0 },
+      { sha: 'base', parentShas: [], lane: 0 },
+    ]
+
+    expect(displaceBranchAboveTarget(crowded, 'tip', 'target', 1)).toBeNull()
   })
 })
 

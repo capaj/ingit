@@ -16,6 +16,12 @@ interface LaneSegment {
   inwardSegmentId?: string
 }
 
+interface SegmentModel {
+  segments: LaneSegment[]
+  /** Segments holding a commit that a center-line (lane 0) row merges in. */
+  centerMergeTargetIds: Set<string>
+}
+
 /**
  * Reorder connected rail segments on each side of the center line so long
  * uninterrupted rails sit outside shorter-lived branches. A branch whose
@@ -37,9 +43,14 @@ export function orderLaneSegmentsByContinuity(
     return new Map(rows.map((row) => [row.sha, 0]))
   }
 
-  const segments = buildSegments(rows)
+  const { segments, centerMergeTargetIds } = buildSegments(rows)
   const segmentById = new Map(segments.map((segment) => [segment.id, segment]))
-  const sideBySegment = resolveSegmentSides(segments, segmentById, boundedRadius)
+  const sideBySegment = resolveSegmentSides(
+    segments,
+    segmentById,
+    boundedRadius,
+    centerMergeTargetIds,
+  )
   const laneBySha = new Map<string, number>()
 
   for (const segment of segments) {
@@ -54,6 +65,7 @@ export function orderLaneSegmentsByContinuity(
     laneBySha,
     segmentById,
     boundedRadius,
+    centerMergeTargetIds,
   )
   orderSide(
     segments.filter((segment) => sideBySegment.get(segment.id) === 'right'),
@@ -61,6 +73,7 @@ export function orderLaneSegmentsByContinuity(
     laneBySha,
     segmentById,
     boundedRadius,
+    centerMergeTargetIds,
   )
   if (boundedRadius !== undefined) {
     spreadBoundedSegmentsIntoAvailableLanes(
@@ -72,7 +85,7 @@ export function orderLaneSegmentsByContinuity(
   return laneBySha
 }
 
-function buildSegments(rows: LaneRow[]): LaneSegment[] {
+function buildSegments(rows: LaneRow[]): SegmentModel {
   const rowBySha = new Map(rows.map((row) => [row.sha, row]))
   const rootBySha = new Map(rows.map((row) => [row.sha, row.sha]))
 
@@ -94,6 +107,38 @@ function buildSegments(rows: LaneRow[]): LaneSegment[] {
     const firstParent = row.parentShas[0]
     const parent = firstParent ? rowBySha.get(firstParent) : undefined
     if (parent?.lane === row.lane) union(row.sha, parent.sha)
+  }
+
+  // Lines joined to the center branch by a merge belong immediately beside
+  // it: their merge edges are the semantically important connections and
+  // should be short hops, not long horizontals crossing every side branch in
+  // between. This covers both directions — the center merging a side line in,
+  // and a side line merging the center line into itself.
+  const pinnedRoots = new Set<string>()
+  for (const row of rows) {
+    for (const parentSha of row.parentShas.slice(1)) {
+      const parent = rowBySha.get(parentSha)
+      if (!parent) continue
+      if (row.lane === 0 && parent.lane !== 0) {
+        pinnedRoots.add(find(parent.sha))
+      } else if (row.lane !== 0 && parent.lane === 0) {
+        pinnedRoots.add(find(row.sha))
+      }
+    }
+  }
+
+  // A pinned line can still fragment when another reservation steals its lane
+  // mid-line. Stitch its first-parent-linked fragments back into one segment
+  // so it renders as a single straight rail. Unrelated branches rooted at the
+  // line's commits are never pinned, so they keep their own gutters.
+  for (const row of rows) {
+    if (row.lane === 0) continue
+    const firstParent = row.parentShas[0]
+    const parent = firstParent ? rowBySha.get(firstParent) : undefined
+    if (!parent || parent.lane === 0 || parent.lane === row.lane) continue
+    if (pinnedRoots.has(find(row.sha)) && pinnedRoots.has(find(parent.sha))) {
+      union(row.sha, parent.sha)
+    }
   }
 
   const segmentByRoot = new Map<string, LaneSegment>()
@@ -165,7 +210,13 @@ function buildSegments(rows: LaneRow[]): LaneSegment[] {
     }
   }
 
-  return [...segmentByRoot.values()]
+  // Remap the pinned roots collected before stitching to their final segments.
+  const centerMergeTargetIds = new Set<string>()
+  for (const root of pinnedRoots) {
+    centerMergeTargetIds.add(find(root))
+  }
+
+  return { segments: [...segmentByRoot.values()], centerMergeTargetIds }
 }
 
 function extendSegmentToRow(segment: LaneSegment, row: number): void {
@@ -179,9 +230,18 @@ function resolveSegmentSides(
   segments: LaneSegment[],
   segmentById: Map<string, LaneSegment>,
   maxLaneRadius?: number,
+  centerMergeTargetIds?: Set<string>,
 ): Map<string, LaneSide> {
   const sideBySegment = new Map<string, LaneSide>()
   const resolving = new Set<string>()
+
+  // Center-line merge targets hug the right side of the center line. Seed
+  // their side up front so nested segments anchored on them follow along.
+  for (const segment of segments) {
+    if (segment.lane !== 0 && centerMergeTargetIds?.has(segment.id)) {
+      sideBySegment.set(segment.id, 'right')
+    }
+  }
 
   const resolve = (segment: LaneSegment): LaneSide => {
     const resolved = sideBySegment.get(segment.id)
@@ -340,12 +400,16 @@ function orderSide(
   laneBySha: Map<string, number>,
   segmentById: Map<string, LaneSegment>,
   maxLaneRadius?: number,
+  centerMergeTargetIds?: Set<string>,
 ): void {
   if (segments.length === 0) return
 
   const assignedBySlot = new Map<number, LaneSegment[]>()
   const slotBySegment = new Map<string, number>()
   const nestedSegments = segments.filter((segment) => {
+    // Center-line merge partners are anchored to the inner gutters as roots,
+    // even when their rail continues an off-center parent segment.
+    if (centerMergeTargetIds?.has(segment.id)) return false
     const inwardSegment = segment.inwardSegmentId
       ? segmentById.get(segment.inwardSegmentId)
       : undefined
@@ -357,7 +421,23 @@ function orderSide(
   computeMaxConcurrency(rootSegments)
   const maxSlot = maxLaneRadius
     ?? Math.max(0, ...rootSegments.map((segment) => Math.abs(segment.lane)))
-  const longestFirst = [...rootSegments].sort(compareSegmentsByContinuity)
+
+  // Center-line merge targets take the innermost gutters so their merge edges
+  // stay short hops instead of crossing every shorter branch fanned out below.
+  const pinnedRoots = rootSegments
+    .filter((segment) => centerMergeTargetIds?.has(segment.id))
+    .sort(compareSegmentsByContinuity)
+  for (const segment of pinnedRoots) {
+    let slot = findAvailableSlot(segment, assignedBySlot, 1, maxSlot, 1)
+    slot ??= maxLaneRadius === undefined
+      ? findAvailableSlotOutward(segment, assignedBySlot, maxSlot + 1)
+      : findLeastConflictingSlot(segment, assignedBySlot, maxSlot, 1)
+    assignSegment(segment, slot, side, laneBySha, assignedBySlot, slotBySegment)
+  }
+
+  const longestFirst = [...rootSegments]
+    .filter((segment) => !centerMergeTargetIds?.has(segment.id))
+    .sort(compareSegmentsByContinuity)
 
   for (const segment of longestFirst) {
     const preferredSlot = maxLaneRadius === undefined

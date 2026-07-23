@@ -12,8 +12,11 @@ export class LaneAllocator {
   private activeLanes: Map<number, string> = new Map()
   private reserved: Map<string, number> = new Map()
   private nextSideFromCenter: 'left' | 'right' = 'right'
+  private firstParentChildren: Map<string, string[]>
 
-  constructor(_maxLanes?: number) {}
+  constructor(_maxLanes?: number, firstParentChildren?: Map<string, string[]>) {
+    this.firstParentChildren = firstParentChildren ?? new Map()
+  }
 
   /**
    * Pre-reserve a specific lane for a SHA before processing begins.
@@ -57,18 +60,56 @@ export class LaneAllocator {
       this.activeLanes.delete(lane)
     }
 
-    // Merge parents should live on the outside of the active cluster so they
-    // do not block the inner lanes needed by future side-branch tips.
+    // Merge parents stay on the lane their line already occupies when one of
+    // their first-parent descendants was reserved earlier, so the merged
+    // branch renders as one straight rail instead of fragmenting into
+    // ever-outer lanes. Only lines with no lane yet are pushed outside the
+    // active cluster so they do not block inner lanes for side-branch tips.
     for (let i = 1; i < parentShas.length; i++) {
       const mp = parentShas[i]
       if (!this.reserved.has(mp)) {
-        const mLane = this.findFreeLaneOutsideCluster()
+        const mLane = this.findOccupiedLineLane(mp) ?? this.findFreeLaneOutsideCluster()
         this.reserved.set(mp, mLane)
         this.activeLanes.set(mLane, mp)
       }
     }
 
     return lane
+  }
+
+  /**
+   * Walk first-parent children upward from a merge parent looking for a lane
+   * its line already holds. The reservation chain reaches only one row ahead,
+   * so the merge reservation usually meets the line long before the line's
+   * own rows are processed; without this the line gets re-reserved elsewhere
+   * and its rail zigzags across the graph.
+   */
+  private findOccupiedLineLane(sha: string): number | undefined {
+    const visited = new Set<string>([sha])
+    let frontier = this.firstParentChildren.get(sha) ?? []
+
+    while (frontier.length > 0 && visited.size <= 128) {
+      const next: string[] = []
+      for (const child of frontier) {
+        if (visited.has(child)) continue
+        visited.add(child)
+        const lane = this.reserved.get(child)
+        if (lane !== undefined && this.isLaneHeldBy(lane, visited)) {
+          return lane
+        }
+        next.push(...(this.firstParentChildren.get(child) ?? []))
+      }
+      frontier = next
+    }
+
+    return undefined
+  }
+
+  /** The lane counts as the line's own only when its current holder is part
+   * of the first-parent chain we just walked — not an unrelated squatter. */
+  private isLaneHeldBy(lane: number, lineShas: Set<string>): boolean {
+    const holder = this.activeLanes.get(lane)
+    return holder === undefined || lineShas.has(holder)
   }
 
   private findFreeLane(): number {

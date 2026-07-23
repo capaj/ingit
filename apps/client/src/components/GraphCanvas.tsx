@@ -10,6 +10,7 @@ import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../opt
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-canvas/CommitIcons'
 import {
+  displaceBranchAboveTarget,
   fitPreviewCamera,
   mergePreviewGutterX,
   placeMergePreviewAboveGraph,
@@ -2334,10 +2335,26 @@ export function GraphCanvas() {
       : null),
     [graphModel, viewportFit.maxLaneRadius],
   )
-  const layout = useMemo(() => {
-    if (!compactedRows) return null
-    return buildLayout(
+  // While previewing a rebase, slide the live branch line ascending from the
+  // target into a free side gutter so the stacked ghost chain does not cover
+  // the commits it replaces.
+  const displayRows = useMemo(() => {
+    if (!compactedRows || actionPreview?.kind !== 'rebase') return compactedRows
+    const currentRef = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+    const targetRef = refs.find((ref) => ref.shortName === actionPreview.targetRefName)
+    const targetSha = targetRef ? targetRef.peeledSha ?? targetRef.targetSha : undefined
+    if (!currentRef || !targetSha) return compactedRows
+    return displaceBranchAboveTarget(
       compactedRows,
+      currentRef.targetSha,
+      targetSha,
+      viewportFit.maxLaneRadius,
+    ) ?? compactedRows
+  }, [compactedRows, actionPreview, refs, viewportFit.maxLaneRadius])
+  const layout = useMemo(() => {
+    if (!displayRows) return null
+    return buildLayout(
+      displayRows,
       viewportFit.extraLeftGutter,
       viewportFit.rightGutter,
       {
@@ -2347,7 +2364,7 @@ export function GraphCanvas() {
       },
     )
   }, [
-    compactedRows,
+    displayRows,
     viewportFit.extraLeftGutter,
     viewportFit.laneCenterX,
     viewportFit.layoutWidth,

@@ -141,6 +141,8 @@ function Section({
   files,
   area,
   bulkLabel,
+  bulkTone = 'neutral',
+  bulkDisabled = false,
   onBulk,
   rowActionLabel,
   onRowAction,
@@ -150,6 +152,8 @@ function Section({
   files: WorktreeFile[]
   area: WorktreeDiffArea
   bulkLabel?: string
+  bulkTone?: 'neutral' | 'success'
+  bulkDisabled?: boolean
   onBulk?: () => void
   rowActionLabel: string | ((file: WorktreeFile) => string)
   onRowAction: (file: WorktreeFile) => void
@@ -163,7 +167,7 @@ function Section({
           {title} <span style={{ color: '#6c7086' }}>({files.length})</span>
         </span>
         {bulkLabel && onBulk && (
-          <RefActionButton label={bulkLabel} tone="neutral" size="compact" variant="ghost" onClick={onBulk} />
+          <RefActionButton label={bulkLabel} tone={bulkTone} size="compact" disabled={bulkDisabled} onClick={onBulk} />
         )}
       </div>
       {files.map((file) => (
@@ -644,7 +648,7 @@ export function WorkingTreeDetail() {
         onClose={() => setDiscardDialog(null)}
       />
       <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #313244' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: '#cdd6f4', flexShrink: 0 }}>Working tree</span>
             {changes?.branch && (
@@ -653,15 +657,6 @@ export function WorkingTreeDetail() {
               </span>
             )}
           </div>
-          {unstaged.length > 0 && (
-            <RefActionButton
-              label="Stage all"
-              tone="success"
-              size="compact"
-              disabled={pendingMutation}
-              onClick={() => runStageAction('stage-all', [])}
-            />
-          )}
         </div>
         <div style={{ fontSize: 11, color: '#6c7086', marginTop: 2 }}>
           {total === 0 ? 'No changes' : `${total} changed file${total === 1 ? '' : 's'}`}
@@ -688,6 +683,7 @@ export function WorkingTreeDetail() {
               files={staged}
               area="staged"
               bulkLabel="Unstage all"
+              bulkDisabled={pendingMutation}
               onBulk={() => runStageAction('unstage-all', [])}
               rowActionLabel="Unstage"
               onRowAction={(file) => runStageAction('unstage', [file.path])}
@@ -697,6 +693,10 @@ export function WorkingTreeDetail() {
               title="Changes"
               files={unstaged}
               area="unstaged"
+              bulkLabel="Stage all"
+              bulkTone="success"
+              bulkDisabled={pendingMutation}
+              onBulk={() => runStageAction('stage-all', [])}
               rowActionLabel={(file) => (file.status === 'U' ? 'Mark resolved' : 'Stage')}
               onRowAction={(file) => runStageAction('stage', [file.path])}
               onDiscard={requestDiscardFile}
