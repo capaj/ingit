@@ -11,6 +11,7 @@ import {
   buildTargetNodeRadii,
   buildVerticalBundleOffsets,
 } from '../GraphCanvas'
+import { LANE_WIDTH, NODE_SPACING_Y } from './layout'
 
 function row(sha: string, lane: number): CommitRow {
   return {
@@ -441,6 +442,55 @@ describe('outer rail path', () => {
       mode: 'curve',
       targetSide: 'left',
     })
+  })
+
+  test('extends a side-entry curve into empty space to clear a nearby rail', () => {
+    const rows = [
+      row('curve-source', 3),
+      row('filler-1', 4),
+      row('filler-2', 4),
+      row('filler-3', 4),
+      row('rail-target', -2),
+      row('curve-target', 0),
+      row('target-parent', 0),
+    ]
+    const layout = buildLayout(rows)
+    const railSource = {
+      ...layout.nodes[0],
+      idx: -2,
+      x: layout.nodes[0].x - 2 * LANE_WIDTH,
+      y: layout.nodes[0].y - 2 * NODE_SPACING_Y,
+      row: row('rail-source', 1),
+    }
+    const routing = buildEdgeRoutingData(
+      [
+        {
+          key: 'curve',
+          from: layout.nodes[0],
+          to: layout.nodes[5],
+          isMerge: false,
+        },
+        {
+          key: 'nearby-rail',
+          from: railSource,
+          to: layout.nodes[4],
+          isMerge: false,
+        },
+        {
+          key: 'target-parent',
+          from: layout.nodes[5],
+          to: layout.nodes[6],
+          isMerge: false,
+        },
+      ],
+      rows.map((entry) => entry.lane),
+    )
+
+    const plan = routing.plans.get('curve')
+    expect(plan?.mode).toBe('curve')
+    if (plan?.mode !== 'curve') throw new Error('expected a curve route')
+    expect(plan.targetSide).toBe('right')
+    expect(plan.targetLeadOffset).toBeGreaterThan(LANE_WIDTH)
   })
 
   test('leaves at 45 degrees when the source also continues vertically', () => {

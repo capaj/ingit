@@ -24,7 +24,11 @@ import {
   stackPreviewChainAboveTarget,
   uncommitCrossLines,
 } from './graph-canvas/action-preview-layout'
-import { findClearEndpointRail, findOcclusionHookTrack } from './graph-canvas/edge-occlusion'
+import {
+  findClearEndpointRail,
+  findClearTargetLeadXAroundRails,
+  findOcclusionHookTrack,
+} from './graph-canvas/edge-occlusion'
 import {
   buildLayout,
   colorForBranchName,
@@ -83,6 +87,7 @@ const EDGE_RAIL_BASE_OFFSET = NODE_RADIUS + 14
 const EDGE_RAIL_STAGGER_STEP = 6
 const EDGE_TARGET_JOIN_GAP = 6
 const EDGE_VERTICAL_RAIL_CLEARANCE = 3
+const EDGE_CURVE_RAIL_CLEARANCE = NODE_RADIUS + 8
 const GRAPH_SPRING_CONFIG = { mass: 2.1, tension: 180, friction: 28 }
 const GRAPH_CAMERA_TRANSITION_MS = 220
 const REBASE_PREVIEW_CAMERA_TRANSITION_MS = 900
@@ -441,6 +446,7 @@ type EdgeRoutePlan =
     mode: 'curve'
     targetSide?: 'left' | 'right'
     sourceSide?: 'left' | 'right'
+    targetLeadOffset?: number
   }
   | {
     mode: 'adjacent-hook'
@@ -1015,55 +1021,76 @@ export function buildStraightEdgePath(
   return `M${start.x},${start.y}L${end.x},${end.y}`
 }
 
+function buildSideEntryCurvePoints(
+  from: EdgePoint,
+  to: EdgePoint,
+  targetSide: 'left' | 'right',
+  targetNodeRadius = NODE_RADIUS,
+  sourceSide?: 'left' | 'right',
+  targetLeadX?: number,
+) {
+  const targetRadius = Math.max(1, targetNodeRadius - 1)
+  const verticalDirection = to.y >= from.y ? 1 : -1
+  const sourceRadius = NODE_RADIUS - 1
+  const sourceDiagonalRadius = sourceRadius * Math.SQRT1_2
+  const start = sourceSide
+    ? {
+        x: from.x + (sourceSide === 'left' ? -sourceDiagonalRadius : sourceDiagonalRadius),
+        y: from.y + verticalDirection * sourceDiagonalRadius,
+      }
+    : {
+        x: from.x,
+        y: from.y + verticalDirection * sourceRadius,
+      }
+  const end = {
+    x: to.x + (targetSide === 'left' ? -targetRadius : targetRadius),
+    y: to.y,
+  }
+  // Leave enough radial run at each node for the terminal bends to read
+  // clearly, even when the long diagonal is already close to that angle.
+  const terminalLength = Math.min(18, Math.hypot(end.x - start.x, end.y - start.y) * 0.2)
+  const sourceLead = {
+    x: start.x + (
+      sourceSide === 'left'
+        ? -terminalLength * Math.SQRT1_2
+        : sourceSide === 'right'
+          ? terminalLength * Math.SQRT1_2
+          : 0
+    ),
+    y: start.y + verticalDirection * (
+      sourceSide ? terminalLength * Math.SQRT1_2 : terminalLength
+    ),
+  }
+  const targetLead = {
+    x: targetLeadX
+      ?? end.x + (targetSide === 'left' ? -terminalLength : terminalLength),
+    y: end.y,
+  }
+
+  return {
+    points: [start, sourceLead, targetLead, end],
+    cornerRadius: Math.min(5, terminalLength / 2),
+  }
+}
+
 export function buildCurvedEdgePath(
   from: EdgePoint,
   to: EdgePoint,
   targetSide?: 'left' | 'right',
   targetNodeRadius = NODE_RADIUS,
   sourceSide?: 'left' | 'right',
+  targetLeadX?: number,
 ) {
   if (targetSide) {
-    const targetRadius = Math.max(1, targetNodeRadius - 1)
-    const verticalDirection = to.y >= from.y ? 1 : -1
-    const sourceRadius = NODE_RADIUS - 1
-    const sourceDiagonalRadius = sourceRadius * Math.SQRT1_2
-    const start = sourceSide
-      ? {
-          x: from.x + (sourceSide === 'left' ? -sourceDiagonalRadius : sourceDiagonalRadius),
-          y: from.y + verticalDirection * sourceDiagonalRadius,
-        }
-      : {
-          x: from.x,
-          y: from.y + verticalDirection * sourceRadius,
-        }
-    const end = {
-      x: to.x + (targetSide === 'left' ? -targetRadius : targetRadius),
-      y: to.y,
-    }
-    // Leave enough radial run at each node for the terminal bends to read
-    // clearly, even when the long diagonal is already close to that angle.
-    const terminalLength = Math.min(18, Math.hypot(end.x - start.x, end.y - start.y) * 0.2)
-    const sourceLead = {
-      x: start.x + (
-        sourceSide === 'left'
-          ? -terminalLength * Math.SQRT1_2
-          : sourceSide === 'right'
-            ? terminalLength * Math.SQRT1_2
-            : 0
-      ),
-      y: start.y + verticalDirection * (
-        sourceSide ? terminalLength * Math.SQRT1_2 : terminalLength
-      ),
-    }
-    const targetLead = {
-      x: end.x + (targetSide === 'left' ? -terminalLength : terminalLength),
-      y: end.y,
-    }
-
-    return roundedPolylinePath(
-      [start, sourceLead, targetLead, end],
-      Math.min(5, terminalLength / 2),
+    const geometry = buildSideEntryCurvePoints(
+      from,
+      to,
+      targetSide,
+      targetNodeRadius,
+      sourceSide,
+      targetLeadX,
     )
+    return roundedPolylinePath(geometry.points, geometry.cornerRadius)
   }
 
   const start = pointOnCircleToward(from.x, from.y, to.x, to.y, NODE_RADIUS - 1)
@@ -1272,6 +1299,9 @@ function routedEdgePath(
         plan.targetSide,
         targetNodeRadius,
         plan.sourceSide,
+        plan.targetLeadOffset === undefined
+          ? undefined
+          : to.x + plan.targetLeadOffset,
       )
     case 'adjacent-hook':
     case 'occlusion-hook':
@@ -1813,6 +1843,15 @@ interface VerticalRailCandidate {
   strokeWidth?: number
 }
 
+interface VerticalRailClearanceSegment {
+  key: string
+  fromSha: string
+  toSha: string
+  x: number
+  startY: number
+  endY: number
+}
+
 function verticalRailCandidatesConflict(
   left: VerticalRailCandidate,
   right: VerticalRailCandidate,
@@ -1987,6 +2026,87 @@ function targetJoinRailX(
     return (plan.track === 'to' ? edge.to.x : edge.from.x) + bundleOffset
   }
   return null
+}
+
+function verticalRailSegment(
+  edge: VisibleEdge,
+  x: number,
+  startY: number,
+  endY: number,
+): VerticalRailClearanceSegment[] {
+  if (Math.abs(startY - endY) < 0.001) return []
+  return [{
+    key: edge.key,
+    fromSha: edge.from.row.sha,
+    toSha: edge.to.row.sha,
+    x,
+    startY,
+    endY,
+  }]
+}
+
+function edgeVerticalRailSegments(
+  edge: VisibleEdge,
+  plan: EdgeRoutePlan,
+  bundleOffset: number,
+): VerticalRailClearanceSegment[] {
+  // Endpoint bends are short relative to a row. Treat the complete span as
+  // occupied so a candidate curve also stays clear of a rail as it turns.
+  const startY = Math.min(edge.from.y, edge.to.y)
+  const endY = Math.max(edge.from.y, edge.to.y)
+  const segment = (x: number) => verticalRailSegment(edge, x, startY, endY)
+
+  switch (plan.mode) {
+    case 'straight':
+      return segment(edge.from.x + bundleOffset)
+    case 'adjacent-hook':
+    case 'occlusion-hook':
+    case 'target-hook':
+      return segment(
+        (plan.track === 'to' ? edge.to.x : edge.from.x) + bundleOffset,
+      )
+    case 'outer-rail':
+      return segment(plan.outerRailX + bundleOffset)
+    case 'inside-rail':
+      return [
+        ...segment(plan.sourceRailX + bundleOffset),
+        ...segment(plan.targetRailX + bundleOffset),
+      ]
+    case 'curve':
+      return []
+  }
+}
+
+function railSharesEndpoint(edge: VisibleEdge, rail: VerticalRailClearanceSegment) {
+  return (
+    rail.key === edge.key
+    || rail.fromSha === edge.from.row.sha
+    || rail.fromSha === edge.to.row.sha
+    || rail.toSha === edge.from.row.sha
+    || rail.toSha === edge.to.row.sha
+  )
+}
+
+function findClearCurveTargetLeadX(
+  edge: VisibleEdge,
+  plan: Extract<EdgeRoutePlan, { mode: 'curve' }>,
+  rails: VerticalRailClearanceSegment[],
+): number | undefined {
+  if (!plan.targetSide) return undefined
+
+  const geometry = buildSideEntryCurvePoints(
+    edge.from,
+    edge.to,
+    plan.targetSide,
+    NODE_RADIUS,
+    plan.sourceSide,
+  )
+  return findClearTargetLeadXAroundRails(
+    geometry.points,
+    plan.targetSide,
+    rails.filter((rail) => !railSharesEndpoint(edge, rail)),
+    EDGE_CURVE_RAIL_CLEARANCE,
+  )
 }
 
 export function buildEdgeRoutingData(
@@ -2177,6 +2297,34 @@ export function buildEdgeRoutingData(
       ...(targetsWithCenteredContinuation.has(edge.from.row.sha)
         ? { sourceSide: edge.to.x < edge.from.x ? 'left' as const : 'right' as const }
         : {}),
+    })
+  }
+
+  // A short side-entry curve can still skim an unrelated vertical edge near
+  // its target. If the space beyond that rail is clear, hold the curve there
+  // until the rail has ended, then make the horizontal target join.
+  const verticalRailClearanceSegments = visibleEdges.flatMap((edge) => {
+    const plan = plans.get(edge.key)
+    if (!plan) return []
+    return edgeVerticalRailSegments(
+      edge,
+      plan,
+      bundleOffsets.get(edge.key) ?? 0,
+    )
+  })
+  for (const edge of visibleEdges) {
+    const plan = plans.get(edge.key)
+    if (plan?.mode !== 'curve' || !plan.targetSide) continue
+    const targetLeadX = findClearCurveTargetLeadX(
+      edge,
+      plan,
+      verticalRailClearanceSegments,
+    )
+    if (targetLeadX === undefined) continue
+
+    plans.set(edge.key, {
+      ...plan,
+      targetLeadOffset: targetLeadX - edge.to.x,
     })
   }
 
