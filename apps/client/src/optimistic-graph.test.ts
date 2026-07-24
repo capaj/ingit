@@ -6,6 +6,7 @@ import {
   predictRebase,
   predictWorktreeAfterCheckout,
   predictWorktreeAfterCommit,
+  rebasePreviewUnavailableReason,
 } from './optimistic-graph'
 
 function row(sha: string, parentShas: string[], refNames: string[] = [], committerUnix = 100): CommitRow {
@@ -74,6 +75,35 @@ describe('predictRebase', () => {
     ])
     expect(prediction!.rows.find((commit) => commit.sha === 'refactor-1')?.parentShas).toEqual(['main'])
     expect(prediction!.rows.find((commit) => commit.sha === 'refactor-1')?.committerUnix).toBeGreaterThanOrEqual(beforeRewrite)
+    expect(rebasePreviewUnavailableReason(rows, refs, 'main')).toBeNull()
+  })
+
+  test('explains when merge commits make the preview unreliable', () => {
+    const rows = [
+      row('feature-tip', ['merge'], ['feature'], 200),
+      row('merge', ['main-base', 'side-change'], [], 190),
+      row('side-change', ['base'], [], 180),
+      row('onto', ['main-base'], ['main'], 170),
+      row('main-base', ['base'], [], 160),
+      row('base', [], [], 150),
+    ]
+    const refs = [
+      branch('feature', 'feature-tip', true),
+      branch('main', 'onto'),
+    ]
+
+    expect(predictRebase(rows, refs, 'main')).toBeNull()
+    expect(rebasePreviewUnavailableReason(rows, refs, 'main')).toBe('merge-commits')
+  })
+
+  test('explains when the target is outside the loaded history', () => {
+    const rows = [row('feature-tip', ['base'], ['feature'], 200)]
+    const refs = [
+      branch('feature', 'feature-tip', true),
+      branch('main', 'onto'),
+    ]
+
+    expect(rebasePreviewUnavailableReason(rows, refs, 'main')).toBe('history-not-loaded')
   })
 })
 

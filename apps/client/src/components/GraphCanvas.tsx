@@ -7,7 +7,12 @@ import { openTerminal } from '../api'
 import { useAppStore } from '../store'
 import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
-import { predictAppendOnHead, predictRebase, type OptimisticGraph } from '../optimistic-graph'
+import {
+  predictAppendOnHead,
+  predictRebase,
+  rebasePreviewUnavailableReason,
+  type OptimisticGraph,
+} from '../optimistic-graph'
 import { CommitActionButton, RefActionButton } from './graph-canvas/ActionButtons'
 import { CommitMessageIcon, findCommitIcon, useCommitIconRules } from './graph-canvas/CommitIcons'
 import {
@@ -69,6 +74,7 @@ const GAUGE_ADDITIONS_FILL = '#a6e3a1'
 const GAUGE_DELETIONS_FILL = '#f38ba8'
 const ACTION_PREVIEW_COLOR = '#a6e3a1'
 const UNCOMMIT_PREVIEW_COLOR = '#f38ba8'
+const SELECTED_REF_RING_COLOR = '#f9e2af'
 const GAUGE_MIN_FILL_HEIGHT = 2
 const GAUGE_SCALE_PERCENTILE = 0.85
 const EDGE_CORNER_RADIUS = 12
@@ -1575,7 +1581,6 @@ function buildRefPlacements(
   nodes: LayoutNode[],
   currentBranch: string | null,
   selectedRefName: string | null,
-  shaToColor: Map<string, string>,
   nodeRadii?: ReadonlyMap<string, number>,
 ) {
   const placements: RefPlacement[] = []
@@ -1594,7 +1599,7 @@ function buildRefPlacements(
         nodeSha: node.row.sha,
         x: cursorX,
         y,
-        color: shaToColor.get(node.row.sha) ?? laneColor(node.row.lane),
+        color: colorForBranchName(refName),
         isCurrent,
         isSelected: refName === selectedRefName,
         isRemote,
@@ -1783,7 +1788,7 @@ function buildCurrentLaneHighlight(layout: GraphLayout | null, currentBranch: st
   return {
     key: currentBranch,
     x: tipNode.x - PRIMARY_LANE_HIGHLIGHT_WIDTH / 2,
-    color: layout.shaToColor.get(tipNode.row.sha) ?? laneColor(tipNode.row.lane),
+    color: colorForBranchName(currentBranch),
   }
 }
 
@@ -2507,6 +2512,36 @@ export function GraphCanvas() {
     return predictAppendOnHead(histWindow.rows, refs, subject, actionPreview.action)
   }, [actionPreview, histWindow, refs])
 
+  const rebasePreviewNotice = useMemo(() => {
+    if (
+      actionPreview?.kind !== 'rebase'
+      || actionPreviewPrediction
+      || !histWindow
+    ) return null
+
+    const reason = rebasePreviewUnavailableReason(
+      histWindow.rows,
+      refs,
+      actionPreview.targetRefName,
+    )
+    if (reason === 'merge-commits') {
+      return {
+        title: 'Preview unavailable',
+        detail: 'This rebase crosses merge commits. It can still run, but the result is too ambiguous to predict.',
+      }
+    }
+    if (reason === 'history-not-loaded') {
+      return {
+        title: 'Preview unavailable',
+        detail: 'The commits needed for this preview are outside the loaded history.',
+      }
+    }
+    return {
+      title: 'Preview unavailable',
+      detail: 'This rebase can still be run, but its result cannot be predicted reliably.',
+    }
+  }, [actionPreview, actionPreviewPrediction, histWindow, refs])
+
   const actionPreviewGeometry = useMemo(() => {
     if (!layout || !actionPreview || !actionPreviewPrediction) return null
     return buildActionPreviewGeometry(
@@ -3057,7 +3092,6 @@ export function GraphCanvas() {
       visibleNodes,
       currentBranch,
       selectedRefName,
-      layout?.shaToColor ?? EMPTY_SHA_COLOR,
       edgeRouting.targetNodeRadii,
     ),
     [visibleNodes, currentBranch, selectedRefName, layout, edgeRouting],
@@ -3120,14 +3154,12 @@ export function GraphCanvas() {
       fromWindow.visibleNodes,
       graphAnimation.fromCurrentBranch,
       selectedRefName,
-      graphAnimation.fromLayout.shaToColor,
       fromRouting.targetNodeRadii,
     ).placements
     const toRefPlacements = buildRefPlacements(
       toWindow.visibleNodes,
       graphAnimation.toCurrentBranch,
       selectedRefName,
-      graphAnimation.toLayout.shaToColor,
       toRouting.targetNodeRadii,
     ).placements
     const fromLaneHighlight = buildCurrentLaneHighlight(graphAnimation.fromLayout, graphAnimation.fromCurrentBranch)
@@ -4135,31 +4167,73 @@ export function GraphCanvas() {
       )}
 
       {rebaseHoverLock && createPortal(
-        <div
-          style={{
-            position: 'fixed',
-            left: rebaseHoverLock.buttonRect.left,
-            top: rebaseHoverLock.buttonRect.top,
-            width: rebaseHoverLock.buttonRect.width,
-            height: rebaseHoverLock.buttonRect.height,
-            zIndex: 10_000,
-            pointerEvents: 'auto',
-          }}
-        >
-          <div style={{
-            width: rebaseHoverLock.buttonRect.width / rebaseHoverLock.buttonScale,
-            height: rebaseHoverLock.buttonRect.height / rebaseHoverLock.buttonScale,
-            transform: `scale(${rebaseHoverLock.buttonScale})`,
-            transformOrigin: 'top left',
-          }}>
-            <CommitActionButton
-              label="Rebase"
-              tone="success"
-              onClick={() => handleRebaseClick(rebaseHoverLock.targetRefName)}
-              onMouseLeave={handleRebaseHoverEnd}
-            />
+        <>
+          <div
+            style={{
+              position: 'fixed',
+              left: rebaseHoverLock.buttonRect.left,
+              top: rebaseHoverLock.buttonRect.top,
+              width: rebaseHoverLock.buttonRect.width,
+              height: rebaseHoverLock.buttonRect.height,
+              zIndex: 10_000,
+              pointerEvents: 'auto',
+            }}
+          >
+            <div style={{
+              width: rebaseHoverLock.buttonRect.width / rebaseHoverLock.buttonScale,
+              height: rebaseHoverLock.buttonRect.height / rebaseHoverLock.buttonScale,
+              transform: `scale(${rebaseHoverLock.buttonScale})`,
+              transformOrigin: 'top left',
+            }}>
+              <CommitActionButton
+                label="Rebase"
+                tone="success"
+                onClick={() => handleRebaseClick(rebaseHoverLock.targetRefName)}
+                onMouseLeave={handleRebaseHoverEnd}
+              />
+            </div>
           </div>
-        </div>,
+          {rebasePreviewNotice && (
+            <div
+              role="status"
+              data-rebase-preview-notice
+              style={{
+                position: 'fixed',
+                left: Math.max(
+                  8,
+                  Math.min(
+                    rebaseHoverLock.buttonRect.left + rebaseHoverLock.buttonRect.width / 2 - 122,
+                    browserWidth - 252,
+                  ),
+                ),
+                top: rebaseHoverLock.buttonRect.top
+                  + rebaseHoverLock.buttonRect.height
+                  + 78 <= rebaseHoverLock.viewport.height
+                  ? rebaseHoverLock.buttonRect.top + rebaseHoverLock.buttonRect.height + 9
+                  : Math.max(8, rebaseHoverLock.buttonRect.top - 69),
+                zIndex: 10_001,
+                width: 244,
+                boxSizing: 'border-box',
+                padding: '9px 11px',
+                borderRadius: 7,
+                border: '1px solid #f9e2af99',
+                background: 'rgba(17, 17, 27, 0.96)',
+                color: '#cdd6f4',
+                boxShadow: '0 10px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(249, 226, 175, 0.08)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                pointerEvents: 'none',
+              }}
+            >
+              <div style={{ color: '#f9e2af', fontSize: 11, fontWeight: 800, marginBottom: 3 }}>
+                ⓘ {rebasePreviewNotice.title}
+              </div>
+              <div style={{ color: '#bac2de', fontSize: 10, lineHeight: 1.4 }}>
+                {rebasePreviewNotice.detail}
+              </div>
+            </div>
+          )}
+        </>,
         document.body,
       )}
 
@@ -4176,6 +4250,8 @@ export function GraphCanvas() {
         {stickyLaneLabels.map((label) => (
           <div
             key={label.name}
+            data-sticky-ref-name={label.name}
+            data-selected={selectedRefName === label.name || undefined}
             onClick={(e) => handleRefSelect(e, label.name)}
             style={{
               position: 'absolute',
@@ -4183,18 +4259,21 @@ export function GraphCanvas() {
               top: 4 + label.row * 22,
               padding: '2px 8px',
               borderRadius: 4,
-              background: selectedRefName === label.name ? label.color + '35' : label.color + '20',
+              zIndex: selectedRefName === label.name ? 1 : 0,
+              background: selectedRefName === label.name ? label.color + '55' : label.color + '20',
               border: `1px solid ${selectedRefName === label.name ? label.color : label.color + '50'}`,
               color: label.color,
               fontSize: 10,
-              fontWeight: 600,
+              fontWeight: selectedRefName === label.name ? 800 : 600,
               whiteSpace: 'nowrap',
               pointerEvents: 'auto',
               transform: `scale(${Math.min(renderedZoom, 1)})`,
               transformOrigin: 'top left',
               transition: `left ${cameraTransition}, transform ${cameraTransition}`,
               cursor: 'pointer',
-              boxShadow: selectedRefName === label.name ? `0 0 8px ${label.color}40` : 'none',
+              boxShadow: selectedRefName === label.name
+                ? `0 7px 16px rgba(0, 0, 0, 0.58), 0 0 0 1px #11111b, 0 0 0 3px ${SELECTED_REF_RING_COLOR}, 0 0 14px ${label.color}99`
+                : 'none',
             }}
           >
             {label.name}
@@ -4852,12 +4931,18 @@ export function GraphCanvas() {
           const pillShadow = [
             'inset 0 1px 0 rgba(255, 255, 255, 0.14)',
             `inset 0 -1px 0 ${placement.color}18`,
-            isEmphasized ? `0 0 8px ${placement.color}38` : '0 2px 5px rgba(0, 0, 0, 0.18)',
+            placement.isSelected
+              ? `0 9px 20px rgba(0, 0, 0, 0.62), 0 0 0 1px #11111b, 0 0 0 3px ${SELECTED_REF_RING_COLOR}, 0 0 16px ${placement.color}aa`
+              : isEmphasized
+                ? `0 0 8px ${placement.color}38`
+                : '0 2px 5px rgba(0, 0, 0, 0.18)',
           ].join(', ')
 
           return (
             <animated.div
               key={refItem.key}
+              data-ref-name={placement.refName}
+              data-selected={placement.isSelected || undefined}
               onClick={(e) => handleRefSelect(e, placement.refName)}
               onPointerEnter={() => showAddRefControls(placement.nodeSha)}
               onPointerLeave={() => scheduleHideAddRefControls(placement.nodeSha)}
@@ -4871,13 +4956,13 @@ export function GraphCanvas() {
                 height: 20,
                 padding: '0 7px',
                 borderRadius: 4,
-                background: `linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.015) 38%, ${placement.color}18 100%), linear-gradient(${pillTint}, ${pillTint}), rgba(24, 24, 37, 0.5)`,
+                background: `linear-gradient(135deg, rgba(255, 255, 255, ${placement.isSelected ? '0.16' : '0.09'}) 0%, rgba(255, 255, 255, 0.015) 38%, ${placement.color}18 100%), linear-gradient(${pillTint}, ${pillTint}), rgba(24, 24, 37, ${placement.isSelected ? '0.9' : '0.5'})`,
                 backdropFilter: 'blur(3px) saturate(145%) contrast(103%)',
                 WebkitBackdropFilter: 'blur(3px) saturate(145%) contrast(103%)',
                 border: `1px solid ${isEmphasized ? placement.color : placement.color + '66'}`,
                 color: placement.color,
                 fontSize: 11,
-                fontWeight: 600,
+                fontWeight: placement.isSelected ? 800 : 600,
                 lineHeight: '20px',
                 whiteSpace: 'nowrap',
                 cursor: 'pointer',

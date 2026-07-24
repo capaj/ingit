@@ -49,8 +49,59 @@ export function laneColor(lane: number): string {
   return LANE_COLORS[normalized]
 }
 
+function mixHash(value: number): number {
+  let mixed = value
+  mixed ^= mixed >>> 16
+  mixed = Math.imul(mixed, 0x7feb352d)
+  mixed ^= mixed >>> 15
+  mixed = Math.imul(mixed, 0x846ca68b)
+  mixed ^= mixed >>> 16
+  return mixed >>> 0
+}
+
+function hashBranchName(name: string): number {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < name.length; index++) {
+    hash ^= name.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return hash >>> 0
+}
+
+function hslToHex(hue: number, saturation: number, lightness: number): string {
+  const s = saturation / 100
+  const l = lightness / 100
+  const chroma = (1 - Math.abs(2 * l - 1)) * s
+  const hueSection = ((hue % 360) + 360) % 360 / 60
+  const secondary = chroma * (1 - Math.abs(hueSection % 2 - 1))
+  const [red, green, blue] = hueSection < 1
+    ? [chroma, secondary, 0]
+    : hueSection < 2
+      ? [secondary, chroma, 0]
+      : hueSection < 3
+        ? [0, chroma, secondary]
+        : hueSection < 4
+          ? [0, secondary, chroma]
+          : hueSection < 5
+            ? [secondary, 0, chroma]
+            : [chroma, 0, secondary]
+  const offset = l - chroma / 2
+  return `#${[red, green, blue]
+    .map((component) => Math.round((component + offset) * 255).toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+/**
+ * Give every branch a stable color derived only from its name. Generating the
+ * hue directly avoids the frequent collisions caused by a short fixed palette,
+ * while the constrained saturation/lightness range stays legible on the graph.
+ */
 export function colorForBranchName(name: string): string {
-  return LANE_COLORS[hashText(name) % LANE_COLORS.length]
+  const hash = mixHash(hashBranchName(name))
+  const hue = hash % 360
+  const saturation = 64 + ((hash >>> 9) % 17)
+  const lightness = 68 + ((hash >>> 17) % 9)
+  return hslToHex(hue, saturation, lightness)
 }
 
 export interface GraphViewportFit {

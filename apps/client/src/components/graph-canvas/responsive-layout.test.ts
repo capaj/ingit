@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { CommitRow } from '@ingit/rpc-contract'
 import {
   buildLayout,
+  colorForBranchName,
   fitGraphToBrowserWindow,
   fitLaneFrameToRows,
   LANE_WIDTH,
@@ -140,5 +141,23 @@ describe('responsive graph layout', () => {
     ], fit)
 
     expect(laneFrame.laneCenterX).toBe(fit.laneCenterX)
+  })
+
+  test('derives stable, varied branch colors from branch names', () => {
+    const names = [
+      'origin/dev',
+      'origin/codex/issue-651-video-placement-hygiene',
+      'codex/split-cms-content-tabs',
+      'codex/keyword-move-chat-action-mode',
+      'origin/claude/theme-switching-navigation-bug-3qjx7p',
+      'main',
+      'origin/claude/github-issue-653-a2aetg',
+      'groas-admin-issue-media',
+    ]
+    const colors = names.map(colorForBranchName)
+
+    expect(colors.every((color) => /^#[0-9a-f]{6}$/.test(color))).toBe(true)
+    expect(new Set(colors).size).toBe(names.length)
+    expect(colorForBranchName('main')).toBe('#eca889')
   })
 })

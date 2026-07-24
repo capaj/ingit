@@ -456,3 +456,37 @@ export function predictRebase(
   const nextRefs = refs.slice()
   return { rows: assembleRows(ordered, nextRefs, headSha), refs: nextRefs, headSha }
 }
+
+export type RebasePreviewUnavailableReason = 'merge-commits' | 'history-not-loaded'
+
+/**
+ * Explain why the optimistic rebase preview cannot be built. This is separate
+ * from the real operation: Git can perform rebases that the client deliberately
+ * declines to predict.
+ */
+export function rebasePreviewUnavailableReason(
+  rows: CommitRow[],
+  refs: RefSummary[],
+  ontoRefName: string,
+): RebasePreviewUnavailableReason | null {
+  const current = currentBranchRef(refs)
+  const onto = findRefByShortName(refs, ontoRefName)
+  if (!current || !onto) return 'history-not-loaded'
+
+  const headSha = current.targetSha
+  const ontoSha = refTipSha(onto)
+  if (!rows.some((row) => row.sha === headSha) || !rows.some((row) => row.sha === ontoSha)) {
+    return 'history-not-loaded'
+  }
+
+  const parentMap = new Map(rows.map((row) => [row.sha, row.parentShas]))
+  const headAncestors = ancestorsWithin(headSha, parentMap)
+  const ontoAncestors = ancestorsWithin(ontoSha, parentMap)
+  const replayed = rows.filter(
+    (row) => headAncestors.has(row.sha) && !ontoAncestors.has(row.sha),
+  )
+
+  return replayed.some((row) => row.parentShas.length > 1)
+    ? 'merge-commits'
+    : null
+}
