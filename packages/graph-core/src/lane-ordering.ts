@@ -20,6 +20,8 @@ interface SegmentModel {
   segments: LaneSegment[]
   /** Segments holding a commit that a center-line (lane 0) row merges in. */
   centerMergeTargetIds: Set<string>
+  /** Forks whose repeatedly integrated child should visually continue upward. */
+  preferredChildByParent: Map<string, string>
 }
 
 /**
@@ -43,7 +45,11 @@ export function orderLaneSegmentsByContinuity(
     return new Map(rows.map((row) => [row.sha, 0]))
   }
 
-  const { segments, centerMergeTargetIds } = buildSegments(rows)
+  const {
+    segments,
+    centerMergeTargetIds,
+    preferredChildByParent,
+  } = buildSegments(rows)
   const segmentById = new Map(segments.map((segment) => [segment.id, segment]))
   const sideBySegment = resolveSegmentSides(
     segments,
@@ -82,6 +88,11 @@ export function orderLaneSegmentsByContinuity(
       boundedRadius,
     )
   }
+  straightenIntegratedForkContinuations(
+    rows,
+    laneBySha,
+    preferredChildByParent,
+  )
   return laneBySha
 }
 
@@ -95,6 +106,72 @@ function buildSegments(rows: LaneRow[]): SegmentModel {
     if (children) children.push(row)
     else firstParentChildren.set(firstParent, [row])
   }
+
+  // Mark the exact commits whose branch line joins the center through a merge.
+  // At a first-parent fork, the child lineage with more of these integrations
+  // is the better visual continuation of the shared history: keep it vertical
+  // and let a shorter, unmerged child peel into an outer gutter.
+  const centerMergeTargetShas = new Set<string>()
+  for (const row of rows) {
+    for (const parentSha of row.parentShas.slice(1)) {
+      const parent = rowBySha.get(parentSha)
+      if (!parent) continue
+      if (row.lane === 0 && parent.lane !== 0) {
+        centerMergeTargetShas.add(parent.sha)
+      } else if (row.lane !== 0 && parent.lane === 0) {
+        centerMergeTargetShas.add(row.sha)
+      }
+    }
+  }
+
+  // Children precede their parents in the projection, so the strongest chain
+  // of integrations can be accumulated upward in one pass without recursively
+  // walking a large repository history. Taking the maximum avoids treating two
+  // separately merged sibling tips as one long-lived integrated continuation.
+  const centerIntegrationsBySha = new Map<string, number>()
+  for (const row of rows) {
+    const integrations = (centerIntegrationsBySha.get(row.sha) ?? 0)
+      + (centerMergeTargetShas.has(row.sha) ? 1 : 0)
+    centerIntegrationsBySha.set(row.sha, integrations)
+    const firstParent = row.parentShas[0]
+    if (firstParent && rowBySha.has(firstParent)) {
+      centerIntegrationsBySha.set(
+        firstParent,
+        Math.max(centerIntegrationsBySha.get(firstParent) ?? 0, integrations),
+      )
+    }
+  }
+
+  const preferredChildByParent = new Map<string, string>()
+  for (const [parentSha, children] of firstParentChildren) {
+    if (children.length < 2) continue
+    const parent = rowBySha.get(parentSha)
+    if (!parent || parent.lane === 0) continue
+    const existingContinuation = children.find(
+      (child) => child.lane === parent.lane,
+    )
+    if (!existingContinuation) continue
+    let preferred = existingContinuation
+    let preferredIntegrations = centerIntegrationsBySha.get(preferred.sha) ?? 0
+    for (const child of children) {
+      const integrations = centerIntegrationsBySha.get(child.sha) ?? 0
+      // A single merged sibling is common and should not override the
+      // allocator's continuation. Repeated integrations identify the actual
+      // long-lived branch line strongly enough to justify the switch.
+      if (
+        Math.sign(child.lane) === Math.sign(preferred.lane)
+        && integrations >= 2
+        && integrations > preferredIntegrations
+      ) {
+        preferred = child
+        preferredIntegrations = integrations
+      }
+    }
+    if (preferred.sha !== existingContinuation.sha) {
+      preferredChildByParent.set(parentSha, preferred.sha)
+    }
+  }
+
   const rootBySha = new Map(rows.map((row) => [row.sha, row.sha]))
 
   const find = (sha: string): string => {
@@ -122,18 +199,9 @@ function buildSegments(rows: LaneRow[]): SegmentModel {
   // should be short hops, not long horizontals crossing every side branch in
   // between. This covers both directions — the center merging a side line in,
   // and a side line merging the center line into itself.
-  const pinnedRoots = new Set<string>()
-  for (const row of rows) {
-    for (const parentSha of row.parentShas.slice(1)) {
-      const parent = rowBySha.get(parentSha)
-      if (!parent) continue
-      if (row.lane === 0 && parent.lane !== 0) {
-        pinnedRoots.add(find(parent.sha))
-      } else if (row.lane !== 0 && parent.lane === 0) {
-        pinnedRoots.add(find(row.sha))
-      }
-    }
-  }
+  const pinnedRoots = new Set(
+    [...centerMergeTargetShas].map((sha) => find(sha)),
+  )
 
   // A pinned line can still fragment when another reservation steals its lane
   // mid-line. Stitch its first-parent-linked fragments back into one segment
@@ -235,7 +303,11 @@ function buildSegments(rows: LaneRow[]): SegmentModel {
     centerMergeTargetIds.add(find(root))
   }
 
-  return { segments: [...segmentByRoot.values()], centerMergeTargetIds }
+  return {
+    segments: [...segmentByRoot.values()],
+    centerMergeTargetIds,
+    preferredChildByParent,
+  }
 }
 
 function extendSegmentToRow(segment: LaneSegment, row: number): void {
@@ -581,6 +653,127 @@ function assignSegment(
 
   const lane = side === 'left' ? -slot : slot
   for (const sha of segment.shas) laneBySha.set(sha, lane)
+}
+
+/**
+ * The topology allocator occasionally gives a short branch the parent's
+ * original lane even though a sibling lineage continues much farther upward
+ * and repeatedly merges into the center. Swap only the shared-history tail
+ * into that integrated child's gutter, and only while the gutter is clear.
+ * Keeping this as a local final adjustment avoids reshuffling unrelated
+ * branch families elsewhere in the history.
+ */
+function straightenIntegratedForkContinuations(
+  rows: LaneRow[],
+  laneBySha: Map<string, number>,
+  preferredChildByParent: Map<string, string>,
+): void {
+  if (preferredChildByParent.size === 0) return
+
+  const rowBySha = new Map(rows.map((row) => [row.sha, row]))
+  const firstParentChildren = new Map<string, LaneRow[]>()
+  for (const row of rows) {
+    const firstParent = row.parentShas[0]
+    if (!firstParent) continue
+    const children = firstParentChildren.get(firstParent)
+    if (children) children.push(row)
+    else firstParentChildren.set(firstParent, [row])
+  }
+
+  for (const [parentSha, preferredChildSha] of preferredChildByParent) {
+    const parent = rowBySha.get(parentSha)
+    const preferredChild = rowBySha.get(preferredChildSha)
+    if (!parent || !preferredChild) continue
+
+    const existingContinuation = (firstParentChildren.get(parentSha) ?? [])
+      .find((child) => child.lane === parent.lane)
+    if (!existingContinuation) continue
+
+    const currentLane = laneBySha.get(parentSha)
+    const existingLane = laneBySha.get(existingContinuation.sha)
+    const preferredLane = laneBySha.get(preferredChildSha)
+    if (
+      currentLane === undefined
+      || existingLane !== currentLane
+      || preferredLane === undefined
+      || preferredLane === currentLane
+      || preferredLane === 0
+      || Math.sign(preferredLane) !== Math.sign(currentLane)
+    ) {
+      continue
+    }
+
+    const tail: LaneRow[] = []
+    let cursor: LaneRow | undefined = parent
+    while (
+      cursor
+      && cursor.lane === parent.lane
+      && laneBySha.get(cursor.sha) === currentLane
+    ) {
+      tail.push(cursor)
+      const firstParent: string | undefined = cursor.parentShas[0]
+      cursor = firstParent ? rowBySha.get(firstParent) : undefined
+    }
+    if (tail.length === 0) continue
+
+    const tailShas = new Set(tail.map((row) => row.sha))
+    const { startRow, endRow } = tail.reduce(
+      (range, row) => ({
+        startRow: Math.min(range.startRow, row.row),
+        endRow: Math.max(range.endRow, row.row),
+      }),
+      { startRow: Infinity, endRow: -Infinity },
+    )
+    const overlapsTail = (left: number, right: number) => (
+      Math.max(Math.min(left, right), startRow)
+      < Math.min(Math.max(left, right), endRow)
+    )
+    let gutterIsClear = true
+
+    for (const row of rows) {
+      if (tailShas.has(row.sha)) continue
+      const rowLane = laneBySha.get(row.sha)
+      if (
+        rowLane === preferredLane
+        && row.row >= startRow
+        && row.row <= endRow
+      ) {
+        gutterIsClear = false
+        break
+      }
+
+      const firstParentSha = row.parentShas[0]
+      const firstParent = firstParentSha
+        ? rowBySha.get(firstParentSha)
+        : undefined
+      if (
+        row.sha !== preferredChildSha
+        && rowLane === preferredLane
+        && firstParent
+        && overlapsTail(row.row, firstParent.row)
+      ) {
+        gutterIsClear = false
+        break
+      }
+
+      for (const mergeParentSha of row.parentShas.slice(1)) {
+        const mergeParent = rowBySha.get(mergeParentSha)
+        if (
+          mergeParent
+          && !tailShas.has(mergeParent.sha)
+          && laneBySha.get(mergeParent.sha) === preferredLane
+          && overlapsTail(row.row, mergeParent.row)
+        ) {
+          gutterIsClear = false
+          break
+        }
+      }
+      if (!gutterIsClear) break
+    }
+
+    if (!gutterIsClear) continue
+    for (const row of tail) laneBySha.set(row.sha, preferredLane)
+  }
 }
 
 /**

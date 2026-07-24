@@ -143,6 +143,30 @@ describe('lane ordering', () => {
     }
   })
 
+  test('keeps the repeatedly integrated fork lineage vertical over a short branch', () => {
+    const rows = [
+      { sha: 'center-new', parentShas: ['center-mid', 'orange-top'], row: 0, lane: 0 },
+      { sha: 'orange-top', parentShas: ['orange-mid'], row: 1, lane: 1 },
+      { sha: 'pink-tip', parentShas: ['pink-root'], row: 2, lane: 3 },
+      { sha: 'pink-root', parentShas: ['fork'], row: 3, lane: 3 },
+      { sha: 'center-mid', parentShas: ['center-old', 'orange-mid'], row: 4, lane: 0 },
+      { sha: 'orange-mid', parentShas: ['fork'], row: 5, lane: 1 },
+      { sha: 'center-old', parentShas: ['center-base', 'fork'], row: 6, lane: 0 },
+      { sha: 'fork', parentShas: ['base'], row: 7, lane: 3 },
+      { sha: 'base', parentShas: [], row: 8, lane: 3 },
+      { sha: 'center-base', parentShas: [], row: 9, lane: 0 },
+    ]
+
+    for (const radius of [undefined, 3]) {
+      const lanes = orderLaneSegmentsByContinuity(rows, radius)
+      expect(lanes.get('orange-top')).toBe(lanes.get('orange-mid'))
+      expect(lanes.get('orange-mid')).toBe(lanes.get('fork'))
+      expect(lanes.get('fork')).toBe(lanes.get('base'))
+      expect(lanes.get('pink-root')).not.toBe(lanes.get('fork'))
+      expect(lanes.get('pink-tip')).toBe(lanes.get('pink-root'))
+    }
+  })
+
   test('balances independent merge families across both sides of the center', () => {
     const rows = [
       { sha: 'c0', parentShas: ['c1', 'branch-a'], row: 0, lane: 0 },
