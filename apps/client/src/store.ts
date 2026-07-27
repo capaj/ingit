@@ -6,7 +6,9 @@ import type {
   CommitAuthorResponse,
   CommitDiffResponse,
   CommitRow,
+  GithubForkSuggestion,
   MergePreviewResponse,
+  RemoteSummary,
   ReflogResponse,
   WorktreeChangesResponse,
   WorktreeSummary,
@@ -18,6 +20,10 @@ import {
   getRecentRepos,
   discoverRepos,
   getRefs,
+  getRemotes,
+  getGithubForkSuggestion,
+  addRemote as addRemoteApi,
+  removeRemote as removeRemoteApi,
   getWorktrees,
   removeWorktree as removeWorktreeApi,
   queryHistory,
@@ -291,6 +297,7 @@ function fetchRepositoryState(repoId: string): Promise<[
   WorktreeChangesResponse,
   WorktreeSummary[],
   StashSummary[],
+  RemoteSummary[],
 ]> {
   return Promise.all([
     getRefs(repoId),
@@ -306,6 +313,7 @@ function fetchRepositoryState(repoId: string): Promise<[
     getWorktreeChanges(repoId),
     getWorktrees(repoId),
     getStashes(repoId),
+    getRemotes(repoId),
   ])
 }
 
@@ -389,6 +397,11 @@ function prependRecentRepo(recentRepos: string[], repoPath: string): string[] {
     .slice(0, MAX_RECENT_REPOS)
 }
 
+function reconcileSelectedRemote(remotes: RemoteSummary[], current: string | null): string | null {
+  if (current && remotes.some((remote) => remote.name === current)) return current
+  return remotes.find((remote) => remote.name === 'origin')?.name ?? remotes[0]?.name ?? null
+}
+
 async function openRepoByPathImpl(
   path: string,
   set: StoreSetter,
@@ -403,6 +416,9 @@ async function openRepoByPathImpl(
     currentWorktreePath: null,
     totalCommitCount: 0,
     refs: [],
+    remotes: [],
+    selectedRemoteName: null,
+    githubForkSuggestion: null,
     stashes: [],
     selectedStashSha: null,
     stashDiff: null,
@@ -435,7 +451,10 @@ async function openRepoByPathImpl(
     const res = await openRepo({ path })
     if (requestId !== repoOpenRequestId) return
 
-    const [refs, hist, worktrees, stashes] = await Promise.all([
+    const forkSuggestionPromise: Promise<GithubForkSuggestion | null> = res.githubUrl
+      ? getGithubForkSuggestion(res.repoId).catch(() => null)
+      : Promise.resolve(null)
+    const [refs, hist, worktrees, stashes, remotes] = await Promise.all([
       getRefs(res.repoId),
       queryHistory(res.repoId, {
         repoId: res.repoId,
@@ -448,6 +467,7 @@ async function openRepoByPathImpl(
       }),
       getWorktrees(res.repoId),
       getStashes(res.repoId),
+      getRemotes(res.repoId),
     ])
     if (requestId !== repoOpenRequestId) return
 
@@ -466,6 +486,8 @@ async function openRepoByPathImpl(
       recentRepos: prependRecentRepo(get().recentRepos, res.currentWorktreePath),
       githubUrl: res.githubUrl,
       refs,
+      remotes,
+      selectedRemoteName: reconcileSelectedRemote(remotes, null),
       stashes,
       worktrees,
       historyWindow: hist,
@@ -487,6 +509,11 @@ async function openRepoByPathImpl(
       reflog: null,
       reflogMaxCount: REFLOG_PAGE_SIZE,
     }))
+    void forkSuggestionPromise.then((githubForkSuggestion) => {
+      if (requestId === repoOpenRequestId && get().repoId === res.repoId) {
+        set({ githubForkSuggestion })
+      }
+    })
     if (get().viewMode === 'reflog') void get().loadReflog()
     // Worktree status can be slow in large repositories and is independent of
     // painting recent history, so let it fill in after the graph is visible.
@@ -650,8 +677,9 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       let changes: WorktreeChangesResponse
       let worktrees: WorktreeSummary[]
       let stashes: StashSummary[]
+      let remotes: RemoteSummary[]
       try {
-        [refs, hist, changes, worktrees, stashes] = await fetchRepositoryState(repoId)
+        [refs, hist, changes, worktrees, stashes, remotes] = await fetchRepositoryState(repoId)
       } catch (err) {
         if (isSessionError(err) || isConnectionLostError(err)) {
           const res = await openRepo({ path: repoPath })
@@ -663,6 +691,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
           changes = fresh[2]
           worktrees = fresh[3]
           stashes = fresh[4]
+          remotes = fresh[5]
         } else {
           throw err
         }
@@ -670,6 +699,8 @@ export const useAppStore = create<AppState>((baseSet, get) => {
 
       set((s) => ({
         refs,
+        remotes,
+        selectedRemoteName: reconcileSelectedRemote(remotes, s.selectedRemoteName),
         stashes,
         selectedStashSha: s.selectedStashSha && stashes.some((stash) => stash.sha === s.selectedStashSha)
           ? s.selectedStashSha
@@ -718,6 +749,53 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       return true
     } catch (err) {
       get().showError('Remove worktree failed', err)
+      return false
+    }
+  },
+
+  selectRemote: (name) => {
+    if (!get().remotes.some((remote) => remote.name === name)) return
+    set({ selectedRemoteName: name })
+  },
+
+  addRemote: async (name, url) => {
+    const { repoId } = get()
+    if (!repoId) return false
+    try {
+      const result = await addRemoteApi(repoId, name.trim(), url.trim())
+      if (get().repoId === repoId) {
+        set((state) => ({
+          remotes: result.remotes,
+          selectedRemoteName: reconcileSelectedRemote(result.remotes, state.selectedRemoteName),
+          githubForkSuggestion: state.githubForkSuggestion?.url === url.trim()
+            ? null
+            : state.githubForkSuggestion,
+        }))
+      }
+      return true
+    } catch (err) {
+      get().showError('Add remote failed', err)
+      return false
+    }
+  },
+
+  removeRemote: async (name) => {
+    const { repoId } = get()
+    if (!repoId) return false
+    try {
+      const result = await removeRemoteApi(repoId, name)
+      if (get().repoId === repoId) {
+        set((state) => ({
+          remotes: result.remotes,
+          selectedRemoteName: reconcileSelectedRemote(result.remotes, state.selectedRemoteName),
+        }))
+        await get().reloadFromServer()
+        const githubForkSuggestion = await getGithubForkSuggestion(repoId).catch(() => null)
+        if (get().repoId === repoId) set({ githubForkSuggestion })
+      }
+      return true
+    } catch (err) {
+      get().showError('Remove remote failed', err)
       return false
     }
   },
@@ -1211,6 +1289,9 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       currentWorktreePath: null,
       totalCommitCount: 0,
       refs: [],
+      remotes: [],
+      selectedRemoteName: null,
+      githubForkSuggestion: null,
       stashes: [],
       selectedStashSha: null,
       stashDiff: null,
@@ -1510,6 +1591,9 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     if (!repoId || !repoPath) return
     if (get().pendingMutation) return
 
+    const remote = action === 'push' || action === 'fetch'
+      ? get().selectedRemoteName ?? undefined
+      : undefined
     const snapshot = captureSnapshot(get())
     const rows = snapshot.historyWindow?.rows ?? []
 
@@ -1569,7 +1653,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     try {
       await withTimeout((async () => {
         try {
-          await refAction(repoId, action, refName, sha, force)
+          await refAction(repoId, action, refName, sha, force, remote)
         } catch (err) {
           // Most ref actions are safe to retry after the connection dropped.
           // Checkout may be between its temporary stash and restore phases,
@@ -1579,7 +1663,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             const res = await openRepo({ path: repoPath })
             repoId = res.repoId
             set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-            await refAction(repoId, action, refName, sha, force)
+            await refAction(repoId, action, refName, sha, force, remote)
           } else {
             throw err
           }
@@ -1600,7 +1684,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
               totalCommitCount: reopened.totalCommitCount,
             })
           }
-          const [refs, hist, changes, worktrees, stashes] = await fetchRepositoryState(repoId)
+          const [refs, hist, changes, worktrees, stashes, remotes] = await fetchRepositoryState(repoId)
           const previousCurrent = snapshot.refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
           const current = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
           const moved = current?.shortName !== previousCurrent?.shortName
@@ -1624,6 +1708,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             pendingMutation: false,
             pendingCheckout: false,
             refs,
+            remotes,
             stashes,
             worktrees,
             historyWindow: hist,

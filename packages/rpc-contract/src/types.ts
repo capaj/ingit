@@ -47,6 +47,17 @@ export interface RefSummary {
   isCurrent?: boolean
 }
 
+export interface RemoteSummary {
+  name: string
+  url: string
+}
+
+export interface GithubForkSuggestion {
+  remoteName: string
+  fullName: string
+  url: string
+}
+
 export interface StashSummary {
   /** Reflog selector shown by Git, for example `stash@{0}`. */
   selector: string

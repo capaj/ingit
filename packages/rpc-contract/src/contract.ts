@@ -26,6 +26,17 @@ export const RefSummary = z.object({
   isCurrent: z.boolean().optional(),
 })
 
+export const RemoteSummary = z.object({
+  name: z.string(),
+  url: z.string(),
+})
+
+export const GithubForkSuggestion = z.object({
+  remoteName: z.string(),
+  fullName: z.string(),
+  url: z.string(),
+})
+
 export const StashSummary = z.object({
   selector: z.string(),
   sha: CommitSha,
@@ -254,6 +265,35 @@ export const contract = {
   getRefs: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RefSummary)),
+
+  getRemotes: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.array(RemoteSummary)),
+
+  getGithubForkSuggestion: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(GithubForkSuggestion.nullable()),
+
+  addRemote: oc
+    .input(z.object({
+      repoId: RepoId,
+      name: z.string().trim().min(1).max(255),
+      url: z.string().trim().min(1).max(4_096),
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      remotes: z.array(RemoteSummary),
+    })),
+
+  removeRemote: oc
+    .input(z.object({
+      repoId: RepoId,
+      name: z.string().min(1).max(255),
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      remotes: z.array(RemoteSummary),
+    })),
 
   getWorktrees: oc
     .input(z.object({ repoId: RepoId }))
@@ -576,6 +616,8 @@ export const contract = {
       // For `push`: force-push (--force-with-lease). Needed after a rebase, when
       // the branch diverged from its upstream and a normal push is rejected.
       force: z.boolean().optional(),
+      // For `push` and `fetch`: the remote selected in the client.
+      remote: z.string().optional(),
     }))
     .output(z.object({
       ok: z.boolean(),

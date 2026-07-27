@@ -101,6 +101,33 @@ async function createActionFixture(): Promise<ActionFixture> {
   }
 }
 
+describe('RepoSession remotes', () => {
+  test('lists configured remotes and supports adding and removing them', async () => {
+    const originUrl = 'https://example.com/acme/project.git'
+    const upstreamUrl = 'git@example.com:acme/upstream.git'
+
+    try {
+      expect(await session.getRemotes()).toEqual([])
+
+      expect(await session.addRemote('origin', originUrl)).toEqual([
+        { name: 'origin', url: originUrl },
+      ])
+      expect(await session.addRemote('upstream', upstreamUrl)).toEqual([
+        { name: 'origin', url: originUrl },
+        { name: 'upstream', url: upstreamUrl },
+      ])
+
+      expect(await session.removeRemote('origin')).toEqual([
+        { name: 'upstream', url: upstreamUrl },
+      ])
+      await expect(session.removeRemote('missing')).rejects.toThrow('Remote does not exist')
+    } finally {
+      await runGit(['remote', 'remove', 'origin'], repoDir, { okCodes: [2, 128] })
+      await runGit(['remote', 'remove', 'upstream'], repoDir, { okCodes: [2, 128] })
+    }
+  })
+})
+
 describe('RepoSession.checkout', () => {
   test('starts on main', async () => {
     expect(await currentBranch(repoDir)).toBe('main')
@@ -416,7 +443,7 @@ describe('RepoSession.checkout', () => {
 })
 
 describe('RepoSession.fetch', () => {
-  test('fetches remotes and fast-forwards the current tracking branch', async () => {
+  test('fetches only the selected remote and fast-forwards its current tracking branch', async () => {
     const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-remote-'))
     const seedDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-seed-'))
     const upstreamDir = await mkdtemp(join(tmpdir(), 'ingit-fetch-upstream-'))
@@ -437,6 +464,7 @@ describe('RepoSession.fetch', () => {
       await runGit(['clone', remoteDir, localDir], tmpdir())
       await runGit(['config', 'user.email', 'test@test.com'], localDir)
       await runGit(['config', 'user.name', 'Test'], localDir)
+      await runGit(['remote', 'add', 'broken', join(localDir, 'missing-remote')], localDir)
       const oldLocalSha = await currentHeadSha(localDir)
 
       await runGit(['clone', remoteDir, upstreamDir], tmpdir())
@@ -450,7 +478,7 @@ describe('RepoSession.fetch', () => {
 
       const fetchSession = await RepoSession.open(localDir)
       try {
-        const result = await fetchSession.fetch()
+        const result = await fetchSession.fetch('origin')
 
         expect(result.fastForwarded).toBe(true)
         expect(result.headSha).toBe(remoteSha)

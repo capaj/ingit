@@ -69,6 +69,22 @@ export function getRefs(repoId: string) {
   return ensureClient().getRefs({ repoId })
 }
 
+export function getRemotes(repoId: string) {
+  return ensureClient().getRemotes({ repoId })
+}
+
+export function getGithubForkSuggestion(repoId: string) {
+  return ensureClient().getGithubForkSuggestion({ repoId })
+}
+
+export function addRemote(repoId: string, name: string, url: string) {
+  return ensureClient().addRemote({ repoId, name, url })
+}
+
+export function removeRemote(repoId: string, name: string) {
+  return ensureClient().removeRemote({ repoId, name })
+}
+
 export function getWorktrees(repoId: string) {
   return ensureClient().getWorktrees({ repoId })
 }
@@ -186,8 +202,8 @@ export function continueOperation(repoId: string, operation: InProgressOperation
   return ensureClient().continueOperation({ repoId, operation })
 }
 
-export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag', refName: string, sha: string, force?: boolean) {
-  return ensureClient().refAction({ repoId, action, refName, sha, force })
+export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag', refName: string, sha: string, force?: boolean, remote?: string) {
+  return ensureClient().refAction({ repoId, action, refName, sha, force, remote })
 }
 
 export function getReflog(repoId: string, ref?: string, maxCount?: number) {

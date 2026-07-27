@@ -11,6 +11,7 @@ import type {
   WorktreeDiffArea,
   CommitFileDiffResponse,
   WorktreeSummary,
+  RemoteSummary,
   StashSummary,
   StashFileDiffResponse,
   ImageDiff,
@@ -198,6 +199,34 @@ export class RepoSession {
 
   getRefs(): Promise<RefSummary[]> {
     return parseRefs(this.rootPath)
+  }
+
+  async getRemotes(): Promise<RemoteSummary[]> {
+    const { stdout } = await runGit(['remote'], this.rootPath)
+    const names = stdout
+      .split('\n')
+      .map((name) => name.trim())
+      .filter(Boolean)
+
+    return Promise.all(names.map(async (name) => {
+      const { stdout: url } = await runGit(['remote', 'get-url', name], this.rootPath)
+      return { name, url: url.trim() }
+    }))
+  }
+
+  async addRemote(name: string, url: string): Promise<RemoteSummary[]> {
+    await runGit(['remote', 'add', name, url], this.rootPath)
+    return this.getRemotes()
+  }
+
+  async removeRemote(name: string): Promise<RemoteSummary[]> {
+    const remotes = await this.getRemotes()
+    if (!remotes.some((remote) => remote.name === name)) {
+      throw new Error(`Remote does not exist: ${name}`)
+    }
+
+    await runGit(['remote', 'remove', name], this.rootPath)
+    return this.getRemotes()
   }
 
   async getWorktrees(): Promise<WorktreeSummary[]> {
@@ -1068,18 +1097,21 @@ export class RepoSession {
     return (stdout + stderr).trim()
   }
 
-  async fetch(): Promise<{ message: string; headSha: string; fastForwarded: boolean }> {
+  async fetch(remote?: string): Promise<{ message: string; headSha: string; fastForwarded: boolean }> {
     const headBefore = await this.getHeadSha()
     const messages: string[] = []
 
-    const fetchResult = await runGit(['fetch', '--all', '--prune'], this.rootPath, { timeout: 120_000 })
+    const fetchArgs = remote
+      ? ['fetch', '--prune', remote]
+      : ['fetch', '--all', '--prune']
+    const fetchResult = await runGit(fetchArgs, this.rootPath, { timeout: 120_000 })
     const fetchMessage = (fetchResult.stdout + fetchResult.stderr).trim()
     if (fetchMessage) messages.push(fetchMessage)
 
     const upstream = await this.getCurrentUpstreamRef()
-    if (!upstream) {
+    if (!upstream || remote && !upstream.startsWith(`${remote}/`)) {
       return {
-        message: messages.join('\n') || 'Fetched remotes',
+        message: messages.join('\n') || (remote ? `Fetched ${remote}` : 'Fetched remotes'),
         headSha: await this.getHeadSha(),
         fastForwarded: false,
       }
@@ -1097,7 +1129,7 @@ export class RepoSession {
 
     const headSha = await this.getHeadSha()
     return {
-      message: messages.join('\n') || 'Fetched remotes',
+      message: messages.join('\n') || (remote ? `Fetched ${remote}` : 'Fetched remotes'),
       headSha,
       fastForwarded: headSha !== headBefore,
     }

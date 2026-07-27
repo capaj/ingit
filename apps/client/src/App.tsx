@@ -69,6 +69,7 @@ export function App() {
   const repoPathInputRef = useRef<HTMLInputElement>(null)
   const {
     status, repoId, repoPath, currentWorktreePath, worktrees, recentRepos, discoveredFolder, discoveredRepos, openError,
+    selectedRemoteName,
     errorDialog, dismissError, showError,
     openRepoByPath, closeRepo, openFromUrl, performRefAction,
     showCommitMessages, setShowCommitMessages,
@@ -85,6 +86,7 @@ export function App() {
     discoveredFolder: state.discoveredFolder,
     discoveredRepos: state.discoveredRepos,
     openError: state.openError,
+    selectedRemoteName: state.selectedRemoteName,
     errorDialog: state.errorDialog,
     dismissError: state.dismissError,
     showError: state.showError,
@@ -101,10 +103,10 @@ export function App() {
   })))
 
   const handleFetch = async () => {
-    if (fetching) return
+    if (fetching || !selectedRemoteName) return
     setFetching(true)
-    // refName/sha are ignored server-side for fetch; it fetches all remotes
-    // and performRefAction reloads refs + history so new commits show up.
+    // refName/sha are ignored server-side for fetch. performRefAction sends
+    // the selected remote and reloads refs + history so new commits show up.
     try { await performRefAction('fetch', '', '') }
     catch (err) { showError('Fetch failed', err) }
     finally { setFetching(false) }
@@ -562,9 +564,9 @@ export function App() {
           <AgentSessions />
           <button
             onClick={handleFetch}
-            disabled={fetching}
-            title="Fetch all remotes"
-            aria-label="Fetch all remotes"
+            disabled={fetching || !selectedRemoteName}
+            title={selectedRemoteName ? `Fetch from ${selectedRemoteName}` : 'No remote selected'}
+            aria-label={selectedRemoteName ? `Fetch from ${selectedRemoteName}` : 'No remote selected'}
             style={{
               flexShrink: 0,
               display: 'flex',
@@ -574,9 +576,9 @@ export function App() {
               borderRadius: 4,
               border: '1px solid #313244',
               background: 'transparent',
-              color: fetching ? '#45475a' : '#6c7086',
+              color: fetching || !selectedRemoteName ? '#45475a' : '#6c7086',
               fontSize: 11,
-              cursor: fetching ? 'default' : 'pointer',
+              cursor: fetching || !selectedRemoteName ? 'default' : 'pointer',
             }}
           >
             <span style={{ display: 'inline-block', animation: fetching ? 'spin 0.7s linear infinite' : 'none' }}>⟳</span>
@@ -636,6 +638,9 @@ function ConnectedRefsSidebar({
 }) {
   const {
     refs,
+    remotes,
+    selectedRemoteName,
+    githubForkSuggestion,
     stashes,
     worktrees,
     selectRef,
@@ -643,10 +648,16 @@ function ConnectedRefsSidebar({
     navigateTo,
     openRepoByPath,
     removeWorktree,
+    selectRemote,
+    addRemote,
+    removeRemote,
     selectedStashSha,
     selectedSha,
   } = useAppStore(useShallow((state) => ({
     refs: state.refs,
+    remotes: state.remotes,
+    selectedRemoteName: state.selectedRemoteName,
+    githubForkSuggestion: state.githubForkSuggestion,
     stashes: state.stashes,
     worktrees: state.worktrees,
     selectRef: state.selectRef,
@@ -654,6 +665,9 @@ function ConnectedRefsSidebar({
     navigateTo: state.navigateTo,
     openRepoByPath: state.openRepoByPath,
     removeWorktree: state.removeWorktree,
+    selectRemote: state.selectRemote,
+    addRemote: state.addRemote,
+    removeRemote: state.removeRemote,
     selectedStashSha: state.selectedStashSha,
     selectedSha: state.selectedSha,
   })))
@@ -661,6 +675,9 @@ function ConnectedRefsSidebar({
   return (
     <RefsSidebar
       refs={refs}
+      remotes={remotes}
+      selectedRemoteName={selectedRemoteName}
+      githubForkSuggestion={githubForkSuggestion}
       stashes={stashes}
       worktrees={worktrees}
       onSelectRef={selectRef}
@@ -668,6 +685,9 @@ function ConnectedRefsSidebar({
       onSelectStashParent={(sha) => { void navigateTo(sha) }}
       onOpenWorktree={(path) => { void openRepoByPath(path) }}
       onRemoveWorktree={removeWorktree}
+      onSelectRemote={selectRemote}
+      onAddRemote={addRemote}
+      onRemoveRemote={removeRemote}
       selectedStashSha={selectedStashSha}
       selectedSha={selectedSha}
       onClose={onClose}

@@ -7,6 +7,7 @@ import { handleHistoryQuery } from './history-handler.js'
 import { getMergePreview } from './merge-handler.js'
 import { fetchCommitCIStatus, extractOwnerRepoFromGithubUrl, resolveGithubToken } from './ci-status-handler.js'
 import { fetchGithubCommitAuthor } from './github-author-handler.js'
+import { fetchGithubForkSuggestion } from './github-fork-handler.js'
 import { discoverRepos, listDirectory } from './discover-repos.js'
 import { listAgentSessions, focusAgentSession, installWindowCalls } from './agent-sessions.js'
 import { openDefaultTerminal } from './open-terminal.js'
@@ -75,6 +76,32 @@ export const router = os.router({
   getRefs: os.getRefs.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     return session.getRefs()
+  }),
+
+  getRemotes: os.getRemotes.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    return session.getRemotes()
+  }),
+
+  getGithubForkSuggestion: os.getGithubForkSuggestion.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    if (!session.githubUrl) return null
+
+    const ownerRepo = extractOwnerRepoFromGithubUrl(session.githubUrl)
+    if (!ownerRepo) return null
+    return fetchGithubForkSuggestion(ownerRepo, await session.getRemotes())
+  }),
+
+  addRemote: os.addRemote.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    const remotes = await session.addRemote(input.name, input.url).catch(rethrowWithDetail)
+    return { ok: true, remotes }
+  }),
+
+  removeRemote: os.removeRemote.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    const remotes = await session.removeRemote(input.name).catch(rethrowWithDetail)
+    return { ok: true, remotes }
   }),
 
   getWorktrees: os.getWorktrees.handler(async ({ input }) => {
@@ -333,7 +360,7 @@ export const router = os.router({
       }
       case 'push':
         try {
-          message = await session.push(input.refName, undefined, input.force ?? false)
+          message = await session.push(input.refName, input.remote, input.force ?? false)
         } catch (err) {
           if (err instanceof GitCommandError && isNonFastForwardRejection(err.stderr)) {
             // Surface as a typed error so the client can offer a force push.
@@ -344,11 +371,21 @@ export const router = os.router({
               data: { reason: 'non-fast-forward' },
             })
           }
+          if (err instanceof GitCommandError) {
+            throw new ORPCError('BAD_REQUEST', { message: err.message })
+          }
           throw err
         }
         break
       case 'fetch':
-        message = (await session.fetch()).message
+        try {
+          message = (await session.fetch(input.remote)).message
+        } catch (err) {
+          if (err instanceof GitCommandError) {
+            throw new ORPCError('BAD_REQUEST', { message: err.message })
+          }
+          throw err
+        }
         break
       case 'delete':
         if (input.refName.includes('/')) {

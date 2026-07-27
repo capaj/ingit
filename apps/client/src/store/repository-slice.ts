@@ -1,3 +1,5 @@
+import type { GithubForkSuggestion, RemoteSummary } from '@ingit/rpc-contract'
+
 export type AppStatus = 'no-repo' | 'loading' | 'ready'
 
 export interface RepositorySlice {
@@ -9,6 +11,9 @@ export interface RepositorySlice {
   recentRepos: string[]
   discoveredFolder: string | null
   discoveredRepos: string[]
+  remotes: RemoteSummary[]
+  selectedRemoteName: string | null
+  githubForkSuggestion: GithubForkSuggestion | null
   githubUrl: string | null
   openError: string | null
 
@@ -17,6 +22,9 @@ export interface RepositorySlice {
   closeRepo: () => void
   loadRecentRepos: () => Promise<void>
   loadDiscoveredRepos: (folder?: string) => Promise<void>
+  selectRemote: (name: string) => void
+  addRemote: (name: string, url: string) => Promise<boolean>
+  removeRemote: (name: string) => Promise<boolean>
   openFromUrl: () => void
 }
 
@@ -27,6 +35,9 @@ export type RepositorySliceState = Omit<
   | 'closeRepo'
   | 'loadRecentRepos'
   | 'loadDiscoveredRepos'
+  | 'selectRemote'
+  | 'addRemote'
+  | 'removeRemote'
   | 'openFromUrl'
 >
 
@@ -40,6 +51,9 @@ export function createRepositorySliceState(): RepositorySliceState {
     recentRepos: [],
     discoveredFolder: null,
     discoveredRepos: [],
+    remotes: [],
+    selectedRemoteName: null,
+    githubForkSuggestion: null,
     githubUrl: null,
     openError: null,
   }
