@@ -83,6 +83,17 @@ export const router = os.router({
     return session.getRemotes()
   }),
 
+  getDefaultRemote: os.getDefaultRemote.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    return session.getDefaultRemote()
+  }),
+
+  setDefaultRemote: os.setDefaultRemote.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    await session.setDefaultRemote(input.name).catch(rethrowWithDetail)
+    return { ok: true, name: input.name }
+  }),
+
   getGithubForkSuggestion: os.getGithubForkSuggestion.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     if (!session.githubUrl) return null

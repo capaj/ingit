@@ -73,6 +73,14 @@ export function getRemotes(repoId: string) {
   return ensureClient().getRemotes({ repoId })
 }
 
+export function getDefaultRemote(repoId: string) {
+  return ensureClient().getDefaultRemote({ repoId })
+}
+
+export function setDefaultRemote(repoId: string, name: string) {
+  return ensureClient().setDefaultRemote({ repoId, name })
+}
+
 export function getGithubForkSuggestion(repoId: string) {
   return ensureClient().getGithubForkSuggestion({ repoId })
 }

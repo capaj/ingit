@@ -214,6 +214,57 @@ export class RepoSession {
     }))
   }
 
+  /**
+   * The remote Ingit writes when the user selects one. This is deliberately
+   * repository-local: remote names are repository-specific, so a global value
+   * would commonly point at a nonexistent remote.
+   */
+  async getDefaultRemote(): Promise<string | null> {
+    const { stdout, code } = await runGit(
+      ['config', '--local', '--get', 'remote.pushDefault'],
+      this.rootPath,
+      { okCodes: [1] },
+    )
+    return code === 0 ? stdout.trim() || null : null
+  }
+
+  /**
+   * Keep Git's push and current-branch fetch defaults in sync with the remote
+   * selected in the UI. The current branch is skipped for a detached HEAD,
+   * while `remote.pushDefault` still persists the choice for later pushes.
+   */
+  async setDefaultRemote(name: string): Promise<void> {
+    const remotes = await this.getRemotes()
+    if (!remotes.some((remote) => remote.name === name)) {
+      throw new Error(`Remote does not exist: ${name}`)
+    }
+
+    await runGit(['config', '--local', 'remote.pushDefault', name], this.rootPath)
+
+    const { stdout: branchOut, code: branchCode } = await runGit(
+      ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+      this.rootPath,
+      { okCodes: [1] },
+    )
+    if (branchCode !== 0) return
+
+    const branch = branchOut.trim()
+    if (!branch) return
+
+    await runGit(['config', '--local', `branch.${branch}.remote`, name], this.rootPath)
+
+    // Existing tracking branch names are preserved. New branches default to
+    // tracking a branch of the same name once it exists on the selected remote.
+    const { stdout: mergeOut, code: mergeCode } = await runGit(
+      ['config', '--get', `branch.${branch}.merge`],
+      this.rootPath,
+      { okCodes: [1] },
+    )
+    if (mergeCode !== 0 || !mergeOut.trim()) {
+      await runGit(['config', '--local', `branch.${branch}.merge`, `refs/heads/${branch}`], this.rootPath)
+    }
+  }
+
   async addRemote(name: string, url: string): Promise<RemoteSummary[]> {
     await runGit(['remote', 'add', name, url], this.rootPath)
     return this.getRemotes()
@@ -225,8 +276,24 @@ export class RepoSession {
       throw new Error(`Remote does not exist: ${name}`)
     }
 
+    const defaultRemote = await this.getDefaultRemote()
     await runGit(['remote', 'remove', name], this.rootPath)
-    return this.getRemotes()
+    const remainingRemotes = await this.getRemotes()
+
+    if (defaultRemote === name) {
+      const fallback = remainingRemotes.find((remote) => remote.name === 'origin') ?? remainingRemotes[0]
+      if (fallback) {
+        await this.setDefaultRemote(fallback.name)
+      } else {
+        await runGit(
+          ['config', '--local', '--unset-all', 'remote.pushDefault'],
+          this.rootPath,
+          { okCodes: [1, 5] },
+        )
+      }
+    }
+
+    return remainingRemotes
   }
 
   async getWorktrees(): Promise<WorktreeSummary[]> {

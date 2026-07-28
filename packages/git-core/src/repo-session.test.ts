@@ -126,6 +126,44 @@ describe('RepoSession remotes', () => {
       await runGit(['remote', 'remove', 'upstream'], repoDir, { okCodes: [2, 128] })
     }
   })
+
+  test('persists a selected remote as the default for pushes and the current branch', async () => {
+    const defaultRepoDir = await mkdtemp(join(tmpdir(), 'ingit-default-remote-test-'))
+    let defaultSession: RepoSession | null = null
+
+    try {
+      await runGit(['init', '--initial-branch=main'], defaultRepoDir)
+      await runGit(['config', 'user.email', 'test@test.com'], defaultRepoDir)
+      await runGit(['config', 'user.name', 'Test'], defaultRepoDir)
+      await Bun.write(join(defaultRepoDir, 'file.txt'), 'hello')
+      await runGit(['add', '.'], defaultRepoDir)
+      await runGit(['commit', '-m', 'initial'], defaultRepoDir)
+
+      defaultSession = await RepoSession.open(defaultRepoDir)
+      await defaultSession.addRemote('origin', 'https://example.com/acme/project.git')
+      await defaultSession.addRemote('upstream', 'https://example.com/acme/upstream.git')
+
+      expect(await defaultSession.getDefaultRemote()).toBeNull()
+      await defaultSession.setDefaultRemote('upstream')
+      expect(await defaultSession.getDefaultRemote()).toBe('upstream')
+      expect((await runGit(['config', '--local', '--get', 'remote.pushDefault'], defaultRepoDir)).stdout.trim())
+        .toBe('upstream')
+      expect((await runGit(['config', '--local', '--get', 'branch.main.remote'], defaultRepoDir)).stdout.trim())
+        .toBe('upstream')
+      expect((await runGit(['config', '--local', '--get', 'branch.main.merge'], defaultRepoDir)).stdout.trim())
+        .toBe('refs/heads/main')
+
+      await defaultSession.removeRemote('upstream')
+      expect(await defaultSession.getDefaultRemote()).toBe('origin')
+      expect((await runGit(['config', '--local', '--get', 'branch.main.remote'], defaultRepoDir)).stdout.trim())
+        .toBe('origin')
+
+      await expect(defaultSession.setDefaultRemote('missing')).rejects.toThrow('Remote does not exist')
+    } finally {
+      defaultSession?.close()
+      await rm(defaultRepoDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('RepoSession.checkout', () => {

@@ -19,7 +19,7 @@ interface RefsSidebarProps {
   onSelectStashParent: (parentSha: string) => void
   onOpenWorktree: (path: string) => void
   onRemoveWorktree: (path: string) => Promise<boolean>
-  onSelectRemote: (name: string) => void
+  onSelectRemote: (name: string) => Promise<void>
   onAddRemote: (name: string, url: string) => Promise<boolean>
   onRemoveRemote: (name: string) => Promise<boolean>
   selectedStashSha?: string | null
@@ -757,7 +757,7 @@ export function RefsSidebar({
                       >
                         <button
                           type="button"
-                          onClick={() => onSelectRemote(remote.name)}
+                          onClick={() => { void onSelectRemote(remote.name) }}
                           title={`Select ${remote.name}\n${remote.url}`}
                           aria-label={`Select remote ${remote.name}`}
                           aria-pressed={selected}

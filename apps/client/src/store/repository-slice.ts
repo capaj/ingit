@@ -22,7 +22,7 @@ export interface RepositorySlice {
   closeRepo: () => void
   loadRecentRepos: () => Promise<void>
   loadDiscoveredRepos: (folder?: string) => Promise<void>
-  selectRemote: (name: string) => void
+  selectRemote: (name: string) => Promise<void>
   addRemote: (name: string, url: string) => Promise<boolean>
   removeRemote: (name: string) => Promise<boolean>
   openFromUrl: () => void

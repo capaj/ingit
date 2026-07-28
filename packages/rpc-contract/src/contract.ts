@@ -270,6 +270,20 @@ export const contract = {
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RemoteSummary)),
 
+  getDefaultRemote: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.string().nullable()),
+
+  setDefaultRemote: oc
+    .input(z.object({
+      repoId: RepoId,
+      name: z.string().trim().min(1).max(255),
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      name: z.string(),
+    })),
+
   getGithubForkSuggestion: oc
     .input(z.object({ repoId: RepoId }))
     .output(GithubForkSuggestion.nullable()),

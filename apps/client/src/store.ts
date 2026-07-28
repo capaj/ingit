@@ -21,9 +21,11 @@ import {
   discoverRepos,
   getRefs,
   getRemotes,
+  getDefaultRemote,
   getGithubForkSuggestion,
   addRemote as addRemoteApi,
   removeRemote as removeRemoteApi,
+  setDefaultRemote as setDefaultRemoteApi,
   getWorktrees,
   removeWorktree as removeWorktreeApi,
   queryHistory,
@@ -454,7 +456,7 @@ async function openRepoByPathImpl(
     const forkSuggestionPromise: Promise<GithubForkSuggestion | null> = res.githubUrl
       ? getGithubForkSuggestion(res.repoId).catch(() => null)
       : Promise.resolve(null)
-    const [refs, hist, worktrees, stashes, remotes] = await Promise.all([
+    const [refs, hist, worktrees, stashes, remotes, defaultRemote] = await Promise.all([
       getRefs(res.repoId),
       queryHistory(res.repoId, {
         repoId: res.repoId,
@@ -468,10 +470,17 @@ async function openRepoByPathImpl(
       getWorktrees(res.repoId),
       getStashes(res.repoId),
       getRemotes(res.repoId),
+      getDefaultRemote(res.repoId),
     ])
     if (requestId !== repoOpenRequestId) return
 
     const currentHeadSha = refs.find((ref: RefSummary) => ref.isCurrent)?.targetSha ?? res.head.sha
+    const defaultRemoteExists = defaultRemote !== null
+      && remotes.some((remote: RemoteSummary) => remote.name === defaultRemote)
+    const selectedRemoteName = reconcileSelectedRemote(
+      remotes,
+      defaultRemoteExists ? defaultRemote : null,
+    )
 
     setRepoPathInUrl(res.currentWorktreePath)
     // Drop any CI watches/poller left over from a previously open repo.
@@ -487,7 +496,7 @@ async function openRepoByPathImpl(
       githubUrl: res.githubUrl,
       refs,
       remotes,
-      selectedRemoteName: reconcileSelectedRemote(remotes, null),
+      selectedRemoteName,
       stashes,
       worktrees,
       historyWindow: hist,
@@ -753,9 +762,21 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     }
   },
 
-  selectRemote: (name) => {
-    if (!get().remotes.some((remote) => remote.name === name)) return
+  selectRemote: async (name) => {
+    const { repoId, remotes, selectedRemoteName: previousRemote } = get()
+    if (!repoId || !remotes.some((remote) => remote.name === name)) return
     set({ selectedRemoteName: name })
+    try {
+      await setDefaultRemoteApi(repoId, name)
+    } catch (err) {
+      // Only undo this selection if it has not already been superseded by a
+      // subsequent click while the request was in flight.
+      if (get().repoId === repoId && get().selectedRemoteName === name) {
+        const selectedRemoteName = reconcileSelectedRemote(get().remotes, previousRemote)
+        set({ selectedRemoteName })
+      }
+      get().showError('Set default remote failed', err)
+    }
   },
 
   addRemote: async (name, url) => {
@@ -764,9 +785,10 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     try {
       const result = await addRemoteApi(repoId, name.trim(), url.trim())
       if (get().repoId === repoId) {
+        const selectedRemoteName = reconcileSelectedRemote(result.remotes, get().selectedRemoteName)
         set((state) => ({
           remotes: result.remotes,
-          selectedRemoteName: reconcileSelectedRemote(result.remotes, state.selectedRemoteName),
+          selectedRemoteName,
           githubForkSuggestion: state.githubForkSuggestion?.url === url.trim()
             ? null
             : state.githubForkSuggestion,
@@ -785,9 +807,10 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     try {
       const result = await removeRemoteApi(repoId, name)
       if (get().repoId === repoId) {
+        const selectedRemoteName = reconcileSelectedRemote(result.remotes, get().selectedRemoteName)
         set((state) => ({
           remotes: result.remotes,
-          selectedRemoteName: reconcileSelectedRemote(result.remotes, state.selectedRemoteName),
+          selectedRemoteName,
         }))
         await get().reloadFromServer()
         const githubForkSuggestion = await getGithubForkSuggestion(repoId).catch(() => null)
