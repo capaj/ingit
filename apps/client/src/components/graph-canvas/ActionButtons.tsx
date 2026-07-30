@@ -13,6 +13,7 @@ type ActionIconName =
   | 'revert'
   | 'stage'
   | 'stash'
+  | 'squash'
   | 'tag'
   | 'unstage'
   | 'uncommit'
@@ -22,6 +23,7 @@ function iconForLabel(label: string): ActionIconName {
   if (normalized.includes('force push')) return 'force-push'
   if (normalized.includes('cherry')) return 'cherry-pick'
   if (normalized.includes('uncommit')) return 'uncommit'
+  if (normalized.includes('squash')) return 'squash'
   if (normalized.includes('revert')) return 'revert'
   if (normalized.includes('rebase')) return 'rebase'
   if (normalized.includes('merge')) return 'merge'
@@ -157,6 +159,14 @@ function ActionIcon({ name, size = 14 }: { name: ActionIconName; size?: number }
           <path {...common} d="M9 14h6" />
         </>
       )}
+      {name === 'squash' && (
+        <>
+          <path {...common} d="M5 5h14" />
+          <path {...common} d="M5 12h14" />
+          <path {...common} d="M5 19h14" />
+          <path {...common} d="m12 8 3 4-3 4" />
+        </>
+      )}
       {name === 'tag' && (
         <>
           <path {...common} d="M20 10 10 20 4 14V4h10l6 6Z" />
@@ -215,14 +225,21 @@ export function CommitActionButton({
 }: {
   label: string
   onClick: () => void
-  tone: 'success' | 'warning' | 'uncommit' | 'merge'
-  onMouseEnter?: React.PointerEventHandler<HTMLButtonElement>
-  onMouseLeave?: React.PointerEventHandler<HTMLButtonElement>
+  tone: 'success' | 'warning' | 'uncommit' | 'merge' | 'squash'
+  onMouseEnter?: (
+    event:
+      | React.PointerEvent<HTMLButtonElement>
+      | React.FocusEvent<HTMLButtonElement>
+      | React.KeyboardEvent<HTMLButtonElement>
+  ) => void
+  onMouseLeave?: () => void
 }) {
   const color = tone === 'success'
     ? '#0b1020'
     : tone === 'warning'
       ? '#fff7d6'
+      : tone === 'squash'
+        ? '#1e102f'
       : tone === 'merge'
         ? '#fff7ff'
         : '#fff7ed'
@@ -230,6 +247,8 @@ export function CommitActionButton({
     ? '#6d9658'
     : tone === 'warning'
       ? '#d8a43a'
+      : tone === 'squash'
+        ? '#9f75d9'
       : tone === 'merge'
         ? '#b764d9'
         : '#9a3412'
@@ -237,6 +256,8 @@ export function CommitActionButton({
     ? '#8dcf78'
     : tone === 'warning'
       ? '#b88a25'
+      : tone === 'squash'
+        ? '#cba6f7'
       : tone === 'merge'
         ? '#c77de4'
         : '#b45309'
@@ -244,6 +265,8 @@ export function CommitActionButton({
     ? '#9cda89'
     : tone === 'warning'
       ? '#c99a30'
+      : tone === 'squash'
+        ? '#d8b9fb'
       : tone === 'merge'
         ? '#d08bea'
         : '#c26115'
@@ -280,6 +303,9 @@ export function CommitActionButton({
       onMouseLeave={(e) => { e.currentTarget.style.background = background }}
       onPointerEnter={onMouseEnter}
       onPointerLeave={onMouseLeave}
+      onFocus={onMouseEnter}
+      onBlur={onMouseLeave}
+      onKeyDown={onMouseEnter}
     >
       <ActionIcon name={iconForLabel(label)} />
       <span>{label}</span>

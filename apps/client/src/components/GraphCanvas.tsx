@@ -8,8 +8,10 @@ import { useAppStore } from '../store'
 import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
 import {
+  getSquashRange,
   predictAppendOnHead,
   predictRebase,
+  predictSquash,
   rebasePreviewUnavailableReason,
   type OptimisticGraph,
 } from '../optimistic-graph'
@@ -78,6 +80,7 @@ const GAUGE_ADDITIONS_FILL = '#a6e3a1'
 const GAUGE_DELETIONS_FILL = '#f38ba8'
 const ACTION_PREVIEW_COLOR = '#a6e3a1'
 const UNCOMMIT_PREVIEW_COLOR = '#f38ba8'
+const SQUASH_PREVIEW_COLOR = '#cba6f7'
 const SELECTED_REF_RING_COLOR = '#f9e2af'
 const GAUGE_MIN_FILL_HEIGHT = 2
 const GAUGE_SCALE_PERCENTILE = 0.85
@@ -126,7 +129,7 @@ interface EdgePoint {
 interface VisibleCommitAction {
   action: CommitActionKind
   label: string
-  tone: 'success' | 'warning' | 'uncommit'
+  tone: 'success' | 'warning' | 'uncommit' | 'squash'
 }
 
 interface VisibleRefAction {
@@ -166,9 +169,16 @@ interface ConfirmDialogState {
   onConfirm: () => void
 }
 
+interface SquashDialogState {
+  oldestSha: string
+  count: number
+  initialMessage: string
+}
+
 type ActionPreviewState =
   | { kind: 'commit'; action: 'cherry-pick' | 'revert'; sha: string }
   | { kind: 'uncommit'; sha: string }
+  | { kind: 'squash'; oldestSha: string; headSha: string }
   | { kind: 'rebase'; targetRefName: string }
 
 interface ActionPreviewGeometry {
@@ -509,6 +519,42 @@ function buildActionPreviewGeometry(
       totalWidth: viewportFit.layoutWidth,
     },
   )
+
+  if (preview.kind === 'squash') {
+    const newNode = prediction.headSha
+      ? previewLayout.shaToNode.get(prediction.headSha)
+      : null
+    const replacedHead = baseLayout.shaToNode.get(preview.headSha)
+    const oldest = baseLayout.shaToNode.get(preview.oldestSha)
+    if (!newNode || !replacedHead || !oldest) return null
+
+    const ghostNode: LayoutNode = {
+      ...newNode,
+      x: replacedHead.x,
+      y: replacedHead.y,
+      idx: replacedHead.idx,
+      row: { ...newNode.row, lane: replacedHead.row.lane },
+    }
+    const parentSha = oldest.row.parentShas[0]
+    if (!parentSha) {
+      return { nodes: [{ node: ghostNode, color: SQUASH_PREVIEW_COLOR }], edges: [] }
+    }
+    const parent = baseLayout.shaToNode.get(parentSha)
+    if (!parent) return null
+
+    const key = `action-preview:squash:${ghostNode.row.sha}-${parent.row.sha}`
+    const occupied = baseLayout.nodes.map((node) => node.row.lane)
+    const plan = planEdgeRoute(ghostNode, parent, key, occupied)
+    return {
+      nodes: [{ node: ghostNode, color: SQUASH_PREVIEW_COLOR }],
+      edges: [{
+        key,
+        path: routedEdgePath(ghostNode, parent, plan, 0),
+        color: SQUASH_PREVIEW_COLOR,
+        dashed: true,
+      }],
+    }
+  }
 
   if (preview.kind === 'commit') {
     const newNode = previewLayout.nodes.find((node) => !baseLayout.shaToNode.has(node.row.sha))
@@ -2467,6 +2513,7 @@ export function GraphCanvas() {
   const [hoveredAddRefSha, setHoveredAddRefSha] = useState<string | null>(null)
   const [openAddRefSha, setOpenAddRefSha] = useState<string | null>(null)
   const [createRefDialog, setCreateRefDialog] = useState<CreateRefDialogState | null>(null)
+  const [squashDialog, setSquashDialog] = useState<SquashDialogState | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const [{ graphProgress }, graphProgressApi] = useSpring(() => ({
     graphProgress: 1,
@@ -2651,6 +2698,12 @@ export function GraphCanvas() {
     if (actionPreview.kind === 'rebase') {
       return predictRebase(histWindow.rows, refs, actionPreview.targetRefName)
     }
+    if (actionPreview.kind === 'squash') {
+      const oldest = histWindow.rows.find((row) => row.sha === actionPreview.oldestSha)
+      return oldest
+        ? predictSquash(histWindow.rows, refs, actionPreview.oldestSha, oldest.subject)
+        : null
+    }
 
     const original = histWindow.rows.find((row) => row.sha === actionPreview.sha)
     if (!original) return null
@@ -2659,6 +2712,17 @@ export function GraphCanvas() {
       : original.subject
     return predictAppendOnHead(histWindow.rows, refs, subject, actionPreview.action)
   }, [actionPreview, histWindow, refs])
+
+  const squashPreviewRange = useMemo(
+    () => actionPreview?.kind === 'squash' && histWindow
+      ? getSquashRange(histWindow.rows, refs, actionPreview.oldestSha)
+      : null,
+    [actionPreview, histWindow, refs],
+  )
+  const squashPreviewShas = useMemo(
+    () => new Set(squashPreviewRange?.map((row) => row.sha) ?? []),
+    [squashPreviewRange],
+  )
 
   const rebasePreviewNotice = useMemo(() => {
     if (
@@ -3856,15 +3920,22 @@ export function GraphCanvas() {
   const handleCommitActionHoverStart = useCallback((action: CommitActionKind, sha: string) => {
     setMergePreviewVisible(false)
     setRebaseHoverLock(null)
-    setActionPreview(action === 'uncommit'
-      ? { kind: 'uncommit', sha }
-      : { kind: 'commit', action, sha })
-  }, [])
+    if (action === 'uncommit') {
+      setActionPreview({ kind: 'uncommit', sha })
+      return
+    }
+    if (action === 'squash') {
+      const headSha = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)?.targetSha
+      setActionPreview(headSha ? { kind: 'squash', oldestSha: sha, headSha } : null)
+      return
+    }
+    setActionPreview({ kind: 'commit', action, sha })
+  }, [refs])
 
   const handleRebaseHoverStart = useCallback((
     targetRefName: string,
     targetNode: LayoutNode,
-    event: React.PointerEvent<HTMLButtonElement>,
+    event: React.SyntheticEvent<HTMLButtonElement>,
   ) => {
     const viewport = scrollRef.current
     if (!viewport) return
@@ -4126,6 +4197,9 @@ export function GraphCanvas() {
     }
 
     if (selectedOnCurrentBranch) {
+      if (histWindow && getSquashRange(histWindow.rows, refs, selectedNode.row.sha)) {
+        actions.push({ action: 'squash', label: 'Squash to here', tone: 'squash' })
+      }
       if (canRevert) {
         actions.push({ action: 'revert', label: 'Revert', tone: 'warning' })
       }
@@ -4138,7 +4212,7 @@ export function GraphCanvas() {
     }
 
     return actions
-  }, [selectedNode, selectedIsCurrentHead, selectedOnCurrentBranch])
+  }, [selectedNode, selectedIsCurrentHead, selectedOnCurrentBranch, histWindow, refs])
 
   const handleCommitAction = useCallback((action: CommitActionKind) => {
     if (!selectedNode) return
@@ -4149,6 +4223,18 @@ export function GraphCanvas() {
     if (action === 'cherry-pick') {
       performCommitAction(action, selectedNode.row.sha).catch((err) => {
         showError(`${action} failed`, err)
+      })
+      return
+    }
+    if (action === 'squash') {
+      const range = histWindow
+        ? getSquashRange(histWindow.rows, refs, selectedNode.row.sha)
+        : null
+      if (!range) return
+      setSquashDialog({
+        oldestSha: selectedNode.row.sha,
+        count: range.length,
+        initialMessage: selectedNode.row.subject,
       })
       return
     }
@@ -4174,7 +4260,16 @@ export function GraphCanvas() {
         })
       },
     })
-  }, [selectedNode, performCommitAction, showError, pendingMutation])
+  }, [selectedNode, performCommitAction, showError, pendingMutation, histWindow, refs])
+
+  const handleSquashSubmit = useCallback((message: string) => {
+    if (!squashDialog) return
+    const { oldestSha } = squashDialog
+    setSquashDialog(null)
+    performCommitAction('squash', oldestSha, message).catch((err) => {
+      showError('Squash failed', err)
+    })
+  }, [squashDialog, performCommitAction, showError])
   const isGraphAnimating = graphAnimation !== null
 
   if (!layout) {
@@ -4233,6 +4328,16 @@ export function GraphCanvas() {
         confirmLabel="Create"
         onSubmit={handleCreateRefSubmit}
         onClose={closeCreateRefDialog}
+      />
+      <NativeTextInputDialog
+        open={!!squashDialog}
+        title={`Squash ${squashDialog?.count ?? 0} commits`}
+        description="This replaces the selected commit and every newer commit through HEAD. Pushed history will need a force push."
+        label="New commit message"
+        initialValue={squashDialog?.initialMessage ?? ''}
+        confirmLabel="Squash"
+        onSubmit={handleSquashSubmit}
+        onClose={() => setSquashDialog(null)}
       />
       <NativeConfirmDialog
         open={!!confirmDialog}
@@ -4529,6 +4634,7 @@ export function GraphCanvas() {
                   whiteSpace: 'nowrap',
                   color: '#a6adc8',
                   fontSize: 12,
+                  opacity: squashPreviewShas.has(label.sha) ? 0.5 : 1,
                   pointerEvents: 'none',
                   userSelect: 'none',
                   display: 'flex',
@@ -4690,8 +4796,13 @@ export function GraphCanvas() {
               fill="none"
               strokeLinecap="round"
               opacity={isGraphAnimating
-                ? to(graphProgress, (progress) => lerp(edge.fromOpacity, edge.toOpacity, progress))
-              : edge.toOpacity}
+                ? to(
+                    graphProgress,
+                    (progress) => lerp(edge.fromOpacity, edge.toOpacity, progress)
+                      * (squashPreviewShas.has(edge.fromSha) && squashPreviewShas.has(edge.toSha) ? 0.5 : 1),
+                  )
+                : edge.toOpacity
+                  * (squashPreviewShas.has(edge.fromSha) && squashPreviewShas.has(edge.toSha) ? 0.5 : 1)}
             />
           ))}
           {actionPreviewGeometry?.edges.map((edge) => (
@@ -4734,8 +4845,12 @@ export function GraphCanvas() {
               ? to(graphProgress, (progress) => lerp(node.fromY, node.toY, progress))
               : node.toY
             const nodeOpacity = isGraphAnimating
-              ? to(graphProgress, (progress) => lerp(node.fromOpacity, node.toOpacity, progress))
-              : node.toOpacity
+              ? to(
+                  graphProgress,
+                  (progress) => lerp(node.fromOpacity, node.toOpacity, progress)
+                    * (squashPreviewShas.has(row.sha) ? 0.5 : 1),
+                )
+              : node.toOpacity * (squashPreviewShas.has(row.sha) ? 0.5 : 1)
             const nodeRadius = isGraphAnimating
               ? to(graphProgress, (progress) => lerp(node.fromRadius, node.toRadius, progress))
               : node.toRadius
@@ -4785,6 +4900,7 @@ export function GraphCanvas() {
               <animated.g
                 key={node.key}
                 data-commit-sha={row.sha}
+                data-squash-preview={squashPreviewShas.has(row.sha) || undefined}
                 onClick={node.interactive ? (e) => { e.stopPropagation(); selectCommit(row.sha) } : undefined}
                 onPointerEnter={node.interactive ? () => showAddRefControls(row.sha) : undefined}
                 onPointerLeave={node.interactive ? () => scheduleHideAddRefControls(row.sha) : undefined}
@@ -4973,6 +5089,30 @@ export function GraphCanvas() {
                 strokeDasharray="6 4"
               />
               <circle cx={node.x} cy={node.y} r={2.5} fill={color} />
+              {actionPreview?.kind === 'squash' && (
+                <g data-testid="squash-preview-commit" pointerEvents="none">
+                  <rect
+                    x={node.x - NODE_RADIUS - 157}
+                    y={node.y - 13}
+                    width={148}
+                    height={26}
+                    rx={7}
+                    fill="#181825"
+                    stroke={SQUASH_PREVIEW_COLOR}
+                    strokeWidth={1.5}
+                  />
+                  <text
+                    x={node.x - NODE_RADIUS - 146}
+                    y={node.y + 4}
+                    fill={SQUASH_PREVIEW_COLOR}
+                    fontSize={11}
+                    fontWeight={700}
+                    fontFamily="system-ui, -apple-system, sans-serif"
+                  >
+                    New squashed commit
+                  </text>
+                </g>
+              )}
             </g>
           ))}
           {uncommitPreviewCross && (

@@ -101,6 +101,66 @@ async function createActionFixture(): Promise<ActionFixture> {
   }
 }
 
+describe('RepoSession.squash', () => {
+  test('replaces a linear range while preserving existing worktree changes', async () => {
+    const squashDir = await mkdtemp(join(tmpdir(), 'ingit-squash-test-'))
+    let squashSession: RepoSession | null = null
+
+    try {
+      await runGit(['init', '--initial-branch=main'], squashDir)
+      await runGit(['config', 'user.email', 'test@test.com'], squashDir)
+      await runGit(['config', 'user.name', 'Test'], squashDir)
+
+      await Bun.write(join(squashDir, 'file.txt'), 'base\n')
+      await runGit(['add', '.'], squashDir)
+      await runGit(['commit', '-m', 'base'], squashDir)
+      const baseSha = await currentHeadSha(squashDir)
+
+      await Bun.write(join(squashDir, 'file.txt'), 'base\nfirst\n')
+      await runGit(['add', '.'], squashDir)
+      await runGit(['commit', '-m', 'first'], squashDir)
+      const oldestSha = await currentHeadSha(squashDir)
+
+      await Bun.write(join(squashDir, 'second.txt'), 'second\n')
+      await runGit(['add', '.'], squashDir)
+      await runGit(['commit', '-m', 'second'], squashDir)
+      const oldHeadSha = await currentHeadSha(squashDir)
+      const oldTree = (await runGit(['rev-parse', `${oldHeadSha}^{tree}`], squashDir)).stdout.trim()
+
+      await Bun.write(join(squashDir, 'file.txt'), 'base\nfirst\nstaged\n')
+      await runGit(['add', 'file.txt'], squashDir)
+      await Bun.write(join(squashDir, 'untracked.txt'), 'unstaged\n')
+      const statusBefore = await workingTreeStatus(squashDir)
+
+      squashSession = await RepoSession.open(squashDir)
+      const result = await squashSession.squash(oldestSha, 'combined change')
+
+      expect(result.headSha).not.toBe(oldHeadSha)
+      expect(await headSubject(squashDir)).toBe('combined change')
+      expect((await runGit(['rev-parse', 'HEAD^'], squashDir)).stdout.trim()).toBe(baseSha)
+      expect((await runGit(['rev-parse', 'HEAD^{tree}'], squashDir)).stdout.trim()).toBe(oldTree)
+      expect((await runGit(['rev-list', '--count', 'HEAD'], squashDir)).stdout.trim()).toBe('2')
+      expect(await workingTreeStatus(squashDir)).toBe(statusBefore)
+    } finally {
+      squashSession?.close()
+      await rm(squashDir, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects a range that does not contain at least two commits', async () => {
+    const fixture = await createActionFixture()
+    const squashSession = await RepoSession.open(fixture.repoDir)
+    try {
+      await expect(squashSession.squash(fixture.mainChangeSha, 'no-op')).rejects.toThrow(
+        'at least two commits',
+      )
+    } finally {
+      squashSession.close()
+      await fixture.cleanup()
+    }
+  })
+})
+
 describe('RepoSession remotes', () => {
   test('lists configured remotes and supports adding and removing them', async () => {
     const originUrl = 'https://example.com/acme/project.git'

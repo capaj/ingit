@@ -14,6 +14,7 @@ export function classifyReflogMessage(message: string): ReflogEntryKind {
   if (head.startsWith('checkout')) return 'checkout'
   if (head.startsWith('reset')) return 'reset'
   if (head.startsWith('rebase')) return 'rebase'
+  if (head.startsWith('squash')) return 'squash'
   if (head.startsWith('merge')) return 'merge'
   if (head.startsWith('cherry-pick')) return 'cherry-pick'
   if (head.startsWith('revert')) return 'revert'

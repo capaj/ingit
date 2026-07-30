@@ -36,6 +36,7 @@ const KIND_COLORS: Record<ReflogEntryKind, string> = {
   'checkout': '#89b4fa',
   'reset': '#f38ba8',
   'rebase': '#fab387',
+  'squash': '#cba6f7',
   'merge': '#cba6f7',
   'cherry-pick': '#94e2d5',
   'revert': '#f5c2e7',
@@ -46,11 +47,12 @@ const KIND_COLORS: Record<ReflogEntryKind, string> = {
 }
 
 // Operations that rewrite or discard history — work can become unreachable here
-const DANGEROUS_KINDS = new Set<ReflogEntryKind>(['reset', 'rebase', 'amend'])
+const DANGEROUS_KINDS = new Set<ReflogEntryKind>(['reset', 'rebase', 'squash', 'amend'])
 
 const KIND_EXPLANATIONS: Partial<Record<ReflogEntryKind, string>> = {
   'reset': 'reset moved HEAD away — commits only on the old position may be unreachable',
   'rebase': 'rebase rewrote history — the original commits live on only in the reflog',
+  'squash': 'squash replaced several commits with one — the originals live on only in the reflog',
   'amend': 'amend replaced the previous commit — the original version is only in the reflog',
 }
 

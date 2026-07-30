@@ -147,13 +147,13 @@ export const ImageDiff = z.object({
   after: ImagePreview.nullable(),
 })
 
-export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit'])
+export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit', 'squash'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
 export const InProgressOperationKind = z.enum(['merge', 'rebase'])
 export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create', 'create-tag'])
 
 export const ReflogEntryKind = z.enum([
-  'commit', 'amend', 'checkout', 'reset', 'rebase', 'merge',
+  'commit', 'amend', 'checkout', 'reset', 'rebase', 'squash', 'merge',
   'cherry-pick', 'revert', 'pull', 'branch', 'clone', 'other',
 ])
 
@@ -553,6 +553,7 @@ export const contract = {
       repoId: RepoId,
       sha: CommitSha,
       action: CommitActionKind,
+      message: z.string().optional(),
     }))
     .output(z.object({
       ok: z.boolean(),

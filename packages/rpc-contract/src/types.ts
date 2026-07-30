@@ -224,12 +224,13 @@ export interface CommitFileDiffResponse {
   imageDiff?: ImageDiff
 }
 
-export type CommitActionKind = 'cherry-pick' | 'revert' | 'uncommit'
+export type CommitActionKind = 'cherry-pick' | 'revert' | 'uncommit' | 'squash'
 
 export interface CommitActionRequest {
   repoId: RepoId
   sha: CommitSha
   action: CommitActionKind
+  message?: string
 }
 
 export interface CommitActionResponse {
@@ -304,7 +305,7 @@ export interface ContinueOperationResponse {
 export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag'
 
 export type ReflogEntryKind =
-  | 'commit' | 'amend' | 'checkout' | 'reset' | 'rebase' | 'merge'
+  | 'commit' | 'amend' | 'checkout' | 'reset' | 'rebase' | 'squash' | 'merge'
   | 'cherry-pick' | 'revert' | 'pull' | 'branch' | 'clone' | 'other'
 
 export interface ReflogEntry {

@@ -930,6 +930,87 @@ export class RepoSession {
     }
   }
 
+  /**
+   * Replace the first-parent range from `oldestSha` through HEAD with one
+   * commit. Building the commit directly from HEAD's tree keeps any existing
+   * staged and unstaged work intact: only the checked-out branch ref moves.
+   */
+  async squash(oldestSha: string, message: string): Promise<{ message: string; headSha: string }> {
+    const subject = message.trim()
+    if (!subject) {
+      throw new Error('A commit message is required to squash commits')
+    }
+
+    const { stdout: branchOut, code: branchCode } = await runGit(
+      ['symbolic-ref', '--quiet', 'HEAD'],
+      this.rootPath,
+      { okCodes: [1] },
+    )
+    const branchRef = branchOut.trim()
+    if (branchCode !== 0 || !branchRef) {
+      throw new Error('Squash is only supported on a checked-out branch')
+    }
+
+    const headSha = await this.getHeadSha()
+    const { stdout: firstParentOut } = await runGit(
+      ['rev-list', '--first-parent', headSha],
+      this.rootPath,
+    )
+    const firstParentHistory = firstParentOut.split('\n').filter(Boolean)
+    const oldestIndex = firstParentHistory.indexOf(oldestSha)
+    if (oldestIndex < 0) {
+      throw new Error('The selected commit is not on the current branch first-parent history')
+    }
+
+    const squashedShas = firstParentHistory.slice(0, oldestIndex + 1)
+    if (squashedShas.length < 2) {
+      throw new Error('Select an older commit to squash at least two commits')
+    }
+
+    const parentsByCommit = await Promise.all(
+      squashedShas.map((sha) => this.getCommitParents(sha)),
+    )
+    if (parentsByCommit.some((parents) => parents.length > 1)) {
+      throw new Error('Squashing a range containing merge commits is not supported yet')
+    }
+
+    const oldestParents = parentsByCommit[parentsByCommit.length - 1] ?? []
+    const parentSha = oldestParents[0]
+    const [{ stdout: treeOut }, { stdout: authorOut }] = await Promise.all([
+      runGit(['rev-parse', `${headSha}^{tree}`], this.rootPath),
+      runGit(['show', '-s', '--format=%an%x00%ae%x00%aI', oldestSha], this.rootPath),
+    ])
+    const [authorName = '', authorEmail = '', authorDate = ''] = authorOut.trim().split('\0')
+
+    const commitArgs = [
+      'commit-tree',
+      treeOut.trim(),
+      ...(parentSha ? ['-p', parentSha] : []),
+      '-m',
+      subject,
+    ]
+    const { stdout: commitOut } = await runGit(commitArgs, this.rootPath, {
+      env: {
+        GIT_AUTHOR_NAME: authorName,
+        GIT_AUTHOR_EMAIL: authorEmail,
+        GIT_AUTHOR_DATE: authorDate,
+      },
+    })
+    const squashedSha = commitOut.trim()
+
+    // Compare-and-swap protects against moving a branch that changed while the
+    // replacement commit was being prepared.
+    await runGit(
+      ['update-ref', '-m', `squash: ${subject}`, branchRef, squashedSha, headSha],
+      this.rootPath,
+    )
+
+    return {
+      message: `Squashed ${squashedShas.length} commits into ${squashedSha.slice(0, 8)}`,
+      headSha: squashedSha,
+    }
+  }
+
   async mergeRef(ref: string): Promise<{ message: string; headSha: string }> {
     const resolved = await this.resolveRef(ref)
     if (!resolved || resolved.kind === 'tag' || resolved.kind === 'other') {

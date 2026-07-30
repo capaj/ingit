@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 
 const dialogStyle = {
   position: 'fixed',
@@ -59,6 +59,7 @@ interface NativeTextInputDialogProps {
   open: boolean
   title: string
   label: string
+  description?: string
   initialValue?: string
   confirmLabel: string
   allowEmpty?: boolean
@@ -71,6 +72,7 @@ export function NativeTextInputDialog({
   open,
   title,
   label,
+  description,
   initialValue = '',
   confirmLabel,
   allowEmpty = false,
@@ -80,6 +82,7 @@ export function NativeTextInputDialog({
 }: NativeTextInputDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const titleId = useId()
   const [value, setValue] = useState(initialValue)
 
   useEffect(() => {
@@ -112,7 +115,7 @@ export function NativeTextInputDialog({
   return (
     <dialog
       ref={dialogRef}
-      aria-labelledby="text-input-dialog-title"
+      aria-labelledby={titleId}
       onCancel={onClose}
       onClose={onClose}
       onClick={(e) => {
@@ -121,7 +124,12 @@ export function NativeTextInputDialog({
       style={dialogStyle}
     >
       <form method="dialog" onSubmit={handleSubmit} onClick={(e) => e.stopPropagation()} style={formStyle}>
-        <h2 id="text-input-dialog-title" style={titleStyle}>{title}</h2>
+        <h2 id={titleId} style={titleStyle}>{title}</h2>
+        {description && (
+          <p style={{ margin: 0, color: '#a6adc8', fontSize: 12, lineHeight: 1.45 }}>
+            {description}
+          </p>
+        )}
         <label style={{ display: 'flex', flexDirection: 'column', gap: 7, color: '#bac2de', fontSize: 12, fontWeight: 700 }}>
           {label}
           <input

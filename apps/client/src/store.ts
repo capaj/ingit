@@ -65,6 +65,8 @@ import {
   predictWorktreeAfterCommit,
   predictMerge,
   predictRebase,
+  predictSquash,
+  getSquashRange,
   type OptimisticGraph,
 } from './optimistic-graph'
 import { mergeHistory } from './history-pagination'
@@ -1866,7 +1868,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     }))
   },
 
-  performCommitAction: async (action, sha) => {
+  performCommitAction: async (action, sha, message) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
@@ -1875,11 +1877,14 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     const snapshot = captureSnapshot(get())
     const rows = snapshot.historyWindow?.rows ?? []
 
-    // Predict: uncommit drops the tip; cherry-pick/revert append a fresh commit
-    // (placeholder sha, swapped for the real one on reconcile).
+    // Predict: uncommit drops the tip; squash replaces a first-parent range;
+    // cherry-pick/revert append a fresh commit. Placeholder SHAs are swapped
+    // for the real ones on reconcile.
     let predicted: OptimisticGraph | null = null
     if (action === 'uncommit') {
       predicted = predictUncommit(rows, snapshot.refs, sha)
+    } else if (action === 'squash') {
+      predicted = predictSquash(rows, snapshot.refs, sha, message ?? '')
     } else {
       const original = rows.find((r) => r.sha === sha)
       const subject =
@@ -1894,13 +1899,13 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     try {
       result = await withTimeout((async () => {
         try {
-          return await commitAction(repoId, action, sha)
+          return await commitAction(repoId, action, sha, message)
         } catch (err) {
           if (isSessionError(err)) {
             const res = await openRepo({ path: repoPath })
             repoId = res.repoId
             set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-            return await commitAction(repoId, action, sha)
+            return await commitAction(repoId, action, sha, message)
           }
           throw err
         }
@@ -1912,7 +1917,14 @@ export const useAppStore = create<AppState>((baseSet, get) => {
 
     const [refs, hist] = await fetchRefsAndHistory(repoId)
     const nextSha = result.headSha
-    const totalCommitCountDelta = action === 'uncommit' ? -1 : 1
+    const squashCount = action === 'squash'
+      ? getSquashRange(rows, snapshot.refs, sha)?.length ?? 1
+      : 0
+    const totalCommitCountDelta = action === 'uncommit'
+      ? -1
+      : action === 'squash'
+        ? 1 - squashCount
+        : 1
     set((s) => ({
       pendingMutation: false,
       graphAnimationSuppressToken: predicted

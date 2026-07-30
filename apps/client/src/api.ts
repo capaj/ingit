@@ -186,8 +186,13 @@ export function getCommitCIStatuses(repoId: string, shas: string[]) {
   return ensureClient().getCommitCIStatuses({ repoId, shas })
 }
 
-export function commitAction(repoId: string, action: 'cherry-pick' | 'revert' | 'uncommit', sha: string) {
-  return ensureClient().commitAction({ repoId, action, sha })
+export function commitAction(
+  repoId: string,
+  action: 'cherry-pick' | 'revert' | 'uncommit' | 'squash',
+  sha: string,
+  message?: string,
+) {
+  return ensureClient().commitAction({ repoId, action, sha, message })
 }
 
 export function getMergePreview(repoId: string, refName: string) {

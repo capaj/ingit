@@ -312,7 +312,9 @@ export const router = os.router({
       ? session.cherryPick(input.sha)
       : input.action === 'uncommit'
         ? session.uncommit(input.sha)
-        : session.revert(input.sha)
+        : input.action === 'squash'
+          ? session.squash(input.sha, input.message ?? '')
+          : session.revert(input.sha)
     ).catch(rethrowWithDetail)
 
     return { ok: true, ...result }

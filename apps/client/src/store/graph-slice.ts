@@ -74,7 +74,7 @@ export interface GraphSlice {
     sha: string,
     force?: boolean,
   ) => Promise<void>
-  performCommitAction: (action: CommitActionKind, sha: string) => Promise<void>
+  performCommitAction: (action: CommitActionKind, sha: string, message?: string) => Promise<void>
   performMergeRef: (refName: string) => Promise<void>
   performRebaseRef: (refName: string) => Promise<void>
   checkoutSha: (sha: string) => Promise<void>

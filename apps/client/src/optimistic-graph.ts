@@ -264,6 +264,92 @@ export function predictUncommit(
 }
 
 /**
+ * Resolve the linear first-parent range from the current branch tip through
+ * `oldestSha`, newest first. Squash deliberately declines merge-containing
+ * ranges because replacing their topology with one parent is ambiguous.
+ */
+export function getSquashRange(
+  rows: CommitRow[],
+  refs: RefSummary[],
+  oldestSha: string,
+): CommitRow[] | null {
+  const current = currentBranchRef(refs)
+  if (!current) return null
+
+  const rowBySha = new Map(rows.map((row) => [row.sha, row]))
+  const range: CommitRow[] = []
+  const visited = new Set<string>()
+  let sha: string | undefined = current.targetSha
+
+  while (sha && !visited.has(sha)) {
+    visited.add(sha)
+    const row = rowBySha.get(sha)
+    if (!row) return null
+    range.push(row)
+    if (sha === oldestSha) break
+    sha = row.parentShas[0]
+  }
+
+  if (range.at(-1)?.sha !== oldestSha || range.length < 2) return null
+  if (range.some((row) => row.parentShas.length > 1)) return null
+  return range
+}
+
+/**
+ * Replace the current branch's linear range from `oldestSha` through HEAD with
+ * one fresh commit. Commits still reachable through another ref remain visible
+ * as the old side of the rewritten history.
+ */
+export function predictSquash(
+  rows: CommitRow[],
+  refs: RefSummary[],
+  oldestSha: string,
+  subject: string,
+): OptimisticGraph | null {
+  const current = currentBranchRef(refs)
+  const range = getSquashRange(rows, refs, oldestSha)
+  if (!current || !range) return null
+
+  const rangeShas = new Set(range.map((row) => row.sha))
+  const parentMap = new Map(rows.map((row) => [row.sha, row.parentShas]))
+  const retainedRangeShas = new Set<string>()
+  for (const ref of refs) {
+    if (ref.kind === 'head' && ref.shortName === current.shortName) continue
+    const reachable = ancestorsWithin(refTipSha(ref), parentMap)
+    for (const sha of rangeShas) {
+      if (reachable.has(sha)) retainedRangeShas.add(sha)
+    }
+  }
+
+  const oldest = range[range.length - 1]
+  const now = Math.floor(Date.now() / 1000)
+  const squashedSha = mintPlaceholderSha('squash')
+  const squashedEntry: SynthEntry = {
+    sha: squashedSha,
+    parentShas: oldest.parentShas.slice(0, 1),
+    meta: {
+      ...metaOf(oldest),
+      committerUnix: now,
+      subject,
+      additions: range.reduce((total, row) => total + row.additions, 0),
+      deletions: range.reduce((total, row) => total + row.deletions, 0),
+      locChanged: range.reduce((total, row) => total + row.locChanged, 0),
+      bodyPreview: undefined,
+    },
+  }
+
+  const remaining = baseEntries(rows).filter(
+    (entry) => !rangeShas.has(entry.sha) || retainedRangeShas.has(entry.sha),
+  )
+  const nextRefs = withRefTarget(refs, current.shortName, squashedSha)
+  return {
+    rows: assembleRows([squashedEntry, ...remaining], nextRefs, squashedSha),
+    refs: nextRefs,
+    headSha: squashedSha,
+  }
+}
+
+/**
  * Append a fresh commit on top of HEAD — the shape of both cherry-pick and
  * revert. The new SHA is a placeholder; the store swaps in the real one on
  * reconcile.

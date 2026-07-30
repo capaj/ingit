@@ -3,7 +3,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { CommitRow, RefSummary } from '@ingit/rpc-contract'
 import {
+  getSquashRange,
   predictRebase,
+  predictSquash,
   predictWorktreeAfterCheckout,
   predictWorktreeAfterCommit,
   rebasePreviewUnavailableReason,
@@ -36,6 +38,69 @@ function branch(shortName: string, targetSha: string, isCurrent = false): RefSum
     isCurrent,
   }
 }
+
+describe('predictSquash', () => {
+  test('replaces the selected first-parent range with one optimistic commit', () => {
+    const rows = [
+      row('head', ['middle'], ['main'], 130),
+      row('middle', ['oldest'], [], 120),
+      row('oldest', ['base'], [], 110),
+      row('base', [], [], 100),
+    ]
+    const refs = [branch('main', 'head', true)]
+
+    const range = getSquashRange(rows, refs, 'oldest')
+    const prediction = predictSquash(rows, refs, 'oldest', 'one polished change')
+
+    expect(range?.map((commit) => commit.sha)).toEqual(['head', 'middle', 'oldest'])
+    expect(prediction).not.toBeNull()
+    expect(prediction!.rows).toHaveLength(2)
+    expect(prediction!.rows[0]?.sha).toStartWith('optimistic-squash-')
+    expect(prediction!.rows[0]?.parentShas).toEqual(['base'])
+    expect(prediction!.rows[0]?.subject).toBe('one polished change')
+    expect(prediction!.rows[1]?.sha).toBe('base')
+    expect(prediction!.headSha).not.toBeNull()
+    expect(prediction!.refs[0]?.targetSha).toBe(prediction!.headSha!)
+  })
+
+  test('keeps old commits that remain reachable from another ref', () => {
+    const rows = [
+      row('head', ['middle'], ['main'], 130),
+      row('middle', ['oldest'], [], 120),
+      row('oldest', ['base'], ['origin/main'], 110),
+      row('base', [], [], 100),
+    ]
+    const refs = [
+      branch('main', 'head', true),
+      {
+        name: 'refs/remotes/origin/main',
+        shortName: 'origin/main',
+        kind: 'remote' as const,
+        targetSha: 'oldest',
+      },
+    ]
+
+    const prediction = predictSquash(rows, refs, 'oldest', 'squashed')
+
+    expect(prediction).not.toBeNull()
+    expect(prediction!.rows.map((commit) => commit.sha)).toContain('oldest')
+    expect(prediction!.rows.map((commit) => commit.sha)).not.toContain('middle')
+    expect(prediction!.rows.map((commit) => commit.sha)).not.toContain('head')
+  })
+
+  test('declines a range containing a merge commit', () => {
+    const rows = [
+      row('head', ['merge'], ['main'], 130),
+      row('merge', ['base', 'side'], [], 120),
+      row('side', ['base'], [], 115),
+      row('base', [], [], 100),
+    ]
+    const refs = [branch('main', 'head', true)]
+
+    expect(getSquashRange(rows, refs, 'merge')).toBeNull()
+    expect(predictSquash(rows, refs, 'merge', 'squashed')).toBeNull()
+  })
+})
 
 describe('predictRebase', () => {
   test('places rewritten commits ahead of unrelated tips like date-ordered git history', () => {

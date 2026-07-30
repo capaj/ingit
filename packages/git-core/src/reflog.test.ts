@@ -50,6 +50,7 @@ describe('classifyReflogMessage', () => {
     expect(classifyReflogMessage('checkout: moving from main to feature')).toBe('checkout')
     expect(classifyReflogMessage('reset: moving to HEAD~2')).toBe('reset')
     expect(classifyReflogMessage('rebase (finish): returning to refs/heads/main')).toBe('rebase')
+    expect(classifyReflogMessage('squash: polished change')).toBe('squash')
     expect(classifyReflogMessage('merge feature: Fast-forward')).toBe('merge')
     expect(classifyReflogMessage('cherry-pick: add thing')).toBe('cherry-pick')
     expect(classifyReflogMessage('pull: Fast-forward')).toBe('pull')
