@@ -11,9 +11,9 @@
     "deploy": "bun run build && wrangler pages deploy --project-name ingit --branch main"
   },
   "dependencies": {
-    "astro": "^7.1.4"
+    "astro": "^7.1.6"
   },
   "devDependencies": {
-    "wrangler": "^4.114.0"
+    "wrangler": "^4.115.0"
   }
 }
