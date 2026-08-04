@@ -304,6 +304,7 @@ describe('RepoSession.rebaseRef', () => {
       expect(await currentBranch(repoDir)).toBe('feature')
       expect(result.headSha).toBe(await currentHeadSha(repoDir))
       expect(result.headSha).not.toBe(featureShaBeforeRebase)
+      expect((await session.getRefs()).find((ref) => ref.shortName === 'feature')?.forcePushEligible).toBe(true)
       expect(await headParents(repoDir)).toEqual([mainSha])
       expect(await branchSha(repoDir, 'main')).toBe(mainSha)
       expect(await Bun.file(join(repoDir, 'feature.txt')).text()).toBe('feature\n')
@@ -369,6 +370,7 @@ describe('RepoSession.rebaseRef', () => {
     await Bun.write(join(localDir, 'feature.txt'), 'feature\n')
     await runGit(['add', '.'], localDir)
     await runGit(['commit', '-m', 'feature'], localDir)
+    await runGit(['push', '-u', 'origin', 'feature'], localDir)
 
     const staleRemoteSha = await branchSha(localDir, 'origin/main')
 
@@ -392,6 +394,10 @@ describe('RepoSession.rebaseRef', () => {
       expect(await branchSha(localDir, 'origin/main')).toBe(latestRemoteSha)
       expect(latestRemoteSha).not.toBe(staleRemoteSha)
       expect(await headParents(localDir)).toEqual([latestRemoteSha])
+
+      await session.push('feature', 'origin', true)
+      expect((await runGit(['rev-parse', 'refs/heads/feature'], remoteDir)).stdout.trim()).toBe(result.headSha)
+      expect((await session.getRefs()).find((ref) => ref.shortName === 'feature')?.forcePushEligible).toBeUndefined()
     } finally {
       session.close()
     }
@@ -520,6 +526,7 @@ describe('RepoSession.rebaseRef', () => {
       expect(result.changes.mergeHeadShas).toBeUndefined()
       expect(result.changes.staged).toEqual([])
       expect(result.changes.unstaged).toEqual([])
+      expect((await session.getRefs()).find((ref) => ref.shortName === 'feature')?.forcePushEligible).toBe(true)
       expect(await headSubject(repoDir)).toBe('feature conflicts shared')
       expect(await headParents(repoDir)).toEqual([mainSha])
       expect(await Bun.file(join(repoDir, 'shared.txt')).text()).toBe('resolved\n')
@@ -586,6 +593,7 @@ describe('RepoSession.rebaseRef', () => {
 
       expect(await currentBranch(repoDir)).toBe('main')
       expect(result.headSha).toBe(headBeforeRebase)
+      expect((await session.getRefs()).find((ref) => ref.shortName === 'main')?.forcePushEligible).toBeUndefined()
       expect(await currentHeadSha(repoDir)).toBe(headBeforeRebase)
     } finally {
       session.close()

@@ -866,6 +866,42 @@ describe('RepoSession.deleteTag', () => {
 })
 
 describe('RepoSession.push', () => {
+  test('rejects force push for an outdated branch that was not rebased', async () => {
+    const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-force-guard-remote-'))
+    const seedDir = await mkdtemp(join(tmpdir(), 'ingit-force-guard-seed-'))
+    const localDir = await mkdtemp(join(tmpdir(), 'ingit-force-guard-local-'))
+    let localSession: RepoSession | null = null
+
+    try {
+      await runGit(['init', '--bare', '--initial-branch=main'], remoteDir)
+      await runGit(['init', '--initial-branch=main'], seedDir)
+      await runGit(['config', 'user.email', 'test@test.com'], seedDir)
+      await runGit(['config', 'user.name', 'Test'], seedDir)
+      await Bun.write(join(seedDir, 'file.txt'), 'base\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'base'], seedDir)
+      await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
+      await runGit(['push', '-u', 'origin', 'main'], seedDir)
+
+      await runGit(['clone', remoteDir, localDir], tmpdir())
+      await Bun.write(join(seedDir, 'remote.txt'), 'new remote work\n')
+      await runGit(['add', '.'], seedDir)
+      await runGit(['commit', '-m', 'advance remote'], seedDir)
+      await runGit(['push', 'origin', 'main'], seedDir)
+      await runGit(['fetch', 'origin'], localDir)
+
+      localSession = await RepoSession.open(localDir)
+      await expect(localSession.push('main', 'origin', true)).rejects.toThrow(
+        'Force push is only available after this branch has been rebased',
+      )
+    } finally {
+      localSession?.close()
+      await rm(remoteDir, { recursive: true, force: true })
+      await rm(seedDir, { recursive: true, force: true })
+      await rm(localDir, { recursive: true, force: true })
+    }
+  })
+
   test('pushes a local tag to origin', async () => {
     const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-push-tag-remote-'))
     const localDir = await mkdtemp(join(tmpdir(), 'ingit-push-tag-local-'))

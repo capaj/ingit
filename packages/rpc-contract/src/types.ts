@@ -45,6 +45,7 @@ export interface RefSummary {
   ahead?: number
   behind?: number
   isCurrent?: boolean
+  forcePushEligible?: boolean
 }
 
 export interface RemoteSummary {

@@ -7,6 +7,7 @@ import { openTerminal } from '../api'
 import { useAppStore } from '../store'
 import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
+import { isForcePushEligible } from '../ref-actions'
 import {
   getSquashRange,
   predictAppendOnHead,
@@ -3631,9 +3632,7 @@ export function GraphCanvas() {
   const selectedRefActions = useMemo<VisibleRefAction[]>(() => {
     if (!selectedRef) return []
     if (selectedRef.kind === 'head') {
-      // The branch diverged from its upstream (e.g. after a rebase), so a normal
-      // push would be rejected as non-fast-forward — force-push instead.
-      const needsForcePush = (selectedRef.behind ?? 0) > 0
+      const needsForcePush = isForcePushEligible(selectedRef)
       const pushAction: VisibleRefAction = needsForcePush
         ? { action: 'push', label: 'Force push', tone: 'warning', force: true }
         : { action: 'push', label: 'Push', tone: 'neutral' }
@@ -3826,9 +3825,14 @@ export function GraphCanvas() {
       force: !!refAction.force,
     }
     runRefAction(pendingAction).catch((err) => {
-      if (refAction.action === 'push' && !refAction.force && isNonFastForwardPushError(err)) {
-        // Remote rejected the push because our branch isn't a fast-forward
-        // (diverged / rewritten history). Offer to force-push instead.
+      if (
+        refAction.action === 'push'
+        && !refAction.force
+        && isForcePushEligible(selectedRef)
+        && isNonFastForwardPushError(err)
+      ) {
+        // Only a branch explicitly marked by a history-rewriting rebase may
+        // escalate a rejected regular push to a force push.
         showError('Push rejected', err, {
           label: 'Force push',
           run: () => {

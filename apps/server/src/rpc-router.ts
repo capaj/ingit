@@ -387,7 +387,7 @@ export const router = os.router({
           if (err instanceof GitCommandError) {
             throw new ORPCError('BAD_REQUEST', { message: err.message })
           }
-          throw err
+          rethrowWithDetail(err)
         }
         break
       case 'fetch':

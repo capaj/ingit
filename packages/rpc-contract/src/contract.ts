@@ -24,6 +24,7 @@ export const RefSummary = z.object({
   ahead: z.number().optional(),
   behind: z.number().optional(),
   isCurrent: z.boolean().optional(),
+  forcePushEligible: z.boolean().optional(),
 })
 
 export const RemoteSummary = z.object({

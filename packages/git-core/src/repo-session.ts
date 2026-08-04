@@ -74,6 +74,8 @@ export class RepoSession {
   readonly catFile: CatFileProcess
   private readonly hydrator: CommitHydrator
   private readonly ziggit: ZiggitRepo | null
+  private readonly forcePushEligibleBranches = new Map<string, string>()
+  private inProgressRebaseBranch: string | null = null
 
   private constructor(
     repoId: string,
@@ -197,8 +199,33 @@ export class RepoSession {
     return new RepoSession(repoId, rootPath, gitDir, head, totalCommitCount, githubUrl, scheduler, catFile, ziggit)
   }
 
-  getRefs(): Promise<RefSummary[]> {
-    return parseRefs(this.rootPath)
+  private async isAncestor(ancestorSha: string, descendantSha: string): Promise<boolean> {
+    const { code } = await runGit(
+      ['merge-base', '--is-ancestor', ancestorSha, descendantSha],
+      this.rootPath,
+      { okCodes: [1, 128] },
+    )
+    return code === 0
+  }
+
+  async getRefs(): Promise<RefSummary[]> {
+    const refs = await parseRefs(this.rootPath)
+    const localBranches = new Map(
+      refs
+        .filter((ref) => ref.kind === 'head')
+        .map((ref) => [ref.shortName, ref]),
+    )
+
+    await Promise.all([...this.forcePushEligibleBranches].map(async ([branchName, rebasedSha]) => {
+      const ref = localBranches.get(branchName)
+      if (!ref || !(await this.isAncestor(rebasedSha, ref.targetSha))) {
+        this.forcePushEligibleBranches.delete(branchName)
+        return
+      }
+      ref.forcePushEligible = true
+    }))
+
+    return refs
   }
 
   async getRemotes(): Promise<RemoteSummary[]> {
@@ -1056,6 +1083,8 @@ export class RepoSession {
     if (!status.branch) {
       throw new Error('Cannot rebase with detached HEAD')
     }
+    const branchName = status.branch
+    const headBefore = status.headSha || await this.getHeadSha()
 
     if (resolved.kind === 'remote') {
       if (!resolved.remoteName || !resolved.remoteBranch) {
@@ -1066,6 +1095,7 @@ export class RepoSession {
 
     let stdout: string
     let stderr: string
+    this.inProgressRebaseBranch = null
     try {
       // Let Git own the complete auto-stash lifecycle. In particular, it
       // keeps the temporary stash attached to a conflicted rebase and restores
@@ -1075,6 +1105,12 @@ export class RepoSession {
       stderr = result.stderr
     } catch (err) {
       if (err instanceof GitCommandError) {
+        try {
+          const changes = await this.getWorktreeChanges()
+          this.inProgressRebaseBranch = changes.rebaseHeadSha ? branchName : null
+        } catch {
+          this.inProgressRebaseBranch = null
+        }
         const detail = [err.stdout, err.stderr]
           .map((t) => t.trim())
           .filter((t) => t.length > 0)
@@ -1083,9 +1119,22 @@ export class RepoSession {
       }
       throw err
     }
+
+    const headSha = await this.getHeadSha()
+    const historyRewritten = headSha !== headBefore
+      && !(await this.isAncestor(headBefore, headSha))
+    if (historyRewritten) {
+      this.forcePushEligibleBranches.set(branchName, headSha)
+    } else if (headSha !== headBefore) {
+      // A fast-forward rebase does not rewrite history and cannot justify a
+      // later force push, even if this branch was eligible before.
+      this.forcePushEligibleBranches.delete(branchName)
+    }
+    this.inProgressRebaseBranch = null
+
     return {
       message: (stdout + stderr).trim(),
-      headSha: await this.getHeadSha(),
+      headSha,
     }
   }
 
@@ -1115,6 +1164,7 @@ export class RepoSession {
       this.getHeadSha(),
       this.getWorktreeChanges(),
     ])
+    if (operation === 'rebase') this.inProgressRebaseBranch = null
     return {
       message: (stdout + stderr).trim() || `Aborted ${operation}`,
       headSha,
@@ -1126,6 +1176,7 @@ export class RepoSession {
     const args = operation === 'merge'
       ? ['merge', '--continue']
       : ['rebase', '--continue']
+    const rebaseBranch = operation === 'rebase' ? this.inProgressRebaseBranch : null
 
     let stdout: string
     let stderr: string
@@ -1150,6 +1201,10 @@ export class RepoSession {
       this.getHeadSha(),
       this.getWorktreeChanges(),
     ])
+    if (operation === 'rebase') {
+      if (rebaseBranch) this.forcePushEligibleBranches.set(rebaseBranch, headSha)
+      this.inProgressRebaseBranch = null
+    }
     return {
       message: (stdout + stderr).trim() || `Continued ${operation}`,
       headSha,
@@ -1168,6 +1223,7 @@ export class RepoSession {
     const { stdout, stderr } = isCurrent
       ? await runGit(['reset', '--hard', sha], this.rootPath)
       : await runGit(['branch', '-f', ref, sha], this.rootPath)
+    this.forcePushEligibleBranches.delete(resolved.fullName.slice('refs/heads/'.length))
     return {
       message: (stdout + stderr).trim() || `Moved ${ref} to ${sha.slice(0, 8)}`,
     }
@@ -1224,6 +1280,7 @@ export class RepoSession {
     const { stdout, stderr } = localRef.isCurrent
       ? await runGit(['reset', '--hard', targetRef], this.rootPath)
       : await runGit(['branch', '-f', ref, targetRef], this.rootPath)
+    this.forcePushEligibleBranches.delete(localRef.shortName)
 
     return {
       message: (stdout + stderr).trim() || `Reset ${ref} to ${targetRef}`,
@@ -1237,11 +1294,24 @@ export class RepoSession {
     // rebase) but still refuses if the remote moved in a way we haven't fetched,
     // so it won't clobber someone else's commits.
     const resolved = await this.resolveRef(ref)
+    const branchName = resolved?.kind === 'head'
+      ? resolved.fullName.slice('refs/heads/'.length)
+      : null
+    if (force) {
+      const rebasedSha = branchName
+        ? this.forcePushEligibleBranches.get(branchName)
+        : undefined
+      if (!resolved || !branchName || !rebasedSha || !(await this.isAncestor(rebasedSha, resolved.sha))) {
+        if (branchName) this.forcePushEligibleBranches.delete(branchName)
+        throw new Error('Force push is only available after this branch has been rebased')
+      }
+    }
     const pushRef = resolved?.kind === 'tag' ? `refs/tags/${ref}` : ref
     const args = force
       ? ['push', '--force-with-lease', remote, pushRef]
       : ['push', remote, pushRef]
     const { stdout, stderr } = await runGit(args, this.rootPath)
+    if (branchName) this.forcePushEligibleBranches.delete(branchName)
     return (stdout + stderr).trim()
   }
 
@@ -1325,6 +1395,7 @@ export class RepoSession {
 
   async deleteBranch(ref: string, force = false): Promise<void> {
     await runGit(['branch', force ? '-D' : '-d', ref], this.rootPath)
+    this.forcePushEligibleBranches.delete(ref)
   }
 
   async deleteTag(name: string): Promise<void> {
