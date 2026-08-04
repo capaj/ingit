@@ -302,7 +302,7 @@ export interface ContinueOperationResponse {
   changes: WorktreeChangesResponse
 }
 
-export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag'
+export type RefActionKind = 'checkout' | 'push' | 'fetch' | 'delete' | 'delete-tag' | 'move' | 'reset' | 'create' | 'create-tag'
 
 export type ReflogEntryKind =
   | 'commit' | 'amend' | 'checkout' | 'reset' | 'rebase' | 'squash' | 'merge'

@@ -853,6 +853,18 @@ describe('RepoSession commit actions', () => {
   })
 })
 
+describe('RepoSession.deleteTag', () => {
+  test('removes a local tag', async () => {
+    const tagName = 'release/v-delete-test'
+    await session.createTag(tagName, await currentHeadSha(repoDir))
+
+    await session.deleteTag(tagName)
+
+    const refs = await session.getRefs()
+    expect(refs.find((ref) => ref.kind === 'tag' && ref.shortName === tagName)).toBeUndefined()
+  })
+})
+
 describe('RepoSession.push', () => {
   test('pushes a local tag to origin', async () => {
     const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-push-tag-remote-'))

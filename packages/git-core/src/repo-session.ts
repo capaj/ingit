@@ -1327,6 +1327,10 @@ export class RepoSession {
     await runGit(['branch', force ? '-D' : '-d', ref], this.rootPath)
   }
 
+  async deleteTag(name: string): Promise<void> {
+    await runGit(['tag', '--delete', name], this.rootPath)
+  }
+
   async deleteRemoteBranch(ref: string): Promise<void> {
     // ref is like "origin/feature" → push --delete origin feature
     const parts = ref.split('/')

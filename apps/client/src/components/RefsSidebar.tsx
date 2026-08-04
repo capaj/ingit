@@ -15,6 +15,7 @@ interface RefsSidebarProps {
   stashes: StashSummary[]
   worktrees: WorktreeSummary[]
   onSelectRef: (ref: RefSummary) => void
+  onDeleteTag: (tag: RefSummary) => Promise<boolean>
   onSelectStash: (stashSha: string) => void
   onSelectStashParent: (parentSha: string) => void
   onOpenWorktree: (path: string) => void
@@ -47,6 +48,7 @@ export function RefsSidebar({
   stashes,
   worktrees,
   onSelectRef,
+  onDeleteTag,
   onSelectStash,
   onSelectStashParent,
   onOpenWorktree,
@@ -73,6 +75,9 @@ export function RefsSidebar({
   const [removingRemoteName, setRemovingRemoteName] = useState<string | null>(null)
   const [hoveredRemoteName, setHoveredRemoteName] = useState<string | null>(null)
   const [focusedRemoveRemoteName, setFocusedRemoveRemoteName] = useState<string | null>(null)
+  const [deletingTagName, setDeletingTagName] = useState<string | null>(null)
+  const [hoveredTagName, setHoveredTagName] = useState<string | null>(null)
+  const [focusedDeleteTagName, setFocusedDeleteTagName] = useState<string | null>(null)
 
   useEffect(() => {
     if (!addRemoteOpen || !githubForkSuggestion) return
@@ -143,6 +148,19 @@ export function RefsSidebar({
       await onRemoveRemote(remote.name)
     } finally {
       setRemovingRemoteName(null)
+    }
+  }
+
+  async function deleteTag(tag: RefSummary) {
+    if (deletingTagName) return
+    const confirmed = window.confirm(`Delete tag "${tag.shortName}"? This cannot be undone.`)
+    if (!confirmed) return
+
+    setDeletingTagName(tag.name)
+    try {
+      await onDeleteTag(tag)
+    } finally {
+      setDeletingTagName(null)
     }
   }
 
@@ -941,50 +959,99 @@ export function RefsSidebar({
               <div>
                 {items.map((ref) => {
                   const isSelected = ref.targetSha === selectedSha
+                  const deleting = deletingTagName === ref.name
+                  const showDelete = ref.kind === 'tag' && (
+                    hoveredTagName === ref.name
+                    || focusedDeleteTagName === ref.name
+                    || deleting
+                  )
                   return (
-                    <button
+                    <div
                       key={ref.name}
-                      onClick={() => onSelectRef(ref)}
-                      title={ref.name}
+                      onMouseEnter={() => {
+                        if (ref.kind === 'tag') setHoveredTagName(ref.name)
+                      }}
+                      onMouseLeave={() => {
+                        if (ref.kind === 'tag') setHoveredTagName(null)
+                      }}
                       style={{
-                        width: '100%',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: 8,
-                        padding: '5px 14px 5px 28px',
                         background: isSelected ? '#313244' : 'none',
-                        border: 'none',
-                        color: isSelected ? '#89b4fa' : '#cdd6f4',
-                        fontSize: 13,
-                        fontWeight: ref.isCurrent ? 700 : 'normal',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        fontFamily: 'inherit',
-                        overflow: 'hidden',
                       }}
                     >
-                      <RefIcon kind={ref.kind} isCurrent={ref.isCurrent} />
-                      <span
+                      <button
+                        type="button"
+                        onClick={() => onSelectRef(ref)}
+                        title={ref.name}
                         style={{
+                          minWidth: 0,
                           flex: 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '5px 6px 5px 28px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: isSelected ? '#89b4fa' : '#cdd6f4',
+                          fontSize: 13,
+                          fontWeight: ref.isCurrent ? 700 : 'normal',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          fontFamily: 'inherit',
                           overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
                         }}
                       >
-                        {ref.shortName}
-                      </span>
-                      {(ref.ahead != null || ref.behind != null) && (
-                        <span style={{ display: 'flex', gap: 4, flexShrink: 0, fontSize: 11 }}>
-                          {ref.ahead != null && ref.ahead > 0 && (
-                            <span style={{ color: '#a6e3a1' }}>↑{ref.ahead}</span>
-                          )}
-                          {ref.behind != null && ref.behind > 0 && (
-                            <span style={{ color: '#f38ba8' }}>↓{ref.behind}</span>
-                          )}
+                        <RefIcon kind={ref.kind} isCurrent={ref.isCurrent} />
+                        <span
+                          style={{
+                            flex: 1,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {ref.shortName}
                         </span>
+                        {(ref.ahead != null || ref.behind != null) && (
+                          <span style={{ display: 'flex', gap: 4, flexShrink: 0, fontSize: 11 }}>
+                            {ref.ahead != null && ref.ahead > 0 && (
+                              <span style={{ color: '#a6e3a1' }}>↑{ref.ahead}</span>
+                            )}
+                            {ref.behind != null && ref.behind > 0 && (
+                              <span style={{ color: '#f38ba8' }}>↓{ref.behind}</span>
+                            )}
+                          </span>
+                        )}
+                      </button>
+                      {ref.kind === 'tag' && (
+                        <button
+                          type="button"
+                          onClick={() => { void deleteTag(ref) }}
+                          onFocus={() => setFocusedDeleteTagName(ref.name)}
+                          onBlur={() => setFocusedDeleteTagName(null)}
+                          disabled={deletingTagName !== null}
+                          title={`Delete tag ${ref.shortName}`}
+                          aria-label={deleting ? `Deleting tag ${ref.shortName}` : `Delete tag ${ref.shortName}`}
+                          style={{
+                            width: 32,
+                            alignSelf: 'stretch',
+                            flexShrink: 0,
+                            display: 'grid',
+                            placeItems: 'center',
+                            padding: 0,
+                            border: 'none',
+                            background: 'transparent',
+                            color: deleting ? '#f9e2af' : '#f38ba8',
+                            cursor: deletingTagName ? 'default' : 'pointer',
+                            opacity: showDelete ? 1 : 0,
+                            transition: 'opacity 0.12s ease',
+                          }}
+                        >
+                          <TrashIcon />
+                        </button>
                       )}
-                    </button>
+                    </div>
                   )
                 })}
               </div>

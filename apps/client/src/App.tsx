@@ -651,6 +651,8 @@ function ConnectedRefsSidebar({
     selectRemote,
     addRemote,
     removeRemote,
+    performRefAction,
+    showError,
     selectedStashSha,
     selectedSha,
   } = useAppStore(useShallow((state) => ({
@@ -668,6 +670,8 @@ function ConnectedRefsSidebar({
     selectRemote: state.selectRemote,
     addRemote: state.addRemote,
     removeRemote: state.removeRemote,
+    performRefAction: state.performRefAction,
+    showError: state.showError,
     selectedStashSha: state.selectedStashSha,
     selectedSha: state.selectedSha,
   })))
@@ -681,6 +685,15 @@ function ConnectedRefsSidebar({
       stashes={stashes}
       worktrees={worktrees}
       onSelectRef={selectRef}
+      onDeleteTag={async (tag) => {
+        try {
+          await performRefAction('delete-tag', tag.shortName, tag.targetSha)
+          return true
+        } catch (err) {
+          showError('Delete tag failed', err)
+          return false
+        }
+      }}
       onSelectStash={selectStash}
       onSelectStashParent={(sha) => { void navigateTo(sha) }}
       onOpenWorktree={(path) => { void openRepoByPath(path) }}

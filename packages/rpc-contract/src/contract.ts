@@ -150,7 +150,7 @@ export const ImageDiff = z.object({
 export const CommitActionKind = z.enum(['cherry-pick', 'revert', 'uncommit', 'squash'])
 export const MergePreviewReason = z.enum(['current-branch', 'detached-head', 'up-to-date', 'missing-ref'])
 export const InProgressOperationKind = z.enum(['merge', 'rebase'])
-export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'move', 'reset', 'create', 'create-tag'])
+export const RefActionKind = z.enum(['checkout', 'push', 'fetch', 'delete', 'delete-tag', 'move', 'reset', 'create', 'create-tag'])
 
 export const ReflogEntryKind = z.enum([
   'commit', 'amend', 'checkout', 'reset', 'rebase', 'squash', 'merge',

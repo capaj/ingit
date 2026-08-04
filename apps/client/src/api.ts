@@ -4,6 +4,7 @@ import type {
   HistoryQuery,
   InProgressOperationKind,
   PackageManagerInstallEvent,
+  RefActionKind,
   StageActionKind,
   StashActionResponse,
   StashSummary,
@@ -215,7 +216,7 @@ export function continueOperation(repoId: string, operation: InProgressOperation
   return ensureClient().continueOperation({ repoId, operation })
 }
 
-export function refAction(repoId: string, action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'create' | 'create-tag', refName: string, sha: string, force?: boolean, remote?: string) {
+export function refAction(repoId: string, action: RefActionKind, refName: string, sha: string, force?: boolean, remote?: string) {
   return ensureClient().refAction({ repoId, action, refName, sha, force, remote })
 }
 
