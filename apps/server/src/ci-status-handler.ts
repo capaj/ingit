@@ -46,7 +46,9 @@ type WorkflowRunsResponse = { workflow_runs?: WorkflowRunApi[] }
 type WorkflowInfo = { name?: string; event?: string }
 type FetchJsonResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: number; message: string }
+  | { ok: false; status: number; message: string; rateLimited?: boolean }
+
+type CIStatusResult = { state: CIState; runs: CIRun[] }
 
 // Only cache states that are terminal — i.e. won't change on the next poll.
 // `pending` might resolve later; `error` is usually a transient network or
@@ -128,10 +130,35 @@ function cacheKey(ownerRepo: string, sha: string): string {
 // since GitHub's limits are per-account.
 let rateLimitedUntil = 0
 
+// Keep only a few GitHub requests in flight at once. A batch of 20 visible
+// commits can otherwise fan out into 60 simultaneous REST requests, all of
+// which have already left the process by the time the first response tells us
+// the account is low on quota or rate-limited.
+const MAX_CONCURRENT_GITHUB_REQUESTS = 3
+let githubRequestsInFlight = 0
+const githubRequestWaiters: Array<() => void> = []
+
+async function acquireGithubRequestSlot(): Promise<void> {
+  if (githubRequestsInFlight < MAX_CONCURRENT_GITHUB_REQUESTS) {
+    githubRequestsInFlight += 1
+    return
+  }
+  await new Promise<void>((resolve) => githubRequestWaiters.push(resolve))
+}
+
+function releaseGithubRequestSlot(): void {
+  const next = githubRequestWaiters.shift()
+  if (next) next()
+  else githubRequestsInFlight -= 1
+}
+
+const inFlightLookups = new Map<string, Promise<CIStatusResult>>()
+
 export async function resetCIStatusCacheForTests(): Promise<void> {
   cachePromise = Promise.resolve({})
   writeChain = Promise.resolve()
   rateLimitedUntil = 0
+  inFlightLookups.clear()
   try {
     await writeFile(CACHE_FILE, '{}')
   } catch {
@@ -248,7 +275,7 @@ export function aggregateCIState(runs: CheckRun[], combined: CombinedStatus | nu
 // (Retry-After seconds, or x-ratelimit-reset epoch seconds), capped so a bad
 // header can't pause lookups for an unreasonable amount of time.
 const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000
-const MAX_RATE_LIMIT_BACKOFF_MS = 15 * 60_000
+const MAX_RATE_LIMIT_BACKOFF_MS = 60 * 60_000
 function retryAfterMs(res: Response): number {
   const retryAfter = res.headers.get('retry-after')
   if (retryAfter) {
@@ -263,8 +290,60 @@ function retryAfterMs(res: Response): number {
   return DEFAULT_RATE_LIMIT_BACKOFF_MS
 }
 
+function rateLimitResetMs(res: Response): number {
+  const reset = res.headers.get('x-ratelimit-reset')
+  if (reset) {
+    const deltaMs = Number(reset) * 1000 - Date.now()
+    if (Number.isFinite(deltaMs) && deltaMs > 0) return Math.min(deltaMs, MAX_RATE_LIMIT_BACKOFF_MS)
+  }
+  return DEFAULT_RATE_LIMIT_BACKOFF_MS
+}
+
+function pauseGithubRequests(until: number, message: string): void {
+  if (until <= rateLimitedUntil) return
+  rateLimitedUntil = until
+  console.warn(`[CI] ${message}; pausing CI lookups for ${Math.max(1, Math.round((until - Date.now()) / 1000))}s`)
+}
+
+// Preserve a slice of the user's shared GitHub quota for git/gh and other
+// tools. The response headers are authoritative for the token currently in
+// use, so this also works with GitHub Enterprise accounts that have a limit
+// other than the usual 5,000 requests/hour.
+function guardRemainingQuota(res: Response): void {
+  const remainingHeader = res.headers.get('x-ratelimit-remaining')
+  const limitHeader = res.headers.get('x-ratelimit-limit')
+  if (remainingHeader === null || limitHeader === null) return
+  const remaining = Number(remainingHeader)
+  const limit = Number(limitHeader)
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return
+
+  const reserve = Math.max(100, Math.ceil(limit * 0.1))
+  if (remaining <= reserve) {
+    pauseGithubRequests(
+      Date.now() + rateLimitResetMs(res),
+      `GitHub API request budget low (${remaining}/${limit} remaining, reserving ${reserve})`,
+    )
+  }
+}
+
+function rateLimitedResult<T>(): FetchJsonResult<T> {
+  return {
+    ok: false,
+    status: 429,
+    message: 'GitHub CI lookups are paused until the API request budget resets',
+    rateLimited: true,
+  }
+}
+
 async function fetchJson<T>(path: string, token: string | null): Promise<FetchJsonResult<T>> {
+  if (Date.now() < rateLimitedUntil) return rateLimitedResult()
+  await acquireGithubRequestSlot()
   try {
+    // The request may have waited behind another call that discovered the low
+    // quota. Check again after acquiring a slot so queued work never leaks
+    // through the guard.
+    if (Date.now() < rateLimitedUntil) return rateLimitedResult()
+
     const headers: Record<string, string> = {
       'Accept': 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
@@ -272,6 +351,7 @@ async function fetchJson<T>(path: string, token: string | null): Promise<FetchJs
     }
     if (token) headers['Authorization'] = `Bearer ${token}`
     const res = await fetch(`https://api.github.com/${path}`, { headers })
+    guardRemainingQuota(res)
     if (!res.ok) {
       let message = res.statusText
       try {
@@ -285,10 +365,8 @@ async function fetchJson<T>(path: string, token: string | null): Promise<FetchJs
       // everything.) Honour Retry-After / the rate-limit reset when given.
       if ((res.status === 403 || res.status === 429) && /rate limit/i.test(message)) {
         const until = Date.now() + retryAfterMs(res)
-        if (until > rateLimitedUntil) {
-          rateLimitedUntil = until
-          console.warn(`[CI] GitHub rate limit hit; pausing CI lookups for ${Math.round((until - Date.now()) / 1000)}s`)
-        }
+        pauseGithubRequests(until, 'GitHub rate limit hit')
+        return { ok: false, status: res.status, message, rateLimited: true }
       }
       return { ok: false, status: res.status, message }
     }
@@ -299,6 +377,8 @@ async function fetchJson<T>(path: string, token: string | null): Promise<FetchJs
       status: 0,
       message: err instanceof Error ? err.message : 'Failed to fetch GitHub API',
     }
+  } finally {
+    releaseGithubRequestSlot()
   }
 }
 
@@ -371,7 +451,7 @@ function commitStatusToCIRun(status: CommitStatusApi): CIRun {
   }
 }
 
-export async function fetchCommitCIStatus(ownerRepo: string, sha: string): Promise<{ state: CIState; runs: CIRun[] }> {
+async function fetchCommitCIStatusUncached(ownerRepo: string, sha: string): Promise<CIStatusResult> {
   const key = cacheKey(ownerRepo, sha)
   const cache = await loadCache()
   const cached = cache[key]
@@ -388,30 +468,38 @@ export async function fetchCommitCIStatus(ownerRepo: string, sha: string): Promi
       console.warn('[CI] No GitHub token available; private repository CI will not be readable')
     }
 
-    const [checks, combined, workflows] = await Promise.all([
+    const [checks, combined] = await Promise.all([
       fetchJson<CheckRunsResponse>(`repos/${ownerRepo}/commits/${sha}/check-runs?per_page=100`, token),
       fetchJson<CombinedStatus & { statuses?: CommitStatusApi[] }>(`repos/${ownerRepo}/commits/${sha}/status`, token),
-      // Supplementary: maps each check suite to its workflow name + trigger so
-      // we can label runs the way GitHub does. A failure here is non-fatal — we
-      // just fall back to the app name.
-      fetchJson<WorkflowRunsResponse>(`repos/${ownerRepo}/actions/runs?head_sha=${sha}&per_page=100`, token),
     ])
 
     if (!checks.ok && !combined.ok) {
-      console.warn('[CI] GitHub CI lookup failed', {
-        ownerRepo,
-        sha: sha.slice(0, 12),
-        checkRuns: `${checks.status} ${checks.message}`,
-        status: `${combined.status} ${combined.message}`,
-      })
+      // The shared guard logs once when it pauses. Don't emit another warning
+      // for every commit that was queued behind the request that tripped it.
+      if (!checks.rateLimited && !combined.rateLimited) {
+        console.warn('[CI] GitHub CI lookup failed', {
+          ownerRepo,
+          sha: sha.slice(0, 12),
+          checkRuns: `${checks.status} ${checks.message}`,
+          status: `${combined.status} ${combined.message}`,
+        })
+      }
       return { state: 'error', runs: [] }
     }
 
     const checkRuns = checks.ok ? checks.data.check_runs ?? [] : []
     const combinedStatuses = combined.ok ? combined.data.statuses ?? [] : []
 
+    // Workflow metadata is only for nicer labels. Avoid spending this third
+    // API request when there are no check suites to label (common for commits
+    // in repositories without Actions, and old commits predating CI).
+    const hasCheckSuites = checkRuns.some((run) => typeof run.check_suite?.id === 'number')
+    const workflows = hasCheckSuites
+      ? await fetchJson<WorkflowRunsResponse>(`repos/${ownerRepo}/actions/runs?head_sha=${sha}&per_page=100`, token)
+      : null
+
     const workflowBySuite = new Map<number, WorkflowInfo>()
-    if (workflows.ok) {
+    if (workflows?.ok) {
       for (const run of workflows.data.workflow_runs ?? []) {
         if (typeof run.check_suite_id === 'number') {
           workflowBySuite.set(run.check_suite_id, {
@@ -446,4 +534,15 @@ export async function fetchCommitCIStatus(ownerRepo: string, sha: string): Promi
     })
     return { state: 'error', runs: [] }
   }
+}
+
+export function fetchCommitCIStatus(ownerRepo: string, sha: string): Promise<CIStatusResult> {
+  const key = cacheKey(ownerRepo, sha)
+  const existing = inFlightLookups.get(key)
+  if (existing) return existing
+
+  const lookup = fetchCommitCIStatusUncached(ownerRepo, sha)
+    .finally(() => inFlightLookups.delete(key))
+  inFlightLookups.set(key, lookup)
+  return lookup
 }

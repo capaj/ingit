@@ -66,6 +66,123 @@ describe('aggregateCIState', () => {
   })
 })
 
+describe('GitHub CI request guard', () => {
+  test('deduplicates concurrent lookups for the same commit', async () => {
+    await resetCIStatusCacheForTests()
+    resetGithubTokenCacheForTests()
+
+    const originalFetch = globalThis.fetch
+    const originalToken = process.env.GITHUB_TOKEN
+    process.env.GITHUB_TOKEN = 'github_pat_test'
+    const urls: string[] = []
+    globalThis.fetch = (async (input) => {
+      const url = String(input)
+      urls.push(url)
+      const headers = {
+        'x-ratelimit-limit': '5000',
+        'x-ratelimit-remaining': '4999',
+        'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 3600),
+      }
+      if (url.includes('/check-runs')) {
+        return Response.json({
+          check_runs: [{
+            name: 'build',
+            status: 'completed',
+            conclusion: 'success',
+            check_suite: { id: 42 },
+          }],
+        }, { headers })
+      }
+      if (url.includes('/actions/runs')) {
+        return Response.json({ workflow_runs: [{ name: 'CI', event: 'push', check_suite_id: 42 }] }, { headers })
+      }
+      return Response.json({ state: 'success', statuses: [] }, { headers })
+    }) as typeof fetch
+
+    try {
+      const [first, second] = await Promise.all([
+        fetchCommitCIStatus('example/repo', 'same-sha'),
+        fetchCommitCIStatus('example/repo', 'same-sha'),
+      ])
+      expect(first).toEqual(second)
+      expect(first.state).toBe('success')
+      expect(urls).toHaveLength(3)
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalToken === undefined) delete process.env.GITHUB_TOKEN
+      else process.env.GITHUB_TOKEN = originalToken
+      resetGithubTokenCacheForTests()
+    }
+  })
+
+  test('does not request workflow metadata when a commit has no check suites', async () => {
+    await resetCIStatusCacheForTests()
+    resetGithubTokenCacheForTests()
+
+    const originalFetch = globalThis.fetch
+    const originalToken = process.env.GITHUB_TOKEN
+    process.env.GITHUB_TOKEN = 'github_pat_test'
+    const urls: string[] = []
+    globalThis.fetch = (async (input) => {
+      const url = String(input)
+      urls.push(url)
+      return url.includes('/check-runs')
+        ? Response.json({ check_runs: [] })
+        : Response.json({ state: 'pending', statuses: [] })
+    }) as typeof fetch
+
+    try {
+      const result = await fetchCommitCIStatus('example/repo', 'no-checks-sha')
+      expect(result.state).toBe('none')
+      expect(urls).toHaveLength(2)
+      expect(urls.some((url) => url.includes('/actions/runs'))).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalToken === undefined) delete process.env.GITHUB_TOKEN
+      else process.env.GITHUB_TOKEN = originalToken
+      resetGithubTokenCacheForTests()
+    }
+  })
+
+  test('stops queued lookups when the remaining quota reaches the reserve', async () => {
+    await resetCIStatusCacheForTests()
+    resetGithubTokenCacheForTests()
+
+    const originalFetch = globalThis.fetch
+    const originalToken = process.env.GITHUB_TOKEN
+    process.env.GITHUB_TOKEN = 'github_pat_test'
+    let requestCount = 0
+    globalThis.fetch = (async (input) => {
+      requestCount += 1
+      const headers = {
+        'x-ratelimit-limit': '5000',
+        'x-ratelimit-remaining': '500',
+        'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 3600),
+      }
+      return String(input).includes('/check-runs')
+        ? Response.json({ check_runs: [] }, { headers })
+        : Response.json({ state: 'pending', statuses: [] }, { headers })
+    }) as typeof fetch
+
+    try {
+      await Promise.all(
+        ['one', 'two', 'three', 'four'].map((sha) => fetchCommitCIStatus('example/repo', sha)),
+      )
+      expect(requestCount).toBeLessThanOrEqual(3)
+
+      const afterPause = await fetchCommitCIStatus('example/repo', 'after-pause')
+      expect(afterPause.state).toBe('error')
+      expect(requestCount).toBeLessThanOrEqual(3)
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalToken === undefined) delete process.env.GITHUB_TOKEN
+      else process.env.GITHUB_TOKEN = originalToken
+      resetGithubTokenCacheForTests()
+      await resetCIStatusCacheForTests()
+    }
+  })
+})
+
 describe('resolveGithubToken (e2e)', () => {
   test('returns a token via gh CLI', async () => {
     resetGithubTokenCacheForTests()
