@@ -14,12 +14,12 @@
     "@ingit/rpc-contract": "*",
     "@orpc/client": "^1.15.0",
     "@react-spring/web": "^10.1.2",
-    "@speed-highlight/core": "^1.2.23",
+    "@speed-highlight/core": "^1.2.24",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-grab": "^0.1.50",
     "zod": "^4.4.3",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",
