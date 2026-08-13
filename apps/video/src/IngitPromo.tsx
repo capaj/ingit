@@ -272,7 +272,7 @@ const BrowserFrame = ({feature, children, active}: {feature: Feature; children?:
     <div style={{height: 54, display: 'flex', alignItems: 'center', padding: '0 22px', gap: 9, background: '#181825', borderBottom: '1px solid #313244'}}>
       {[palette.pink, palette.yellow, palette.green].map((color) => <div key={color} style={{width: 12, height: 12, borderRadius: '50%', backgroundColor: color, opacity: 0.88}} />)}
       <div style={{height: 24, flex: 1, marginLeft: 15, borderRadius: 8, backgroundColor: '#242437', display: 'flex', alignItems: 'center', justifyContent: 'center', color: palette.muted, fontSize: 13}}>
-        localhost:8488 · ingit
+        localhost:8449 · ingit
       </div>
     </div>
     <div style={{position: 'relative', height: 806, overflow: 'hidden'}}>

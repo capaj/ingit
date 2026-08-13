@@ -15,7 +15,7 @@ export default defineConfig({
     forwardConsole: true,
     port: 5184,
     proxy: {
-      '/rpc': { target: 'ws://127.0.0.1:8488', ws: true }
+      '/rpc': { target: 'ws://127.0.0.1:8449', ws: true }
     }
   },
   build: {

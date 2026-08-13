@@ -10,7 +10,7 @@ import { detectGit } from '@ingit/git-core'
 import { router, sessionManager } from './rpc-router.js'
 
 const DEFAULT_HOST = '127.0.0.1'
-const DEFAULT_PORT = 8488
+const DEFAULT_PORT = 8449
 const SERVER_ID = 'ingit'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))

@@ -68,7 +68,7 @@ Arguments:
                     Its child folders are scanned for git repositories.
 
 Options:
-  -p, --port <n>    Preferred port (default 8488; reuses ingit, else next free).
+  -p, --port <n>    Preferred port (default 8449; reuses ingit, else next free).
       --host <h>    Host to bind (default 127.0.0.1).
       --no-open     Don't open the browser automatically.
   -v, --version     Print version and exit.
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
   }
 
   const preferredPort = args.port
-    ?? (process.env.PORT ? Number(process.env.PORT) : 8488)
+    ?? (process.env.PORT ? Number(process.env.PORT) : 8449)
   const runningUrl = await findRunningIngit(args.host, preferredPort)
   if (runningUrl) {
     const url = repositoryUrl(runningUrl, process.cwd())

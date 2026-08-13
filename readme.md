@@ -43,7 +43,7 @@ From source (needs [bun](https://bun.sh)):
 git clone https://github.com/capaj/ingit
 cd ingit-vibe
 bun install
-bun dev               # server on http://127.0.0.1:8488 + vite dev client
+bun dev               # server on http://127.0.0.1:8449 + vite dev client
 ```
 
 Linux, macOS, and Windows are supported. Agent detection reads `/proc` on Linux,

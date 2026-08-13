@@ -42,8 +42,8 @@ describe('running ingit discovery', () => {
   })
 
   test('builds a repository URL with an encoded absolute path', () => {
-    expect(repositoryUrl('http://127.0.0.1:8488', '/tmp/repo with spaces')).toBe(
-      'http://127.0.0.1:8488/#/repository?path=%2Ftmp%2Frepo%20with%20spaces',
+    expect(repositoryUrl('http://127.0.0.1:8449', '/tmp/repo with spaces')).toBe(
+      'http://127.0.0.1:8449/#/repository?path=%2Ftmp%2Frepo%20with%20spaces',
     )
   })
 })

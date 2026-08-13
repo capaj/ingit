@@ -384,7 +384,7 @@ describe('RepoSession.rebaseRef', () => {
     await runGit(['push', 'origin', 'main'], upstreamDir)
     const latestRemoteSha = await currentHeadSha(upstreamDir)
 
-    const session = await RepoSession.open(localDir)
+    let session = await RepoSession.open(localDir)
 
     try {
       const result = await session.rebaseRef('origin/main')
@@ -394,6 +394,12 @@ describe('RepoSession.rebaseRef', () => {
       expect(await branchSha(localDir, 'origin/main')).toBe(latestRemoteSha)
       expect(latestRemoteSha).not.toBe(staleRemoteSha)
       expect(await headParents(localDir)).toEqual([latestRemoteSha])
+
+      // Eligibility must survive a server/app restart between resolving the
+      // rebase and rendering (or invoking) the push action.
+      session.close()
+      session = await RepoSession.open(localDir)
+      expect((await session.getRefs()).find((ref) => ref.shortName === 'feature')?.forcePushEligible).toBe(true)
 
       await session.push('feature', 'origin', true)
       expect((await runGit(['rev-parse', 'refs/heads/feature'], remoteDir)).stdout.trim()).toBe(result.headSha)

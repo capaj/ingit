@@ -208,6 +208,49 @@ export class RepoSession {
     return code === 0
   }
 
+  private async inferRebasedSha(ref: RefSummary, refs: RefSummary[]): Promise<string | null> {
+    if (
+      ref.kind !== 'head'
+      || (ref.ahead ?? 0) <= 0
+      || (ref.behind ?? 0) <= 0
+    ) {
+      return null
+    }
+
+    const remoteRef = this.findTrackingRemoteRef(ref, refs)
+    if (!remoteRef) return null
+
+    const { stdout } = await runGit(
+      ['reflog', 'show', '--max-count=100', '--format=%H%x09%gs', ref.name],
+      this.rootPath,
+    )
+    const entries = stdout
+      .split('\n')
+      .map((line) => {
+        const separator = line.indexOf('\t')
+        return separator < 0
+          ? null
+          : { sha: line.slice(0, separator), subject: line.slice(separator + 1) }
+      })
+      .filter((entry): entry is { sha: string; subject: string } => entry !== null)
+
+    for (let index = 0; index + 1 < entries.length; index += 1) {
+      const rebased = entries[index]
+      const previousTip = entries[index + 1]
+      if (!rebased.subject.startsWith('rebase (finish):')) continue
+
+      const [remoteWasInRewrittenHistory, rebaseStillInCurrentHistory] = await Promise.all([
+        this.isAncestor(remoteRef.targetSha, previousTip.sha),
+        this.isAncestor(rebased.sha, ref.targetSha),
+      ])
+      if (remoteWasInRewrittenHistory && rebaseStillInCurrentHistory) {
+        return rebased.sha
+      }
+    }
+
+    return null
+  }
+
   async getRefs(): Promise<RefSummary[]> {
     const refs = await parseRefs(this.rootPath)
     const localBranches = new Map(
@@ -222,6 +265,20 @@ export class RepoSession {
         this.forcePushEligibleBranches.delete(branchName)
         return
       }
+      ref.forcePushEligible = true
+    }))
+
+    // The server may reconnect or restart while conflicts are being resolved,
+    // and rebases may also be completed from a terminal. Recover those safely
+    // from Git's durable branch reflog: the tracked remote tip must have been
+    // part of the pre-rebase history, while the finished rebase must still be
+    // part of the current history. Ordinary local/remote divergence fails that
+    // test and therefore never exposes force push.
+    await Promise.all([...localBranches].map(async ([branchName, ref]) => {
+      if (this.forcePushEligibleBranches.has(branchName)) return
+      const rebasedSha = await this.inferRebasedSha(ref, refs)
+      if (!rebasedSha) return
+      this.forcePushEligibleBranches.set(branchName, rebasedSha)
       ref.forcePushEligible = true
     }))
 
@@ -1298,9 +1355,13 @@ export class RepoSession {
       ? resolved.fullName.slice('refs/heads/'.length)
       : null
     if (force) {
-      const rebasedSha = branchName
+      let rebasedSha = branchName
         ? this.forcePushEligibleBranches.get(branchName)
         : undefined
+      if (!rebasedSha && branchName) {
+        await this.getRefs()
+        rebasedSha = this.forcePushEligibleBranches.get(branchName)
+      }
       if (!resolved || !branchName || !rebasedSha || !(await this.isAncestor(rebasedSha, resolved.sha))) {
         if (branchName) this.forcePushEligibleBranches.delete(branchName)
         throw new Error('Force push is only available after this branch has been rebased')

@@ -53,7 +53,7 @@ ingit --no-open       # don't open the browser automatically
 | Option | Description |
 | --- | --- |
 | `[path]` | Folder to open (defaults to the current directory). Its child folders are scanned for git repositories. |
-| `-p, --port <n>` | Preferred port (default `8488`; next free port if taken). |
+| `-p, --port <n>` | Preferred port (default `8449`; next free port if taken). |
 | `--host <h>` | Host to bind (default `127.0.0.1`). |
 | `--no-open` | Don't open the browser automatically. |
 | `-v, --version` | Print version. |

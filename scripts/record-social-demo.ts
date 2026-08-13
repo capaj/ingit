@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 
-const APP_URL = process.env.INGIT_RECORD_URL ?? 'http://127.0.0.1:8488'
+const APP_URL = process.env.INGIT_RECORD_URL ?? 'http://127.0.0.1:8449'
 const WIDTH = Number(process.env.INGIT_RECORD_WIDTH ?? 1440)
 const HEIGHT = Number(process.env.INGIT_RECORD_HEIGHT ?? 900)
 const FPS = Number(process.env.INGIT_RECORD_FPS ?? 30)

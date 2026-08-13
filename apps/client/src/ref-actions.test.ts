@@ -17,7 +17,7 @@ describe('isForcePushEligible', () => {
     expect(isForcePushEligible(branch({ ahead: 0, behind: 3 }))).toBe(false)
   })
 
-  test('rejects ordinary divergence without an in-session rebase', () => {
+  test('rejects ordinary divergence without a verified rebase', () => {
     expect(isForcePushEligible(branch({ ahead: 2, behind: 3 }))).toBe(false)
   })
 

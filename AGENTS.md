@@ -6,7 +6,7 @@ Always use **bun**, never npm.
 
 ```sh
 bun install               # install deps
-bun dev                   # server (http://127.0.0.1:8488) + vite dev client
+bun dev                   # server (http://127.0.0.1:8449) + vite dev client
 bun run dev:client        # client only
 bun run typecheck         # tsc --build (project references) — must pass before shipping
 bun test                  # run all tests
