@@ -213,7 +213,7 @@ describe('RepoSession.mergeRef', () => {
   })
 })
 
-describe('RepoSession.moveBranch', () => {
+describe('RepoSession.moveRef', () => {
   test('moves a non-current local branch to the selected commit', async () => {
     const repoDir = await makeTempDir('ingit-move-branch-')
     await initRepo(repoDir)
@@ -237,7 +237,7 @@ describe('RepoSession.moveBranch', () => {
     const session = await RepoSession.open(repoDir)
 
     try {
-      const result = await session.moveBranch('dev', baseSha)
+      const result = await session.moveRef('dev', baseSha)
 
       expect(result.message).toContain('Moved dev')
       expect(await currentBranch(repoDir)).toBe('main')
@@ -264,12 +264,43 @@ describe('RepoSession.moveBranch', () => {
     const session = await RepoSession.open(repoDir)
 
     try {
-      const result = await session.moveBranch('main', baseSha)
+      const result = await session.moveRef('main', baseSha)
 
       expect(result.message).toContain(baseSha.slice(0, 7))
       expect(await currentBranch(repoDir)).toBe('main')
       expect(await currentHeadSha(repoDir)).toBe(baseSha)
       expect(await Bun.file(join(repoDir, 'later.txt')).exists()).toBe(false)
+    } finally {
+      session.close()
+    }
+  })
+
+  test('moves a tag to the selected commit', async () => {
+    const repoDir = await makeTempDir('ingit-move-tag-')
+    await initRepo(repoDir)
+
+    await Bun.write(join(repoDir, 'base.txt'), 'base\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'base'], repoDir)
+    const baseSha = await currentHeadSha(repoDir)
+
+    await Bun.write(join(repoDir, 'later.txt'), 'later\n')
+    await runGit(['add', '.'], repoDir)
+    await runGit(['commit', '-m', 'later'], repoDir)
+    await runGit(['tag', '-a', 'v-test', '-m', 'test release'], repoDir)
+
+    const session = await RepoSession.open(repoDir)
+
+    try {
+      const result = await session.moveRef('v-test', baseSha)
+
+      expect(result.message).toContain('Updated tag')
+      expect((await runGit(['rev-parse', 'refs/tags/v-test^{commit}'], repoDir)).stdout.trim())
+        .toBe(baseSha)
+      expect((await session.getRefs()).find((ref) => ref.shortName === 'v-test')).toMatchObject({
+        kind: 'tag',
+        targetSha: baseSha,
+      })
     } finally {
       session.close()
     }

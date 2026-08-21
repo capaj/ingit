@@ -1624,7 +1624,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
 
     // Predict the layout for the actions that change it so the graph animates
     // on click. Checkout only shifts the center lane; move/reset relocate a
-    // branch label (and HEAD, if it's the current branch).
+    // ref label (and HEAD, if it's the current branch).
     let predicted: OptimisticGraph | null = null
     if (action === 'checkout') {
       predicted = predictCheckout(rows, snapshot.refs, refName, sha)

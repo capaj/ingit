@@ -411,7 +411,7 @@ export const router = os.router({
         await session.deleteTag(input.refName).catch(rethrowWithDetail)
         break
       case 'move': {
-        const result = await session.moveBranch(input.refName, input.sha)
+        const result = await session.moveRef(input.refName, input.sha)
         message = result.message
         break
       }

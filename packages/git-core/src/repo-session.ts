@@ -1269,10 +1269,17 @@ export class RepoSession {
     }
   }
 
-  async moveBranch(ref: string, sha: string): Promise<{ message: string }> {
+  async moveRef(ref: string, sha: string): Promise<{ message: string }> {
     const resolved = await this.resolveRef(ref)
-    if (!resolved || resolved.kind !== 'head') {
-      throw new Error('Only local branches can be moved')
+    if (!resolved || (resolved.kind !== 'head' && resolved.kind !== 'tag')) {
+      throw new Error('Only local branches and tags can be moved')
+    }
+
+    if (resolved.kind === 'tag') {
+      const { stdout, stderr } = await runGit(['tag', '--force', ref, sha], this.rootPath)
+      return {
+        message: (stdout + stderr).trim() || `Moved tag ${ref} to ${sha.slice(0, 8)}`,
+      }
     }
 
     const status = await this.getStatus()

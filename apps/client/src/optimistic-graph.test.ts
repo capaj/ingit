@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import type { CommitRow, RefSummary } from '@ingit/rpc-contract'
 import {
   getSquashRange,
+  predictMoveRef,
   predictRebase,
   predictSquash,
   predictWorktreeAfterCheckout,
@@ -38,6 +39,37 @@ function branch(shortName: string, targetSha: string, isCurrent = false): RefSum
     isCurrent,
   }
 }
+
+describe('predictMoveRef', () => {
+  test('moves an annotated tag label without moving HEAD', () => {
+    const rows = [
+      row('head', ['base'], ['main', 'v-test']),
+      row('base', [], []),
+    ]
+    const refs: RefSummary[] = [
+      branch('main', 'head', true),
+      {
+        name: 'refs/tags/v-test',
+        shortName: 'v-test',
+        kind: 'tag',
+        targetSha: 'annotated-tag-object',
+        peeledSha: 'head',
+      },
+    ]
+
+    const prediction = predictMoveRef(rows, refs, 'v-test', 'base')
+
+    expect(prediction).not.toBeNull()
+    expect(prediction!.headSha).toBe('head')
+    expect(prediction!.refs[1]).toMatchObject({
+      kind: 'tag',
+      targetSha: 'base',
+    })
+    expect(prediction!.refs[1]?.peeledSha).toBeUndefined()
+    expect(prediction!.rows.find((commit) => commit.sha === 'head')?.refNames).toEqual(['main'])
+    expect(prediction!.rows.find((commit) => commit.sha === 'base')?.refNames).toEqual(['v-test'])
+  })
+})
 
 describe('predictSquash', () => {
   test('replaces the selected first-parent range with one optimistic commit', () => {

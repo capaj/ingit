@@ -216,8 +216,9 @@ export function predictCheckout(
 }
 
 /**
- * Move / reset a branch to `toSha`. Topology is unchanged; the branch label
- * relocates and, if it's the current branch, HEAD and the center lane follow.
+ * Move a branch or tag to `toSha` (also used for branch reset). Topology is
+ * unchanged; the ref label relocates and, for the current branch, HEAD and the
+ * center lane follow.
  */
 export function predictMoveRef(
   rows: CommitRow[],
@@ -227,9 +228,13 @@ export function predictMoveRef(
 ): OptimisticGraph | null {
   if (rows.length === 0) return null
   const moved = findRefByShortName(refs, refName)
-  if (!moved || moved.kind !== 'head') return null
+  if (!moved || (moved.kind !== 'head' && moved.kind !== 'tag')) return null
 
-  const nextRefs = withRefTarget(refs, refName, toSha)
+  const nextRefs = refs.map((ref) =>
+    ref.name === moved.name
+      ? { ...ref, targetSha: toSha, peeledSha: undefined }
+      : ref,
+  )
   const current = currentBranchRef(nextRefs)
   const headSha = current ? current.targetSha : null
   return { rows: assembleRows(baseEntries(rows), nextRefs, headSha), refs: nextRefs, headSha }

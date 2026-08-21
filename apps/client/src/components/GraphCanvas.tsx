@@ -3683,9 +3683,11 @@ export function GraphCanvas() {
     ]
   }, [selectedRef, selectedRefWorktree, canPushSelectedRef, canResetSelectedRef])
 
-  const movableBranchRefName = useMemo(() => {
-    if (!selectedRef || selectedRef.kind !== 'head' || selectedRefWorktree) return null
-    return selectedRef.shortName
+  const movableRef = useMemo(() => {
+    if (!selectedRef) return null
+    if (selectedRef.kind === 'tag') return selectedRef
+    if (selectedRef.kind === 'head' && !selectedRefWorktree) return selectedRef
+    return null
   }, [selectedRef, selectedRefWorktree])
 
   const showMergeButton = useMemo(() => (
@@ -3862,24 +3864,25 @@ export function GraphCanvas() {
     })
   }, [selectedRefName, selectedRef, runRefAction, showError, pendingMutation, openRepoByPath])
 
-  const handleMoveBranch = useCallback((targetSha: string) => {
-    if (!movableBranchRefName) return
+  const handleMoveRef = useCallback((targetSha: string) => {
+    if (!movableRef) return
     if (pendingMutation) return
-    const movesCurrentBranch = selectedRef?.kind === 'head' && selectedRef.isCurrent
+    const kind = movableRef.kind === 'tag' ? 'tag' : 'branch'
+    const movesCurrentBranch = movableRef.kind === 'head' && movableRef.isCurrent
     setConfirmDialog({
-      title: 'Move branch',
+      title: `Move ${kind}`,
       message: movesCurrentBranch
-        ? `Move checked-out branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}? This resets the working tree and discards tracked changes.`
-        : `Move branch ${movableBranchRefName} to commit ${targetSha.slice(0, 8)}?`,
+        ? `Move checked-out branch ${movableRef.shortName} to commit ${targetSha.slice(0, 8)}? This resets the working tree and discards tracked changes.`
+        : `Move ${kind} ${movableRef.shortName} to commit ${targetSha.slice(0, 8)}?`,
       confirmLabel: 'Move',
       onConfirm: () => {
         setMergePreviewVisible(false)
-        performRefAction('move', movableBranchRefName, targetSha).catch((err) => {
+        performRefAction('move', movableRef.shortName, targetSha).catch((err) => {
           showError('Move failed', err)
         })
       },
     })
-  }, [movableBranchRefName, selectedRef, performRefAction, showError, pendingMutation])
+  }, [movableRef, performRefAction, showError, pendingMutation])
 
   const handleCreateRef = useCallback((kind: CreateRefKind, targetSha: string) => {
     if (pendingMutation) return
@@ -5344,8 +5347,8 @@ export function GraphCanvas() {
             && !isGraphAnimating
             && (hoveredAddRefSha === node.row.sha || openAddRefSha === node.row.sha)
           const rowShowsMove = rowShowsAddRef
-            && !!movableBranchRefName
-            && node.row.sha !== selectedRef?.targetSha
+            && !!movableRef
+            && node.row.sha !== (movableRef.peeledSha ?? movableRef.targetSha)
           const rowRebaseTargetRef = !refActionInFlight && selectedCurrentBranchRef && node.row.sha !== selectedCurrentBranchRef.targetSha
             ? pickBestRef(node.row.refNames.filter((refName) => refName !== selectedCurrentBranchRef.shortName))
             : null
@@ -5468,11 +5471,11 @@ export function GraphCanvas() {
               {rowShowsMove && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 7 }}>
                   <RefActionButton
-                    label={`Move ${movableBranchRefName} here`}
+                    label={`Move ${movableRef.shortName} here`}
                     tone="neutral"
                     size="compact"
                     variant="ghost"
-                    onClick={() => handleMoveBranch(node.row.sha)}
+                    onClick={() => handleMoveRef(node.row.sha)}
                   />
                 </div>
               )}
