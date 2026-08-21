@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { highlightText } from '@speed-highlight/core'
+import { highlightHTML } from '@speed-highlight/core'
 import type { ShjLanguage } from '@speed-highlight/core'
 import type { ImageDiff, ImagePreview } from '@ingit/rpc-contract'
 
@@ -113,7 +113,7 @@ export function DiffView({ entry, path }: { entry: FileDiffEntry; path: string }
       lines.map((l) =>
         l.kind === 'hunk' || l.content.length === 0
           ? Promise.resolve(null)
-          : highlightText(l.content, lang, false).catch(() => null),
+          : highlightHTML(l.content, lang, { block: false }).catch(() => null),
       ),
     ).then((html) => {
       if (!cancelled) setHighlighted(html)

@@ -57,6 +57,7 @@ const ntdllSymbols = {
 
 type Kernel32 = ReturnType<typeof dlopen<typeof kernel32Symbols>>
 type Ntdll = ReturnType<typeof dlopen<typeof ntdllSymbols>>
+type WindowsHandle = Pointer | bigint
 interface WindowsLibraries {
   kernel32: Kernel32
   ntdll: Ntdll
@@ -154,7 +155,7 @@ export function normalizeWindowsPath(path: string): string {
 
 function readRemoteMemory(
   kernel32: Kernel32,
-  handle: Pointer,
+  handle: WindowsHandle,
   address: number,
   length: number,
 ): Buffer | null {
@@ -174,7 +175,7 @@ function readRemoteMemory(
 
 function readRemotePointer(
   kernel32: Kernel32,
-  handle: Pointer,
+  handle: WindowsHandle,
   address: number,
   pointerSize: 4 | 8,
 ): number | null {
@@ -186,7 +187,7 @@ function readRemotePointer(
 
 function queryPeb(
   libs: WindowsLibraries,
-  handle: Pointer,
+  handle: WindowsHandle,
 ): { address: number; pointerSize: 4 | 8 } | null {
   // A 64-bit process can inspect a 32-bit target through its WOW64 PEB.
   const wow64 = Buffer.alloc(8)
@@ -227,7 +228,7 @@ interface ProcessParameters {
 
 function readUnicodeString(
   kernel32: Kernel32,
-  handle: Pointer,
+  handle: WindowsHandle,
   address: number,
   pointerSize: 4 | 8,
 ): string {
@@ -244,7 +245,10 @@ function readUnicodeString(
   return content?.toString('utf16le') ?? ''
 }
 
-function readProcessParameters(libs: WindowsLibraries, handle: Pointer): ProcessParameters | null {
+function readProcessParameters(
+  libs: WindowsLibraries,
+  handle: WindowsHandle,
+): ProcessParameters | null {
   const peb = queryPeb(libs, handle)
   if (!peb) return null
   const parametersOffset = peb.pointerSize === 8 ? 0x20 : 0x10
@@ -266,7 +270,7 @@ function readProcessParameters(libs: WindowsLibraries, handle: Pointer): Process
   }
 }
 
-function queryImagePath(kernel32: Kernel32, handle: Pointer): string {
+function queryImagePath(kernel32: Kernel32, handle: WindowsHandle): string {
   const maxChars = 32_768
   const output = Buffer.alloc(maxChars * 2)
   const size = Buffer.alloc(4)
@@ -280,7 +284,7 @@ const WINDOWS_EPOCH_OFFSET_MS = 11_644_473_600_000n
 
 function queryProcessTimes(
   kernel32: Kernel32,
-  handle: Pointer,
+  handle: WindowsHandle,
 ): { cpuTicks: number; startEpochMs?: number } {
   const creation = Buffer.alloc(8)
   const exit = Buffer.alloc(8)
