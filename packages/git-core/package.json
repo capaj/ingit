@@ -20,7 +20,7 @@
     "@ingit/rpc-contract": "*"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14",
+    "@types/bun": "^1.4.0",
     "@types/node": "^26.2.0"
   }
 }
