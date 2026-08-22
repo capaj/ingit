@@ -6,6 +6,9 @@
   "bin": {
     "ingit": "bin/ingit.cjs"
   },
+  "engines": {
+    "bun": ">1.4.0"
+  },
   "scripts": {
     "dev": "bun src/main.ts",
     "release": "bun scripts/build.ts"
