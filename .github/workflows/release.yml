@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 env:
-  BUN_VERSION: "1.3.14"
-  ZIG_VERSION: "0.14.1"
+  BUN_VERSION: "1.4.0"
+  ZIG_VERSION: "0.16.0"
 
 jobs:
   build:
