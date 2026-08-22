@@ -68,6 +68,8 @@ export interface StartServerOptions {
   port?: number
   /** Directory holding the built client (index.html + assets). */
   clientDist?: string
+  /** Version exposed to newer CLIs so upgrades can replace older servers. */
+  version?: string
 }
 
 export interface RunningServer {
@@ -109,6 +111,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   const host = opts.host ?? DEFAULT_HOST
   const startPort = opts.port ?? (process.env.PORT ? Number(process.env.PORT) : DEFAULT_PORT)
   const clientDist = opts.clientDist ?? process.env.INGIT_CLIENT_DIST ?? DEFAULT_CLIENT_DIST
+  const version = opts.version ?? process.env.INGIT_VERSION ?? '0.1.0'
 
   const gitInfo = await detectGit()
   console.log(`git found: ${gitInfo.path} (version ${gitInfo.version})`)
@@ -141,7 +144,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     }
 
     if (method === 'GET' && url === '/__ingit/health') {
-      const body = JSON.stringify({ name: SERVER_ID })
+      const body = JSON.stringify({ name: SERVER_ID, version, pid: process.pid })
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Content-Length': Buffer.byteLength(body),

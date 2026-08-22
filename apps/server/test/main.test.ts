@@ -36,11 +36,12 @@ describe('startServer', () => {
       host: '127.0.0.1',
       port: address.port,
       clientDist,
+      version: '9.8.7',
     })
 
     expect(running.port).toBeGreaterThan(address.port)
     const response = await fetch(`${running.url}/__ingit/health`)
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ name: 'ingit' })
+    expect(await response.json()).toEqual({ name: 'ingit', version: '9.8.7', pid: process.pid })
   })
 })

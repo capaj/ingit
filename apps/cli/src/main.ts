@@ -10,7 +10,12 @@
  */
 import { dirname, join, resolve, isAbsolute } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
-import { findRunningIngit, repositoryUrl } from './existing-server.js'
+import {
+  inspectRunningIngit,
+  repositoryUrl,
+  runningIngitNeedsRestart,
+  stopRunningIngit,
+} from './existing-server.js'
 
 // Baked in at compile time via `bun build --define` (see scripts/build.ts).
 const VERSION = process.env.INGIT_VERSION ?? '0.1.0'
@@ -162,13 +167,18 @@ async function main(): Promise<void> {
 
   const preferredPort = args.port
     ?? (process.env.PORT ? Number(process.env.PORT) : 8449)
-  const runningUrl = await findRunningIngit(args.host, preferredPort)
-  if (runningUrl) {
-    const url = repositoryUrl(runningUrl, process.cwd())
+  const running = await inspectRunningIngit(args.host, preferredPort)
+  if (running && !runningIngitNeedsRestart(running.version, VERSION)) {
+    const url = repositoryUrl(running.url, process.cwd())
     if (args.open) await openBrowser(url)
-    console.log(`ingit is already running at ${runningUrl}`)
+    console.log(`ingit is already running at ${running.url}`)
     console.log(`Open ${url} in your browser.`)
     return
+  }
+  if (running) {
+    const runningLabel = running.version ? `ingit ${running.version}` : 'an older ingit version'
+    console.log(`${runningLabel} is running at ${running.url}; restarting with ${VERSION}...`)
+    await stopRunningIngit(running)
   }
 
   const assets = resolveAssets()
@@ -181,7 +191,7 @@ async function main(): Promise<void> {
   }
 
   const { startServer } = await import('@ingit/server')
-  const server = await startServer({ host: args.host, port: args.port })
+  const server = await startServer({ host: args.host, port: args.port, version: VERSION })
   const url = repositoryUrl(server.url, process.cwd())
 
   if (args.open) {
