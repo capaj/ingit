@@ -10,16 +10,16 @@
     "render": "bun run assets && remotion render src/index.ts IngitPromo out/ingit-promo-vertical.mp4 --codec=h264 --crf=17 --pixel-format=yuv420p --audio-codec=aac"
   },
   "dependencies": {
-    "@remotion/cli": "4.0.515",
-    "@remotion/media": "4.0.515",
+    "@remotion/cli": "4.0.518",
+    "@remotion/media": "4.0.518",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "remotion": "4.0.515",
+    "remotion": "4.0.518",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react-dom": "^19.2.5",
     "typescript": "^7.0.2"
   }
 }
