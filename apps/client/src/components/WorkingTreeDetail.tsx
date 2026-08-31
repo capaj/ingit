@@ -7,7 +7,7 @@ import {
 } from '@ingit/rpc-contract'
 import { useAppStore, worktreeDiffKey } from '../store'
 import { getCommitDetail, installAndResolveLockfile } from '../api'
-import { isForcePushEligible } from '../ref-actions'
+import { isNonFastForwardPushError } from '../ref-actions'
 import { RefActionButton } from './graph-canvas/ActionButtons'
 import { DiffView } from './DiffView'
 import { NativeConfirmDialog, NativeTextInputDialog } from './NativeDialogs'
@@ -346,7 +346,6 @@ function CommitBox({
     const currentRef = committedState.refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
     const refName = currentRef?.shortName ?? branch
     const sha = currentRef?.targetSha ?? committedState.worktreeChanges?.headSha ?? headSha
-    const canForcePush = isForcePushEligible(currentRef)
     if (!sha) {
       showError('Push failed', 'Could not determine the committed revision to push')
       return
@@ -356,12 +355,7 @@ function CommitBox({
     try {
       await performRefAction('push', refName, sha)
     } catch (err) {
-      if (
-        canForcePush
-        && err
-        && typeof err === 'object'
-        && (err as { code?: unknown }).code === 'CONFLICT'
-      ) {
+      if (isNonFastForwardPushError(err)) {
         showError('Push rejected', err, {
           label: 'Force push',
           run: () => {

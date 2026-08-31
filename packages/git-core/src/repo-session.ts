@@ -17,7 +17,7 @@ import type {
   ImageDiff,
   ImagePreview,
 } from '@ingit/rpc-contract'
-import { runGit, GitCommandError } from './git-command.js'
+import { runGit, GitCommandError, isNonFastForwardPushRejection } from './git-command.js'
 import { GitCommandScheduler } from './scheduler.js'
 import { CatFileProcess } from './cat-file-process.js'
 import { CommitHydrator } from './hydrator.js'
@@ -259,9 +259,9 @@ export class RepoSession {
         .map((ref) => [ref.shortName, ref]),
     )
 
-    await Promise.all([...this.forcePushEligibleBranches].map(async ([branchName, rebasedSha]) => {
+    await Promise.all([...this.forcePushEligibleBranches].map(async ([branchName, eligibleSha]) => {
       const ref = localBranches.get(branchName)
-      if (!ref || !(await this.isAncestor(rebasedSha, ref.targetSha))) {
+      if (!ref || !(await this.isAncestor(eligibleSha, ref.targetSha))) {
         this.forcePushEligibleBranches.delete(branchName)
         return
       }
@@ -1362,23 +1362,43 @@ export class RepoSession {
       ? resolved.fullName.slice('refs/heads/'.length)
       : null
     if (force) {
-      let rebasedSha = branchName
+      let eligibleSha = branchName
         ? this.forcePushEligibleBranches.get(branchName)
         : undefined
-      if (!rebasedSha && branchName) {
+      if (!eligibleSha && branchName) {
         await this.getRefs()
-        rebasedSha = this.forcePushEligibleBranches.get(branchName)
+        eligibleSha = this.forcePushEligibleBranches.get(branchName)
       }
-      if (!resolved || !branchName || !rebasedSha || !(await this.isAncestor(rebasedSha, resolved.sha))) {
+      if (!resolved || !branchName || !eligibleSha || !(await this.isAncestor(eligibleSha, resolved.sha))) {
         if (branchName) this.forcePushEligibleBranches.delete(branchName)
-        throw new Error('Force push is only available after this branch has been rebased')
+        throw new Error('Force push is only available after a rebase or non-fast-forward push rejection')
       }
     }
     const pushRef = resolved?.kind === 'tag' ? `refs/tags/${ref}` : ref
     const args = force
       ? ['push', '--force-with-lease', remote, pushRef]
       : ['push', remote, pushRef]
-    const { stdout, stderr } = await runGit(args, this.rootPath)
+    let stdout: string
+    let stderr: string
+    try {
+      const result = await runGit(args, this.rootPath)
+      stdout = result.stdout
+      stderr = result.stderr
+    } catch (err) {
+      if (
+        !force
+        && resolved
+        && branchName
+        && err instanceof GitCommandError
+        && isNonFastForwardPushRejection(`${err.stdout}\n${err.stderr}`)
+      ) {
+        // The client only offers the destructive follow-up after this exact
+        // rejection. Remember the attempted tip so a later force request is
+        // still rejected if the branch is moved elsewhere first.
+        this.forcePushEligibleBranches.set(branchName, resolved.sha)
+      }
+      throw err
+    }
     if (branchName) this.forcePushEligibleBranches.delete(branchName)
     return (stdout + stderr).trim()
   }

@@ -7,7 +7,7 @@ import { openTerminal } from '../api'
 import { useAppStore } from '../store'
 import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
-import { isForcePushEligible } from '../ref-actions'
+import { isForcePushEligible, isNonFastForwardPushError } from '../ref-actions'
 import {
   getSquashRange,
   predictAppendOnHead,
@@ -203,12 +203,6 @@ interface ParsedVersionTag {
   minor: number
   patch: number
   hasVPrefix: boolean
-}
-
-// The server reports a non-fast-forward push rejection as an oRPC CONFLICT error
-// (plain Errors are masked as "Internal server error" over the wire).
-function isNonFastForwardPushError(err: unknown): boolean {
-  return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'CONFLICT'
 }
 
 function checkoutConflictWorktreePath(err: unknown): string | null {
@@ -3830,11 +3824,10 @@ export function GraphCanvas() {
       if (
         refAction.action === 'push'
         && !refAction.force
-        && isForcePushEligible(selectedRef)
         && isNonFastForwardPushError(err)
       ) {
-        // Only a branch explicitly marked by a history-rewriting rebase may
-        // escalate a rejected regular push to a force push.
+        // A rejected regular push unlocks this explicit force-with-lease
+        // follow-up on the server for the branch tip that just failed.
         showError('Push rejected', err, {
           label: 'Force push',
           run: () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { RefSummary } from '@ingit/rpc-contract'
-import { isForcePushEligible } from './ref-actions'
+import { isForcePushEligible, isNonFastForwardPushError } from './ref-actions'
 
 function branch(overrides: Partial<RefSummary> = {}): RefSummary {
   return {
@@ -27,5 +27,22 @@ describe('isForcePushEligible', () => {
 
   test('still rejects a marked branch that is only behind', () => {
     expect(isForcePushEligible(branch({ ahead: 0, behind: 3, forcePushEligible: true }))).toBe(false)
+  })
+})
+
+describe('isNonFastForwardPushError', () => {
+  test('accepts the typed non-fast-forward conflict', () => {
+    expect(isNonFastForwardPushError({
+      code: 'CONFLICT',
+      data: { reason: 'non-fast-forward' },
+    })).toBe(true)
+  })
+
+  test('rejects unrelated conflicts', () => {
+    expect(isNonFastForwardPushError({
+      code: 'CONFLICT',
+      data: { reason: 'branch-in-use' },
+    })).toBe(false)
+    expect(isNonFastForwardPushError({ code: 'CONFLICT' })).toBe(false)
   })
 })

@@ -1,6 +1,10 @@
 import assert from 'node:assert'
 import { implement, ORPCError } from '@orpc/server'
-import { BranchCheckedOutError, GitCommandError } from '@ingit/git-core'
+import {
+  BranchCheckedOutError,
+  GitCommandError,
+  isNonFastForwardPushRejection,
+} from '@ingit/git-core'
 import { contract } from '@ingit/rpc-contract'
 import { SessionManager } from './session-manager.js'
 import { handleHistoryQuery } from './history-handler.js'
@@ -23,11 +27,6 @@ function getSession(repoId: string) {
   const session = sessionManager.getSession(repoId)
   assert(session, `No session found for repoId: ${repoId}`)
   return session
-}
-
-/** Detect a push rejected because the remote tip isn't an ancestor of ours. */
-function isNonFastForwardRejection(stderr: string): boolean {
-  return /\bnon-fast-forward\b|\[rejected\]|\bfetch first\b|tip of your current branch is behind/i.test(stderr)
 }
 
 /**
@@ -375,7 +374,10 @@ export const router = os.router({
         try {
           message = await session.push(input.refName, input.remote, input.force ?? false)
         } catch (err) {
-          if (err instanceof GitCommandError && isNonFastForwardRejection(err.stderr)) {
+          if (
+            err instanceof GitCommandError
+            && isNonFastForwardPushRejection(`${err.stdout}\n${err.stderr}`)
+          ) {
             // Surface as a typed error so the client can offer a force push.
             // Plain Errors are masked as "Internal server error" over oRPC;
             // ORPCError instances pass through with their message + data.

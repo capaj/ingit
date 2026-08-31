@@ -866,7 +866,7 @@ describe('RepoSession.deleteTag', () => {
 })
 
 describe('RepoSession.push', () => {
-  test('rejects force push for an outdated branch that was not rebased', async () => {
+  test('unlocks force push after a non-fast-forward rejection', async () => {
     const remoteDir = await mkdtemp(join(tmpdir(), 'ingit-force-guard-remote-'))
     const seedDir = await mkdtemp(join(tmpdir(), 'ingit-force-guard-seed-'))
     const localDir = await mkdtemp(join(tmpdir(), 'ingit-force-guard-local-'))
@@ -882,6 +882,7 @@ describe('RepoSession.push', () => {
       await runGit(['commit', '-m', 'base'], seedDir)
       await runGit(['remote', 'add', 'origin', remoteDir], seedDir)
       await runGit(['push', '-u', 'origin', 'main'], seedDir)
+      const localSha = await currentHeadSha(seedDir)
 
       await runGit(['clone', remoteDir, localDir], tmpdir())
       await Bun.write(join(seedDir, 'remote.txt'), 'new remote work\n')
@@ -892,8 +893,15 @@ describe('RepoSession.push', () => {
 
       localSession = await RepoSession.open(localDir)
       await expect(localSession.push('main', 'origin', true)).rejects.toThrow(
-        'Force push is only available after this branch has been rebased',
+        'Force push is only available after a rebase or non-fast-forward push rejection',
       )
+
+      await expect(localSession.push('main', 'origin')).rejects.toThrow('non-fast-forward')
+      expect((await localSession.getRefs()).find((ref) => ref.shortName === 'main')?.forcePushEligible).toBe(true)
+
+      await localSession.push('main', 'origin', true)
+      expect((await runGit(['rev-parse', 'refs/heads/main'], remoteDir)).stdout.trim()).toBe(localSha)
+      expect((await localSession.getRefs()).find((ref) => ref.shortName === 'main')?.forcePushEligible).toBeUndefined()
     } finally {
       localSession?.close()
       await rm(remoteDir, { recursive: true, force: true })

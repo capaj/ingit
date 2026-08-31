@@ -16,6 +16,11 @@ export class GitCommandError extends Error {
   }
 }
 
+/** True when Git rejected a push because updating the remote would not fast-forward. */
+export function isNonFastForwardPushRejection(output: string): boolean {
+  return /\bnon-fast-forward\b|\bfetch first\b|tip of your current branch is behind/i.test(output)
+}
+
 export interface GitRunResult {
   stdout: string
   stderr: string
