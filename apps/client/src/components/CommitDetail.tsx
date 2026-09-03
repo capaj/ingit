@@ -534,16 +534,19 @@ function FileRow({ sha, cp }: { sha: string; cp: ChangedPath }) {
         <span
           style={{
             flex: 1,
+            minWidth: 0,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             fontFamily: 'monospace',
             fontSize: 12,
             color: '#a6adc8',
+            direction: 'rtl',
+            textAlign: 'left',
           }}
           title={displayPath}
         >
-          {displayPath}
+          <bdi dir="ltr">{displayPath}</bdi>
         </span>
       </div>
       {expanded && diffEntry && <DiffView entry={diffEntry} path={cp.path} />}

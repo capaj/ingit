@@ -2,7 +2,14 @@ import { Fragment, useRef, useEffect, useCallback, useState, useMemo, useReducer
 import { createPortal } from 'react-dom'
 import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
-import type { CommitRow, CommitActionKind, RefSummary, WorktreeChangesResponse, WorktreeSummary } from '@ingit/rpc-contract'
+import type {
+  CommitRow,
+  CommitActionKind,
+  RefSummary,
+  WorktreeChangesResponse,
+  WorktreeGraphState,
+  WorktreeSummary,
+} from '@ingit/rpc-contract'
 import { openTerminal } from '../api'
 import { useAppStore } from '../store'
 import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
@@ -138,6 +145,8 @@ interface VisibleRefAction {
   label: string
   tone: 'neutral' | 'warning' | 'danger'
   force?: boolean
+  ignoreOtherWorktrees?: boolean
+  worktreeChoice?: boolean
   worktreePath?: string
 }
 
@@ -146,6 +155,7 @@ interface PendingRefAction extends Omit<VisibleRefAction, 'action' | 'worktreePa
   refName: string
   sha: string
   force: boolean
+  ignoreOtherWorktrees: boolean
 }
 
 function samePendingRefAction(a: PendingRefAction | null, b: PendingRefAction) {
@@ -154,6 +164,7 @@ function samePendingRefAction(a: PendingRefAction | null, b: PendingRefAction) {
     && a.refName === b.refName
     && a.sha === b.sha
     && a.force === b.force
+    && a.ignoreOtherWorktrees === b.ignoreOtherWorktrees
 }
 
 type CreateRefKind = 'branch' | 'tag'
@@ -339,6 +350,8 @@ interface GraphAnimationSnapshot {
 
 interface WorktreeNodeGeometry {
   kind: 'merge' | 'rebase' | 'worktree'
+  path: string
+  isCurrent: boolean
   x: number
   y: number
   idx: number
@@ -350,6 +363,26 @@ interface WorktreeNodeGeometry {
   conflictedCount: number
   targetPlan: EdgeRoutePlan
   sourcePath: string | null
+}
+
+function worktreeNodeLabel(node: WorktreeNodeGeometry): string {
+  if (node.kind === 'merge') {
+    return node.conflictedCount > 0 ? 'Merge conflicts' : 'Merge in progress'
+  }
+  if (node.kind === 'rebase') {
+    return node.conflictedCount > 0 ? 'Rebase conflicts' : 'Rebase in progress'
+  }
+  return 'Uncommitted changes'
+}
+
+function worktreeNodeTitle(node: WorktreeNodeGeometry): string {
+  const location = node.isCurrent ? '' : ` in ${pathBaseName(node.path)}`
+  if (node.kind === 'worktree') {
+    const action = node.isCurrent ? 'Click to stage / unstage' : 'Click to open worktree'
+    return `Uncommitted changes${location} — ${node.count} file${node.count === 1 ? '' : 's'}\n${action}`
+  }
+  const action = node.isCurrent ? 'Click to review files' : 'Click to open worktree'
+  return `${worktreeNodeLabel(node)}${location} — ${node.conflictedCount} conflict${node.conflictedCount === 1 ? '' : 's'}\n${action}`
 }
 
 interface RenderedEdgeItem {
@@ -2474,7 +2507,10 @@ export function GraphCanvas() {
   const commitCIStatus = useAppStore((state) => state.commitCIStatus)
   const fetchCommitCIStatusesIfNeeded = useAppStore((state) => state.fetchCommitCIStatusesIfNeeded)
   const worktreeChanges = useAppStore((state) => state.worktreeChanges)
+  const worktreeGraphStates = useAppStore((state) => state.worktreeGraphStates)
   const worktrees = useAppStore((state) => state.worktrees)
+  const currentWorktreePath = useAppStore((state) => state.currentWorktreePath)
+  const normalizeAcrossWorktrees = useAppStore((state) => state.normalizeAcrossWorktrees)
   const worktreeSelected = useAppStore((state) => state.worktreeSelected)
   const selectWorktree = useAppStore((state) => state.selectWorktree)
   const openRepoByPath = useAppStore((state) => state.openRepoByPath)
@@ -2802,93 +2838,139 @@ export function GraphCanvas() {
     ? REBASE_PREVIEW_CAMERA_TRANSITION_MS
     : GRAPH_CAMERA_TRANSITION_MS}ms ${GRAPH_CAMERA_TRANSITION_EASING}`
 
-  // Pending worktree changes float above HEAD. An in-progress merge instead
-  // sits above the newest graph row, matching where its completed merge commit
-  // will be inserted, while its parent edges remain anchored to HEAD/source.
-  const worktreeNode = useMemo<WorktreeNodeGeometry | null>(() => {
-    if (!layout || !worktreeChanges) return null
-    const count = worktreeChanges.staged.length + worktreeChanges.unstaged.length
-    if (count === 0) return null
-    // Anchor to the current branch tip, which updates synchronously with `refs`
-    // on checkout, so the node follows the graph immediately. Fall back to the
-    // worktree's reported HEAD sha for detached HEAD (no current branch).
-    const headNode =
-      (currentBranch ? layout.nodes.find((node) => node.row.refNames.includes(currentBranch)) : undefined)
-      ?? layout.shaToNode.get(worktreeChanges.headSha)
-    if (!headNode) return null
-    const operation = worktreeChanges.mergeHeadShas?.length
-      ? 'merge'
-      : worktreeChanges.rebaseHeadSha
-        ? 'rebase'
-        : 'worktree'
-    const conflictedCount = countConflictedWorktreeFiles(worktreeChanges)
-    const color = operation === 'worktree'
-      ? layout.shaToColor.get(headNode.row.sha) ?? laneColor(headNode.row.lane)
-      : '#fab387'
-    const commitPreviewNode = operation === 'worktree' && actionPreview?.kind === 'commit'
-      ? actionPreviewGeometry?.nodes[0]?.node ?? null
-      : null
-    const worktreePlacement = placeWorktreeAbovePreview(
-      headNode,
-      commitPreviewNode,
-      NODE_SPACING_Y,
-    )
-    const placement = operation === 'merge'
-      ? placeMergePreviewAboveGraph(layout.nodes[0] ?? headNode, NODE_SPACING_Y)
-      : worktreePlacement
-    const anchorNode = operation === 'worktree' ? worktreePlacement.anchor : headNode
-    const pendingNode: LayoutNode = {
-      row: {
-        row: anchorNode.row.row - 1,
-        sha: `${operation}:${worktreeChanges.headSha}:${worktreeChanges.mergeHeadShas?.[0] ?? worktreeChanges.rebaseHeadSha ?? 'dirty'}`,
-        parentShas: [anchorNode.row.sha, ...(worktreeChanges.mergeHeadShas?.slice(0, 1) ?? [])],
-        authorName: '',
-        authorEmail: '',
-        authorUnix: 0,
-        committerUnix: 0,
-        subject: operation === 'merge'
-          ? 'Merge in progress'
-          : operation === 'rebase'
-            ? 'Rebase in progress'
-            : 'Uncommitted changes',
-        additions: 0,
-        deletions: 0,
-        locChanged: 0,
-        refNames: [],
-        lane: anchorNode.row.lane,
-      },
-      x: anchorNode.x,
-      y: placement.y,
-      idx: placement.idx,
+  const dirtyWorktreeStates = useMemo<WorktreeGraphState[]>(() => {
+    if (!normalizeAcrossWorktrees) {
+      if (!worktreeChanges || !currentWorktreePath) return []
+      const changeCount = worktreeChanges.staged.length + worktreeChanges.unstaged.length
+      if (changeCount === 0) return []
+      return [{
+        path: currentWorktreePath,
+        headSha: worktreeChanges.headSha,
+        ...(worktreeChanges.branch ? { branch: worktreeChanges.branch } : {}),
+        changeCount,
+        conflictedCount: countConflictedWorktreeFiles(worktreeChanges),
+        ...(worktreeChanges.mergeHeadShas ? { mergeHeadShas: worktreeChanges.mergeHeadShas } : {}),
+        ...(worktreeChanges.rebaseHeadSha ? { rebaseHeadSha: worktreeChanges.rebaseHeadSha } : {}),
+      }]
     }
+
+    if (worktreeGraphStates === null) return []
+    const byPath = new Map(worktreeGraphStates.map((state) => [state.path, state]))
+    if (currentWorktreePath && worktreeChanges) {
+      const changeCount = worktreeChanges.staged.length + worktreeChanges.unstaged.length
+      byPath.set(currentWorktreePath, {
+        path: currentWorktreePath,
+        headSha: worktreeChanges.headSha,
+        ...(worktreeChanges.branch ? { branch: worktreeChanges.branch } : {}),
+        changeCount,
+        conflictedCount: countConflictedWorktreeFiles(worktreeChanges),
+        ...(worktreeChanges.mergeHeadShas ? { mergeHeadShas: worktreeChanges.mergeHeadShas } : {}),
+        ...(worktreeChanges.rebaseHeadSha ? { rebaseHeadSha: worktreeChanges.rebaseHeadSha } : {}),
+      })
+    }
+    return [...byPath.values()]
+      .filter((state) => state.changeCount > 0)
+      .sort((left, right) => left.path.localeCompare(right.path))
+  }, [currentWorktreePath, normalizeAcrossWorktrees, worktreeChanges, worktreeGraphStates])
+
+  // Pending changes from every linked worktree float above their respective
+  // HEADs. Multiple worktrees at one commit stack deterministically by path.
+  const worktreeNodes = useMemo<WorktreeNodeGeometry[]>(() => {
+    if (!layout) return []
+    const stackCounts = new Map<string, number>()
     const occupied = layout.nodes.map((node) => node.row.lane)
-    const targetKey = `${pendingNode.row.sha}-${anchorNode.row.sha}`
-    const targetPlan = planEdgeRoute(pendingNode, anchorNode, targetKey, occupied)
-    const sourceSha = worktreeChanges.mergeHeadShas?.[0]
-    const sourceNode = sourceSha ? layout.shaToNode.get(sourceSha) ?? null : null
-    const sourcePath = sourceNode
-      ? routedEdgePath(
-          pendingNode,
-          sourceNode,
-          planEdgeRoute(pendingNode, sourceNode, `${pendingNode.row.sha}-${sourceNode.row.sha}`, occupied, { adjacentTrack: 'to' }),
-          0,
-        )
-      : null
-    return {
-      kind: operation,
-      x: pendingNode.x,
-      y: pendingNode.y,
-      idx: pendingNode.idx,
-      lane: pendingNode.row.lane,
-      headX: anchorNode.x,
-      headY: anchorNode.y,
-      color,
-      count,
-      conflictedCount,
-      targetPlan,
-      sourcePath,
-    }
-  }, [layout, worktreeChanges, currentBranch, actionPreview, actionPreviewGeometry])
+
+    return dirtyWorktreeStates.flatMap((state) => {
+      const headNode =
+        (state.branch
+          ? layout.nodes.find((node) => node.row.refNames.includes(state.branch!))
+          : undefined)
+        ?? layout.shaToNode.get(state.headSha)
+      if (!headNode) return []
+
+      const operation = state.mergeHeadShas?.length
+        ? 'merge' as const
+        : state.rebaseHeadSha
+          ? 'rebase' as const
+          : 'worktree' as const
+      const isCurrent = state.path === currentWorktreePath
+      const commitPreviewNode = isCurrent
+        && operation === 'worktree'
+        && actionPreview?.kind === 'commit'
+        ? actionPreviewGeometry?.nodes[0]?.node ?? null
+        : null
+      const worktreePlacement = placeWorktreeAbovePreview(
+        headNode,
+        commitPreviewNode,
+        NODE_SPACING_Y,
+      )
+      const basePlacement = operation === 'merge'
+        ? placeMergePreviewAboveGraph(layout.nodes[0] ?? headNode, NODE_SPACING_Y)
+        : worktreePlacement
+      const stackKey = operation === 'merge' ? 'merge' : headNode.row.sha
+      const stackIndex = stackCounts.get(stackKey) ?? 0
+      stackCounts.set(stackKey, stackIndex + 1)
+      const anchorNode = operation === 'worktree' ? worktreePlacement.anchor : headNode
+      const pendingNode: LayoutNode = {
+        row: {
+          row: anchorNode.row.row - stackIndex - 1,
+          sha: `${operation}:${state.path}:${state.headSha}:${state.mergeHeadShas?.[0] ?? state.rebaseHeadSha ?? 'dirty'}`,
+          parentShas: [anchorNode.row.sha, ...(state.mergeHeadShas?.slice(0, 1) ?? [])],
+          authorName: '',
+          authorEmail: '',
+          authorUnix: 0,
+          committerUnix: 0,
+          subject: operation === 'merge'
+            ? 'Merge in progress'
+            : operation === 'rebase'
+              ? 'Rebase in progress'
+              : 'Uncommitted changes',
+          additions: 0,
+          deletions: 0,
+          locChanged: 0,
+          refNames: [],
+          lane: anchorNode.row.lane,
+        },
+        x: anchorNode.x,
+        y: basePlacement.y - stackIndex * NODE_SPACING_Y,
+        idx: basePlacement.idx - stackIndex,
+      }
+      const targetKey = `${pendingNode.row.sha}-${anchorNode.row.sha}`
+      const targetPlan = planEdgeRoute(pendingNode, anchorNode, targetKey, occupied)
+      const sourceSha = state.mergeHeadShas?.[0]
+      const sourceNode = sourceSha ? layout.shaToNode.get(sourceSha) ?? null : null
+      const sourcePath = sourceNode
+        ? routedEdgePath(
+            pendingNode,
+            sourceNode,
+            planEdgeRoute(pendingNode, sourceNode, `${pendingNode.row.sha}-${sourceNode.row.sha}`, occupied, { adjacentTrack: 'to' }),
+            0,
+          )
+        : null
+
+      return [{
+        kind: operation,
+        path: state.path,
+        isCurrent,
+        x: pendingNode.x,
+        y: pendingNode.y,
+        idx: pendingNode.idx,
+        lane: pendingNode.row.lane,
+        headX: anchorNode.x,
+        headY: anchorNode.y,
+        color: operation === 'worktree'
+          ? layout.shaToColor.get(headNode.row.sha) ?? laneColor(headNode.row.lane)
+          : '#fab387',
+        count: state.changeCount,
+        conflictedCount: state.conflictedCount,
+        targetPlan,
+        sourcePath,
+      }]
+    })
+  }, [actionPreview, actionPreviewGeometry, currentWorktreePath, dirtyWorktreeStates, layout])
+
+  const worktreeNode = worktreeNodes.find((node) => node.isCurrent) ?? null
+  const linkedWorktreeNodes = worktreeNodes.filter((node) => !node.isCurrent)
 
   const renderedWorktreeNode = worktreeNode
     ?? (pendingCheckout ? retainedWorktreeNodeRef.current : null)
@@ -3089,10 +3171,21 @@ export function GraphCanvas() {
   )
 
   const additionalOccupiedLanes = useMemo<ReadonlyMap<number, readonly number[]> | undefined>(
-    () => renderedWorktreeNode
-      ? new Map([[renderedWorktreeNode.idx, [renderedWorktreeNode.lane]]])
-      : undefined,
-    [renderedWorktreeNode],
+    () => {
+      const nodes = [
+        ...linkedWorktreeNodes,
+        ...(renderedWorktreeNode ? [renderedWorktreeNode] : []),
+      ]
+      if (nodes.length === 0) return undefined
+      const byRow = new Map<number, number[]>()
+      for (const node of nodes) {
+        const lanes = byRow.get(node.idx) ?? []
+        lanes.push(node.lane)
+        byRow.set(node.idx, lanes)
+      }
+      return byRow
+    },
+    [linkedWorktreeNodes, renderedWorktreeNode],
   )
 
   const gutterBackgrounds = useMemo(() => {
@@ -3645,6 +3738,14 @@ export function GraphCanvas() {
             label: 'Open worktree',
             tone: 'neutral' as const,
             worktreePath: selectedRefWorktree.path,
+            worktreeChoice: true,
+          },
+          {
+            action: 'checkout' as const,
+            label: 'Checkout branch',
+            tone: 'neutral' as const,
+            ignoreOtherWorktrees: true,
+            worktreeChoice: true,
           },
           ...(canPushSelectedRef ? [pushAction] : []),
         ]
@@ -3661,12 +3762,22 @@ export function GraphCanvas() {
     if (selectedRef.kind === 'remote') {
       return [
         ...(selectedRefWorktree
-          ? [{
-              action: 'open-worktree' as const,
-              label: 'Open worktree',
-              tone: 'neutral' as const,
-              worktreePath: selectedRefWorktree.path,
-            }]
+          ? [
+              {
+                action: 'open-worktree' as const,
+                label: 'Open worktree',
+                tone: 'neutral' as const,
+                worktreePath: selectedRefWorktree.path,
+                worktreeChoice: true,
+              },
+              {
+                action: 'checkout' as const,
+                label: 'Checkout branch',
+                tone: 'neutral' as const,
+                ignoreOtherWorktrees: true,
+                worktreeChoice: true,
+              },
+            ]
           : [{ action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const }]),
         { action: 'delete' as const, label: 'Delete', tone: 'danger' as const },
       ]
@@ -3795,7 +3906,13 @@ export function GraphCanvas() {
 
   const runRefAction = useCallback((pendingAction: PendingRefAction) => {
     setPendingRefAction(pendingAction)
-    return performRefAction(pendingAction.action, pendingAction.refName, pendingAction.sha, pendingAction.force)
+    return performRefAction(
+      pendingAction.action,
+      pendingAction.refName,
+      pendingAction.sha,
+      pendingAction.force,
+      pendingAction.ignoreOtherWorktrees,
+    )
       .finally(() => {
         setPendingRefAction((current) => samePendingRefAction(current, pendingAction) ? null : current)
       })
@@ -3819,6 +3936,8 @@ export function GraphCanvas() {
       refName,
       sha,
       force: !!refAction.force,
+      ignoreOtherWorktrees: !!refAction.ignoreOtherWorktrees,
+      worktreeChoice: refAction.worktreeChoice,
     }
     runRefAction(pendingAction).catch((err) => {
       if (
@@ -3836,6 +3955,7 @@ export function GraphCanvas() {
               label: 'Force push',
               tone: 'warning',
               force: true,
+              ignoreOtherWorktrees: false,
               refName,
               sha,
             }).catch((e) => showError('Force push failed', e))
@@ -4289,14 +4409,12 @@ export function GraphCanvas() {
   const worktreeConflictBadgeWidth = renderedWorktreeNode
     ? Math.max(22, String(renderedWorktreeNode.conflictedCount).length * 7 + 14)
     : 0
-  const worktreeLabel = renderedWorktreeNode?.kind === 'merge'
-    ? renderedWorktreeNode.conflictedCount > 0 ? 'Merge conflicts' : 'Merge in progress'
-    : renderedWorktreeNode?.kind === 'rebase'
-      ? renderedWorktreeNode.conflictedCount > 0 ? 'Rebase conflicts' : 'Rebase in progress'
-      : 'Uncommitted changes'
-  const worktreeTitle = renderedWorktreeNode?.kind === 'worktree'
-    ? `Uncommitted changes — ${renderedWorktreeNode.count} file${renderedWorktreeNode.count === 1 ? '' : 's'}\nClick to stage / unstage`
-    : `${worktreeLabel} — ${renderedWorktreeNode?.conflictedCount ?? 0} conflict${renderedWorktreeNode?.conflictedCount === 1 ? '' : 's'}\nClick to review files`
+  const worktreeLabel = renderedWorktreeNode
+    ? worktreeNodeLabel(renderedWorktreeNode)
+    : 'Uncommitted changes'
+  const worktreeTitle = renderedWorktreeNode
+    ? worktreeNodeTitle(renderedWorktreeNode)
+    : ''
 
   return (
     <div
@@ -4606,6 +4724,43 @@ export function GraphCanvas() {
               </span>
             </animated.div>
           )}
+          {linkedWorktreeNodes.map((node) => (
+            node.y * renderedZoom + graphTranslateY - scrollTop > 28 && (
+              <div
+                key={`linked-worktree-label:${node.path}`}
+                style={{
+                  position: 'absolute',
+                  left: 20,
+                  top: node.y * renderedZoom + graphTranslateY - 7,
+                  maxWidth: (LANE_ORIGIN_X_BASE + viewportFit.extraLeftGutter - 40) * renderedZoom,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  color: '#a6adc8',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  transition: `max-width ${cameraTransition}`,
+                }}
+              >
+                <span style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: node.color,
+                  flexShrink: 0,
+                }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {pathBaseName(node.path)} · {worktreeNodeLabel(node)}
+                </span>
+              </div>
+            )
+          ))}
           {floatingCommitLabels.map((label) => {
             const status = commitCIStatus[label.sha]
             const dotColor: Record<string, string> = {
@@ -5035,6 +5190,35 @@ export function GraphCanvas() {
               />
             </animated.g>
           )}
+          {linkedWorktreeNodes.map((node) => (
+            <g key={`linked-worktree-edges:${node.path}`} style={{ pointerEvents: 'none' }}>
+              {node.sourcePath && (
+                <path
+                  d={node.sourcePath}
+                  stroke={node.color}
+                  strokeWidth={2.25}
+                  strokeLinecap="round"
+                  strokeDasharray="3 5"
+                  fill="none"
+                  opacity={0.55}
+                />
+              )}
+              <path
+                d={routedEdgePath(
+                  { x: node.x, y: node.y },
+                  { x: node.headX, y: node.headY },
+                  node.targetPlan,
+                  0,
+                )}
+                stroke={node.color}
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                strokeDasharray="3 5"
+                fill="none"
+                opacity={0.7}
+              />
+            </g>
+          ))}
         </svg>
 
         {/* Preview nodes must remain visually above branch chips (z-index 40). */}
@@ -5206,6 +5390,78 @@ export function GraphCanvas() {
               )}
             </animated.g>
           )}
+          {linkedWorktreeNodes.map((node) => {
+            const conflictBadgeWidth = Math.max(
+              22,
+              String(node.conflictedCount).length * 7 + 14,
+            )
+            return (
+              <g
+                key={`linked-worktree-node:${node.path}`}
+                data-testid="linked-worktree-change-node"
+                data-worktree-path={node.path}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void openRepoByPath(node.path)
+                }}
+                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+              >
+                <title>{worktreeNodeTitle(node)}</title>
+                <circle
+                  cx={node.x}
+                  cy={node.y}
+                  r={NODE_RADIUS}
+                  fill={NODE_FILL}
+                  stroke={node.color}
+                  strokeWidth={2.75}
+                  strokeDasharray="4 3"
+                />
+                {node.kind === 'worktree' ? (
+                  <text
+                    x={node.x}
+                    y={node.y}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={12}
+                    fontWeight={700}
+                    fill={node.color}
+                    style={{ pointerEvents: 'none', userSelect: 'none' }}
+                  >
+                    {node.count}
+                  </text>
+                ) : (
+                  <>
+                    <circle cx={node.x} cy={node.y} r={2.5} fill={node.color} />
+                    {node.conflictedCount > 0 && (
+                      <g style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                        <rect
+                          x={node.x + NODE_RADIUS + 6}
+                          y={node.y - 10}
+                          width={conflictBadgeWidth}
+                          height={20}
+                          rx={10}
+                          fill="#fab38722"
+                          stroke="#fab387"
+                          strokeWidth={1.4}
+                        />
+                        <text
+                          x={node.x + NODE_RADIUS + 6 + conflictBadgeWidth / 2}
+                          y={node.y}
+                          textAnchor="middle"
+                          dominantBaseline="central"
+                          fontSize={11}
+                          fontWeight={800}
+                          fill="#fab387"
+                        >
+                          {node.conflictedCount}
+                        </text>
+                      </g>
+                    )}
+                  </>
+                )}
+              </g>
+            )
+          })}
         </svg>
 
         {renderedRefItems.map((refItem) => {
@@ -5334,6 +5590,8 @@ export function GraphCanvas() {
           const visibleRowRefActions = refActionInFlight
             ? (pendingRowRefAction ? [pendingRowRefAction] : [])
             : rowRefActions
+          const worktreeChoiceActions = visibleRowRefActions.filter((refAction) => refAction.worktreeChoice)
+          const inlineRefActions = visibleRowRefActions.filter((refAction) => !refAction.worktreeChoice)
           const rowShowsMerge = !refActionInFlight && !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
           const rowShowsAddRef = !pendingMutation
             && !refActionInFlight
@@ -5412,7 +5670,20 @@ export function GraphCanvas() {
                   top: verticalOffsetForHeight(DEFAULT_REF_ACTION_HEIGHT),
                   zIndex: 7,
                 }}>
-                  {visibleRowRefActions.map((refAction) => (
+                  {worktreeChoiceActions.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {worktreeChoiceActions.map((refAction) => (
+                        <RefActionButton
+                          key={refAction.action}
+                          label={refAction.label}
+                          tone={refAction.tone}
+                          loading={!!pendingRowRefAction && refAction.action === pendingRowRefAction.action}
+                          onClick={() => handleRefActionClick(refAction)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {inlineRefActions.map((refAction) => (
                     <RefActionButton
                       key={refAction.action}
                       label={refAction.label}

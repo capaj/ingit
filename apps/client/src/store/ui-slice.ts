@@ -15,11 +15,13 @@ export interface UiSlice {
   errorDialog: { title: string; message: string; action?: ErrorDialogAction } | null
   showCommitMessages: boolean
   showGutterColors: boolean
+  normalizeAcrossWorktrees: boolean
   graphZoom: number
 
   setViewMode: (mode: ViewMode) => void
   setShowCommitMessages: (value: boolean) => void
   setShowGutterColors: (value: boolean) => void
+  setNormalizeAcrossWorktrees: (value: boolean) => void
   setGraphZoom: (value: number) => void
   showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
   dismissError: () => void
@@ -30,6 +32,7 @@ export type UiSliceState = Omit<
   | 'setViewMode'
   | 'setShowCommitMessages'
   | 'setShowGutterColors'
+  | 'setNormalizeAcrossWorktrees'
   | 'setGraphZoom'
   | 'showError'
   | 'dismissError'
@@ -73,6 +76,7 @@ export function createUiSliceState(): UiSliceState {
     errorDialog: null,
     showCommitMessages: readBooleanPreference('showCommitMessages', true),
     showGutterColors: readBooleanPreference('showGutterColors', false),
+    normalizeAcrossWorktrees: readBooleanPreference('normalizeAcrossWorktrees', true),
     graphZoom: readGraphZoomPreference(),
   }
 }

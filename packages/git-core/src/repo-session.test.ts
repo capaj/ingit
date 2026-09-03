@@ -276,12 +276,30 @@ describe('RepoSession.checkout', () => {
         isCurrent: false,
       })
 
+      await Bun.write(join(worktreePath, 'pending.txt'), 'pending\n')
+      const graphStates = await session.getWorktreeGraphStates()
+      expect(graphStates.find((state) => state.path === repoDir)).toMatchObject({
+        branch: 'main',
+        changeCount: 0,
+      })
+      expect(graphStates.find((state) => state.path === worktreePath)).toMatchObject({
+        branch: 'dev',
+        changeCount: 1,
+        conflictedCount: 0,
+      })
+      await runGit(['clean', '-fd'], worktreePath)
+
       await expect(session.checkout('dev')).rejects.toMatchObject({
         name: 'BranchCheckedOutError',
         branchRef: 'refs/heads/dev',
         worktreePath,
       } satisfies Partial<BranchCheckedOutError>)
       expect(await currentBranch(repoDir)).toBe('main')
+
+      await session.checkout('dev', { ignoreOtherWorktrees: true })
+      expect(await currentBranch(repoDir)).toBe('dev')
+      expect(await currentBranch(worktreePath)).toBe('dev')
+      await session.checkout('main')
 
       await expect(session.removeWorktree(repoDir)).rejects.toThrow('current worktree')
       const remainingWorktrees = await session.removeWorktree(worktreePath)

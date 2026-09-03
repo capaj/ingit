@@ -823,6 +823,8 @@ function ConflictResolverSettings({
 function GraphAppearanceSettings({ onClose }: { onClose: () => void }) {
   const showGutterColors = useAppStore((state) => state.showGutterColors)
   const setShowGutterColors = useAppStore((state) => state.setShowGutterColors)
+  const normalizeAcrossWorktrees = useAppStore((state) => state.normalizeAcrossWorktrees)
+  const setNormalizeAcrossWorktrees = useAppStore((state) => state.setNormalizeAcrossWorktrees)
 
   return (
     <div style={{ display: 'flex', minWidth: 0, minHeight: 0, height: '100%', flexDirection: 'column' }}>
@@ -833,6 +835,35 @@ function GraphAppearanceSettings({ onClose }: { onClose: () => void }) {
         </p>
       </div>
       <div style={{ flex: 1, padding: 18 }}>
+        <label
+          title="Keep linked worktrees on one shared commit graph"
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            maxWidth: 560,
+            padding: 14,
+            marginBottom: 10,
+            border: `1px solid ${normalizeAcrossWorktrees ? '#89b4fa55' : '#313244'}`,
+            borderRadius: 7,
+            background: normalizeAcrossWorktrees ? '#89b4fa10' : '#181825',
+            color: '#cdd6f4',
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={normalizeAcrossWorktrees}
+            onChange={(event) => setNormalizeAcrossWorktrees(event.target.checked)}
+            style={{ margin: '2px 0 0', accentColor: '#89b4fa', cursor: 'pointer' }}
+          />
+          <span>
+            <span style={{ display: 'block', fontSize: 12, fontWeight: 750 }}>Normalize linked worktree graphs</span>
+            <span style={{ display: 'block', marginTop: 4, color: '#7f849c', fontSize: 10, lineHeight: 1.45 }}>
+              Use one lane layout and show pending-change nodes from every linked worktree, whichever worktree is open.
+            </span>
+          </span>
+        </label>
         <label
           title="Give each graph gutter a distinct background color"
           style={{

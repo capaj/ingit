@@ -11,6 +11,7 @@ import type {
   RemoteSummary,
   ReflogResponse,
   WorktreeChangesResponse,
+  WorktreeGraphState,
   WorktreeSummary,
   StashSummary,
   StashDiffResponse,
@@ -43,6 +44,7 @@ import {
   refAction,
   getReflog,
   getWorktreeChanges,
+  getWorktreeGraphStates,
   getStashes,
   getStashDiff,
   getStashFileDiff,
@@ -266,7 +268,10 @@ function optimisticHistoryWindow(
 }
 
 // Authoritative reload run after a mutation lands (mirrors the initial query).
-function fetchRefsAndHistory(repoId: string): Promise<[RefSummary[], HistoryWindowResponse]> {
+function fetchRefsAndHistory(
+  repoId: string,
+  normalizeAcrossWorktrees: boolean,
+): Promise<[RefSummary[], HistoryWindowResponse]> {
   return Promise.all([
     getRefs(repoId),
     queryHistory(repoId, {
@@ -277,31 +282,41 @@ function fetchRefsAndHistory(repoId: string): Promise<[RefSummary[], HistoryWind
       afterRows: INITIAL_ROWS,
       firstParent: false,
       topoOrder: true,
+      normalizeAcrossWorktrees,
     }),
   ])
 }
 
-async function fetchCheckoutState(repoId: string): Promise<[
+async function fetchCheckoutState(
+  repoId: string,
+  normalizeAcrossWorktrees: boolean,
+): Promise<[
   RefSummary[],
   HistoryWindowResponse,
   WorktreeChangesResponse,
   WorktreeSummary[],
+  WorktreeGraphState[] | null,
 ]> {
-  const [[refs, history], changes, worktrees] = await Promise.all([
-    fetchRefsAndHistory(repoId),
+  const [[refs, history], changes, worktrees, worktreeGraphStates] = await Promise.all([
+    fetchRefsAndHistory(repoId, normalizeAcrossWorktrees),
     getWorktreeChanges(repoId),
     getWorktrees(repoId),
+    normalizeAcrossWorktrees ? getWorktreeGraphStates(repoId) : Promise.resolve(null),
   ])
-  return [refs, history, changes, worktrees]
+  return [refs, history, changes, worktrees, worktreeGraphStates]
 }
 
-function fetchRepositoryState(repoId: string): Promise<[
+function fetchRepositoryState(
+  repoId: string,
+  normalizeAcrossWorktrees: boolean,
+): Promise<[
   RefSummary[],
   HistoryWindowResponse,
   WorktreeChangesResponse,
   WorktreeSummary[],
   StashSummary[],
   RemoteSummary[],
+  WorktreeGraphState[] | null,
 ]> {
   return Promise.all([
     getRefs(repoId),
@@ -313,11 +328,13 @@ function fetchRepositoryState(repoId: string): Promise<[
       afterRows: INITIAL_ROWS,
       firstParent: false,
       topoOrder: true,
+      normalizeAcrossWorktrees,
     }),
     getWorktreeChanges(repoId),
     getWorktrees(repoId),
     getStashes(repoId),
     getRemotes(repoId),
+    normalizeAcrossWorktrees ? getWorktreeGraphStates(repoId) : Promise.resolve(null),
   ])
 }
 
@@ -428,6 +445,7 @@ async function openRepoByPathImpl(
     stashDiff: null,
     stashFileDiffs: {},
     worktrees: [],
+    worktreeGraphStates: null,
     historyWindow: null,
     selectedSha: null,
     selectedRefName: null,
@@ -468,6 +486,7 @@ async function openRepoByPathImpl(
         afterRows: INITIAL_VISIBLE_ROWS,
         firstParent: false,
         topoOrder: true,
+        normalizeAcrossWorktrees: get().normalizeAcrossWorktrees,
       }),
       getWorktrees(res.repoId),
       getStashes(res.repoId),
@@ -501,6 +520,7 @@ async function openRepoByPathImpl(
       selectedRemoteName,
       stashes,
       worktrees,
+      worktreeGraphStates: null,
       historyWindow: hist,
       commitAuthorAvatars: {},
       commitCIStatus: {},
@@ -622,6 +642,9 @@ const GRAPH_MODEL_INPUT_KEYS = new Set<keyof AppState>([
   'historyWindow',
   'refs',
   'worktreeChanges',
+  'currentWorktreePath',
+  'worktreeGraphStates',
+  'normalizeAcrossWorktrees',
   'showCommitMessages',
 ])
 
@@ -647,6 +670,9 @@ export const useAppStore = create<AppState>((baseSet, get) => {
           nextState.historyWindow,
           nextState.refs,
           nextState.worktreeChanges,
+          nextState.currentWorktreePath,
+          nextState.worktreeGraphStates,
+          nextState.normalizeAcrossWorktrees,
           nextState.showCommitMessages,
         ),
       }
@@ -669,6 +695,17 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     set({ showGutterColors: value })
   },
 
+  setNormalizeAcrossWorktrees: (value) => {
+    try { localStorage.setItem('normalizeAcrossWorktrees', String(value)) } catch {}
+    set({
+      normalizeAcrossWorktrees: value,
+      // Treat the shared dirty-state snapshot as loading when normalization is
+      // enabled so the current worktree cannot briefly skew the graph alone.
+      ...(value ? { worktreeGraphStates: null } : {}),
+    })
+    void get().reloadFromServer()
+  },
+
   setGraphZoom: (value) => {
     const graphZoom = persistGraphZoomPreference(value)
     set({ graphZoom })
@@ -678,6 +715,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
 
   reloadFromServer: async () => {
     const { repoPath } = get()
+    const normalizeAcrossWorktrees = get().normalizeAcrossWorktrees
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
     if (get().pendingMutation) return
@@ -689,20 +727,25 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       let worktrees: WorktreeSummary[]
       let stashes: StashSummary[]
       let remotes: RemoteSummary[]
+      let worktreeGraphStates: WorktreeGraphState[] | null
       try {
-        [refs, hist, changes, worktrees, stashes, remotes] = await fetchRepositoryState(repoId)
+        [refs, hist, changes, worktrees, stashes, remotes, worktreeGraphStates] = await fetchRepositoryState(
+          repoId,
+          normalizeAcrossWorktrees,
+        )
       } catch (err) {
         if (isSessionError(err) || isConnectionLostError(err)) {
           const res = await openRepo({ path: repoPath })
           repoId = res.repoId
           set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-          const fresh = await fetchRepositoryState(repoId)
+          const fresh = await fetchRepositoryState(repoId, normalizeAcrossWorktrees)
           refs = fresh[0]
           hist = fresh[1]
           changes = fresh[2]
           worktrees = fresh[3]
           stashes = fresh[4]
           remotes = fresh[5]
+          worktreeGraphStates = fresh[6]
         } else {
           throw err
         }
@@ -723,6 +766,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
           ? s.stashFileDiffs
           : {},
         worktrees,
+        worktreeGraphStates,
         historyWindow: hist,
         totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
         mergePreview: null,
@@ -826,14 +870,20 @@ export const useAppStore = create<AppState>((baseSet, get) => {
   },
 
   loadWorktreeChanges: async () => {
-    const { repoId } = get()
+    const { repoId, normalizeAcrossWorktrees } = get()
     if (!repoId) return
     try {
-      const changes = await getWorktreeChanges(repoId)
+      const [changes, worktreeGraphStates] = await Promise.all([
+        getWorktreeChanges(repoId),
+        normalizeAcrossWorktrees ? getWorktreeGraphStates(repoId) : Promise.resolve(null),
+      ])
       if (get().repoId !== repoId) return
       // Cached patches may be stale relative to the fresh file list.
       set((s) => ({
         worktreeChanges: changes,
+        ...(s.normalizeAcrossWorktrees === normalizeAcrossWorktrees
+          ? { worktreeGraphStates }
+          : {}),
         worktreeFileDiffs: {},
         worktreeSelected: conflictedFileCount(changes) > 0
           ? true
@@ -1136,7 +1186,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       return false
     }
 
-    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    const [refs, hist] = await fetchRefsAndHistory(repoId, get().normalizeAcrossWorktrees)
     set((s) => ({
       pendingMutation: false,
       graphAnimationSuppressToken: predicted
@@ -1322,6 +1372,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       stashDiff: null,
       stashFileDiffs: {},
       worktrees: [],
+      worktreeGraphStates: null,
       historyWindow: null,
       selectedSha: null,
       selectedRefName: null,
@@ -1504,6 +1555,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             afterRows: rowCount,
             firstParent: false,
             topoOrder: true,
+            normalizeAcrossWorktrees: get().normalizeAcrossWorktrees,
           })
           found = result.rows.some((r: CommitRow) => r.sha === sha || r.sha.startsWith(sha))
           set((s) => ({
@@ -1543,6 +1595,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             afterRows: INITIAL_ROWS,
             firstParent: false,
             topoOrder: true,
+            normalizeAcrossWorktrees: get().normalizeAcrossWorktrees,
           })
           found = result.rows.some((row: CommitRow) => row.sha === sha || row.sha.startsWith(sha))
           if (found) {
@@ -1601,6 +1654,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
         afterRows: historyWindow.rows.length + LOAD_MORE_ROWS,
         firstParent: false,
         topoOrder: true,
+        normalizeAcrossWorktrees: get().normalizeAcrossWorktrees,
       })
       set((s) => ({ historyWindow: mergeHistory(s.historyWindow, result) }))
     } catch (err) {
@@ -1610,7 +1664,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     }
   },
 
-  performRefAction: async (action, refName, sha, force) => {
+  performRefAction: async (action, refName, sha, force, ignoreOtherWorktrees) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
@@ -1678,7 +1732,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     try {
       await withTimeout((async () => {
         try {
-          await refAction(repoId, action, refName, sha, force, remote)
+          await refAction(repoId, action, refName, sha, force, remote, ignoreOtherWorktrees)
         } catch (err) {
           // Most ref actions are safe to retry after the connection dropped.
           // Checkout may be between its temporary stash and restore phases,
@@ -1688,7 +1742,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             const res = await openRepo({ path: repoPath })
             repoId = res.repoId
             set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-            await refAction(repoId, action, refName, sha, force, remote)
+            await refAction(repoId, action, refName, sha, force, remote, ignoreOtherWorktrees)
           } else {
             throw err
           }
@@ -1709,7 +1763,10 @@ export const useAppStore = create<AppState>((baseSet, get) => {
               totalCommitCount: reopened.totalCommitCount,
             })
           }
-          const [refs, hist, changes, worktrees, stashes, remotes] = await fetchRepositoryState(repoId)
+          const [refs, hist, changes, worktrees, stashes, remotes, worktreeGraphStates] = await fetchRepositoryState(
+            repoId,
+            get().normalizeAcrossWorktrees,
+          )
           const previousCurrent = snapshot.refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
           const current = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
           const moved = current?.shortName !== previousCurrent?.shortName
@@ -1736,6 +1793,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             remotes,
             stashes,
             worktrees,
+            worktreeGraphStates,
             historyWindow: hist,
             totalCommitCount: Math.max(s.totalCommitCount, hist.rows.length),
             worktreeChanges: changes,
@@ -1759,7 +1817,10 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     // and publish one authoritative snapshot so React only reconciles the graph
     // once while its optimistic animation is still running.
     if (action === 'checkout') {
-      const [refs, hist, changes, worktrees] = await fetchCheckoutState(repoId)
+      const [refs, hist, changes, worktrees, worktreeGraphStates] = await fetchCheckoutState(
+        repoId,
+        get().normalizeAcrossWorktrees,
+      )
       set((s) => ({
         pendingMutation: false,
         pendingCheckout: false,
@@ -1777,6 +1838,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             ? s.worktreeSelected
             : false,
         worktrees,
+        worktreeGraphStates,
         selectedRefName: null,
         mergePreview: null,
       }))
@@ -1786,7 +1848,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
 
     // Reconcile against the authoritative reload. Suppress the relayout
     // animation only when we already animated to a prediction.
-    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    const [refs, hist] = await fetchRefsAndHistory(repoId, get().normalizeAcrossWorktrees)
     void get().loadWorktreeChanges()
     void get().loadWorktrees()
     if (action === 'fetch') {
@@ -1915,7 +1977,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       throw err
     }
 
-    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    const [refs, hist] = await fetchRefsAndHistory(repoId, get().normalizeAcrossWorktrees)
     const nextSha = result.headSha
     const squashCount = action === 'squash'
       ? getSquashRange(rows, snapshot.refs, sha)?.length ?? 1
@@ -1998,7 +2060,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       throw err
     }
 
-    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    const [refs, hist] = await fetchRefsAndHistory(repoId, get().normalizeAcrossWorktrees)
     const nextSha = result.headSha
     const reconciledBranchName = refs.find(
       (ref) => ref.kind === 'head' && ref.isCurrent,
@@ -2066,6 +2128,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             afterRows: INITIAL_ROWS,
             firstParent: false,
             topoOrder: true,
+            normalizeAcrossWorktrees: get().normalizeAcrossWorktrees,
           }),
           getWorktreeChanges(repoId),
         ])
@@ -2109,7 +2172,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       throw err
     }
 
-    const [refs, hist] = await fetchRefsAndHistory(repoId)
+    const [refs, hist] = await fetchRefsAndHistory(repoId, get().normalizeAcrossWorktrees)
     const nextSha = result.headSha
     set((s) => ({
       pendingMutation: false,
@@ -2156,7 +2219,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
         }
       }
 
-      const [refs, hist] = await fetchRefsAndHistory(repoId)
+      const [refs, hist] = await fetchRefsAndHistory(repoId, get().normalizeAcrossWorktrees)
       const nextSha = result.headSha
       set((s) => ({
         pendingMutation: false,
@@ -2206,7 +2269,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
         }
       }
 
-      const [refs, hist] = await fetchRefsAndHistory(repoId)
+      const [refs, hist] = await fetchRefsAndHistory(repoId, get().normalizeAcrossWorktrees)
       const nextSha = result.headSha
       set((s) => ({
         pendingMutation: false,
@@ -2245,6 +2308,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             afterRows: INITIAL_ROWS,
             firstParent: false,
             topoOrder: true,
+            normalizeAcrossWorktrees: get().normalizeAcrossWorktrees,
           }),
           getWorktreeChanges(repoId),
         ])
@@ -2322,7 +2386,10 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       throw err
     }
 
-    const [refs, hist, changes, worktrees] = await fetchCheckoutState(repoId)
+    const [refs, hist, changes, worktrees, worktreeGraphStates] = await fetchCheckoutState(
+      repoId,
+      get().normalizeAcrossWorktrees,
+    )
     set((s) => ({
       pendingMutation: false,
       pendingCheckout: false,
@@ -2340,6 +2407,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
           ? s.worktreeSelected
           : false,
       worktrees,
+      worktreeGraphStates,
       selectedRefName: null,
       mergePreview: null,
     }))

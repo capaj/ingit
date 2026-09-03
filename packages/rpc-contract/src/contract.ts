@@ -60,6 +60,16 @@ export const WorktreeSummary = z.object({
   prunableReason: z.string().optional(),
 })
 
+export const WorktreeGraphState = z.object({
+  path: z.string(),
+  headSha: CommitSha,
+  branch: z.string().optional(),
+  changeCount: z.number(),
+  conflictedCount: z.number(),
+  mergeHeadShas: z.array(CommitSha).optional(),
+  rebaseHeadSha: CommitSha.optional(),
+})
+
 export const CommitRow = z.object({
   row: z.number(),
   sha: CommitSha,
@@ -336,6 +346,10 @@ export const contract = {
     .input(z.object({ repoId: RepoId }))
     .output(WorktreeChanges),
 
+  getWorktreeGraphStates: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.array(WorktreeGraphState)),
+
   getStashes: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.array(StashSummary)),
@@ -454,6 +468,7 @@ export const contract = {
       afterRows: z.number(),
       firstParent: z.boolean(),
       topoOrder: z.boolean(),
+      normalizeAcrossWorktrees: z.boolean().optional(),
     }))
     .output(z.object({
       projectionId: z.string(),
@@ -632,6 +647,9 @@ export const contract = {
       // For `push`: force-push (--force-with-lease). Needed after a rebase, when
       // the branch diverged from its upstream and a normal push is rejected.
       force: z.boolean().optional(),
+      // For `checkout`: explicitly allow a branch that is checked out in a
+      // different linked worktree to also be checked out in this worktree.
+      ignoreOtherWorktrees: z.boolean().optional(),
       // For `push` and `fetch`: the remote selected in the client.
       remote: z.string().optional(),
     }))

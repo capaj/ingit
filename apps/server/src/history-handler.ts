@@ -54,7 +54,11 @@ async function resolveAnchorSha(
   }
 }
 
-function buildRevListArgs(query: HistoryQuery, anchorSha: string | null): string[] {
+function buildRevListArgs(
+  query: HistoryQuery,
+  anchorSha: string | null,
+  worktreeHeadShas: string[] = [],
+): string[] {
   const args: string[] = []
 
   if (query.firstParent) args.push('--first-parent')
@@ -73,7 +77,11 @@ function buildRevListArgs(query: HistoryQuery, anchorSha: string | null): string
   } else {
     switch (scope.kind) {
       case 'all':
-        args.push('--exclude=refs/stash', '--all', 'HEAD')
+        args.push(
+          '--exclude=refs/stash',
+          '--all',
+          ...(worktreeHeadShas.length > 0 ? worktreeHeadShas : ['HEAD']),
+        )
         break
       case 'ref':
         args.push(scope.value ?? (anchorSha ?? 'HEAD'))
@@ -115,9 +123,12 @@ function resolveCenterLineSha(
   headSha: string | undefined,
   rawEntries: RevListEntryWithMeta[],
   refs: RefSummary[],
+  branchName?: string,
 ): string | undefined {
   if (!headSha) return headSha
-  const current = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
+  const current = branchName
+    ? refs.find((ref) => ref.kind === 'head' && ref.shortName === branchName)
+    : refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
   if (!current?.upstream) return headSha
 
   const upstreamRef = refs.find(
@@ -150,8 +161,18 @@ export async function handleHistoryQuery(
   query: HistoryQuery,
 ): Promise<HistoryWindowResponse> {
   const total = query.beforeRows + query.afterRows
-  const anchorSha = await resolveAnchorSha(session, query)
-  const revArgs = buildRevListArgs(query, anchorSha)
+  const normalizeAcrossWorktrees = query.normalizeAcrossWorktrees !== false
+    && query.scope.kind === 'all'
+  const [anchorSha, worktrees] = await Promise.all([
+    resolveAnchorSha(session, query),
+    normalizeAcrossWorktrees ? session.getWorktrees().catch(() => []) : Promise.resolve([]),
+  ])
+  const worktreeHeadShas = [...new Set(
+    worktrees
+      .filter((worktree) => !worktree.bare && !worktree.prunable && worktree.headSha)
+      .map((worktree) => worktree.headSha!),
+  )].sort()
+  const revArgs = buildRevListArgs(query, anchorSha, worktreeHeadShas)
 
   const projectionId = randomBytes(8).toString('hex')
   const projection = new Projection(
@@ -211,7 +232,18 @@ export async function handleHistoryQuery(
   // Refs are needed both to label commits and to detect when the current
   // branch's upstream is ahead of HEAD (so the fetched commits share its lane).
   const refs = await session.getRefs()
-  const centerLineSha = resolveCenterLineSha(headSha, rawEntries, refs)
+  // `git worktree list` always reports the main worktree first. Use that
+  // stable checkout as the normalized center line so opening a linked or
+  // detached worktree cannot mirror or reshuffle the graph.
+  const primaryWorktree = normalizeAcrossWorktrees
+    ? worktrees.find((worktree) => !worktree.bare && !worktree.prunable && worktree.headSha)
+    : undefined
+  const centerLineSha = resolveCenterLineSha(
+    primaryWorktree?.headSha ?? headSha,
+    rawEntries,
+    refs,
+    primaryWorktree?.branchShortName,
+  )
 
   const { lanes, edges } = projection.computeGeometry(0, rawEntries.length - 1, undefined, centerLineSha)
 

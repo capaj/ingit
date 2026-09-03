@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RepoSession, runGit } from '@ingit/git-core'
@@ -135,6 +135,69 @@ describe('handleHistoryQuery ordering', () => {
       expect(history.rows.map((row) => row.subject)).toContain('detached-head')
     } finally {
       session.close()
+    }
+  })
+
+  test('normalizes revision lanes across the main and a detached linked worktree', async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'ingit-history-worktrees-'))
+    repoDirs.add(fixtureRoot)
+    const mainDir = join(fixtureRoot, 'main')
+    const linkedDir = join(fixtureRoot, 'linked')
+    await mkdir(mainDir)
+
+    await runGit(['init', '--initial-branch=main'], mainDir)
+    await runGit(['config', 'user.email', 'test@test.com'], mainDir)
+    await runGit(['config', 'user.name', 'Test'], mainDir)
+    await commitFile(mainDir, 'base.txt', 'base\n', 'base', '2026-04-01T10:00:00+00:00')
+    await runGit(['worktree', 'add', '--detach', linkedDir, 'HEAD'], mainDir)
+    await commitFile(mainDir, 'main.txt', 'main\n', 'main-tip', '2026-04-03T10:00:00+00:00')
+    await commitFile(linkedDir, 'linked.txt', 'linked\n', 'linked-tip', '2026-04-02T10:00:00+00:00')
+
+    const mainSession = await RepoSession.open(mainDir)
+    const linkedSession = await RepoSession.open(linkedDir)
+    const query = {
+      repoId: mainSession.repoId,
+      scope: { kind: 'all' as const },
+      anchor: { kind: 'head' as const },
+      beforeRows: 0,
+      afterRows: 10,
+      firstParent: false,
+      topoOrder: true,
+      normalizeAcrossWorktrees: true,
+    }
+
+    try {
+      const [mainHistory, linkedHistory] = await Promise.all([
+        handleHistoryQuery(mainSession, query),
+        handleHistoryQuery(linkedSession, { ...query, repoId: linkedSession.repoId }),
+      ])
+
+      const geometry = (history: typeof mainHistory) => history.rows.map((row) => ({
+        sha: row.sha,
+        parentShas: row.parentShas,
+        lane: row.lane,
+      }))
+      expect(geometry(linkedHistory)).toEqual(geometry(mainHistory))
+      expect(mainHistory.rows.map((row) => row.subject)).toEqual([
+        'main-tip',
+        'linked-tip',
+        'base',
+      ])
+
+      const [mainLocal, linkedLocal] = await Promise.all([
+        handleHistoryQuery(mainSession, { ...query, normalizeAcrossWorktrees: false }),
+        handleHistoryQuery(linkedSession, {
+          ...query,
+          repoId: linkedSession.repoId,
+          normalizeAcrossWorktrees: false,
+        }),
+      ])
+      expect(mainLocal.rows.map((row) => row.lane)).not.toEqual(
+        linkedLocal.rows.map((row) => row.lane),
+      )
+    } finally {
+      mainSession.close()
+      linkedSession.close()
     }
   })
 })

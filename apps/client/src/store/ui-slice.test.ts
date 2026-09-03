@@ -34,6 +34,13 @@ afterEach(() => {
 })
 
 describe('graph zoom preference', () => {
+  test('normalizes linked worktree graphs by default and restores an opt-out', () => {
+    expect(createUiSliceState().normalizeAcrossWorktrees).toBe(true)
+
+    values.set('normalizeAcrossWorktrees', 'false')
+    expect(createUiSliceState().normalizeAcrossWorktrees).toBe(false)
+  })
+
   test('restores a saved zoom level', () => {
     values.set('graphZoom', '1.7')
 

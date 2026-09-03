@@ -135,6 +135,11 @@ export const router = os.router({
     return session.getWorktreeChanges()
   }),
 
+  getWorktreeGraphStates: os.getWorktreeGraphStates.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    return session.getWorktreeGraphStates()
+  }),
+
   getStashes: os.getStashes.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     return session.getStashes()
@@ -354,7 +359,9 @@ export const router = os.router({
     switch (input.action) {
       case 'checkout': {
         try {
-          await session.checkout(input.refName)
+          await session.checkout(input.refName, {
+            ignoreOtherWorktrees: input.ignoreOtherWorktrees,
+          })
         } catch (err) {
           if (err instanceof BranchCheckedOutError) {
             throw new ORPCError('CONFLICT', {

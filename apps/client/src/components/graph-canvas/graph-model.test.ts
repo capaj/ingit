@@ -59,6 +59,11 @@ const cleanWorktree: WorktreeChangesResponse = {
   unstaged: [],
 }
 
+const dirtyWorktree: WorktreeChangesResponse = {
+  ...cleanWorktree,
+  unstaged: [{ path: 'pending.txt', status: '?' }],
+}
+
 describe('derived graph model cache', () => {
   test('reuses the complete model for unchanged graph input references', () => {
     const input = history([
@@ -67,8 +72,8 @@ describe('derived graph model cache', () => {
     ])
     resetGraphModelCacheStats()
 
-    const first = deriveGraphModel(input, refs, cleanWorktree, true)
-    const second = deriveGraphModel(input, refs, cleanWorktree, true)
+    const first = deriveGraphModel(input, refs, cleanWorktree, '/repo', [], true, true)
+    const second = deriveGraphModel(input, refs, cleanWorktree, '/repo', [], true, true)
 
     expect(second).toBe(first)
     expect(getGraphModelCacheStats()).toMatchObject({
@@ -89,8 +94,8 @@ describe('derived graph model cache', () => {
     }))
     resetGraphModelCacheStats()
 
-    const optimistic = deriveGraphModel(history(optimisticRows), refs, cleanWorktree, false)
-    const authoritative = deriveGraphModel(history(authoritativeRows), refs, cleanWorktree, false)
+    const optimistic = deriveGraphModel(history(optimisticRows), refs, cleanWorktree, '/repo', [], true, false)
+    const authoritative = deriveGraphModel(history(authoritativeRows), refs, cleanWorktree, '/repo', [], true, false)
 
     expect(authoritative).not.toBe(optimistic)
     expect(authoritative?.layout.nodes[0]?.row).toBe(authoritativeRows[0])
@@ -100,5 +105,54 @@ describe('derived graph model cache', () => {
       topologyHits: 1,
       builds: 1,
     })
+  })
+
+  test('routes every dirty worktree identically from either linked checkout', () => {
+    const input = history([
+      row('upstream', ['tip'], 0, ['origin/main']),
+      row('tip', ['base'], 0, ['main']),
+      row('base', [], 0),
+    ])
+    const sharedStates = [
+      {
+        path: '/repo/main',
+        headSha: 'tip',
+        branch: 'main',
+        changeCount: 1,
+        conflictedCount: 0,
+      },
+      {
+        path: '/repo/linked',
+        headSha: 'base',
+        changeCount: 0,
+        conflictedCount: 0,
+      },
+    ]
+    const detachedRefs = refs.map(({ isCurrent: _isCurrent, ...ref }) => ref)
+    const detachedChanges = { ...cleanWorktree, branch: undefined, headSha: 'base' }
+
+    const fromMain = deriveGraphModel(
+      input,
+      refs,
+      dirtyWorktree,
+      '/repo/main',
+      sharedStates,
+      true,
+      false,
+    )
+    const fromLinked = deriveGraphModel(
+      input,
+      detachedRefs,
+      detachedChanges,
+      '/repo/linked',
+      sharedStates,
+      true,
+      false,
+    )
+
+    expect(fromMain?.renderedRows.map((entry) => entry.lane)).toEqual([1, 0, 0])
+    expect(fromLinked?.renderedRows.map((entry) => entry.lane)).toEqual(
+      fromMain?.renderedRows.map((entry) => entry.lane),
+    )
   })
 })

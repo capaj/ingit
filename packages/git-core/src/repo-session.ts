@@ -11,6 +11,7 @@ import type {
   WorktreeDiffArea,
   CommitFileDiffResponse,
   WorktreeSummary,
+  WorktreeGraphState,
   RemoteSummary,
   StashSummary,
   StashFileDiffResponse,
@@ -49,6 +50,11 @@ export interface ResolvedRef {
   kind: 'head' | 'remote' | 'tag' | 'other'
   remoteName?: string
   remoteBranch?: string
+}
+
+export interface CheckoutOptions {
+  /** Allow the target branch to remain checked out in another linked worktree. */
+  ignoreOtherWorktrees?: boolean
 }
 
 export class BranchCheckedOutError extends Error {
@@ -403,6 +409,46 @@ export class RepoSession {
 
   getWorktreeChanges(): Promise<WorktreeChangesResponse> {
     return readWorktreeChanges(this.rootPath)
+  }
+
+  /**
+   * Read just enough state from every usable worktree to render its pending
+   * changes in a shared graph. Paths are sorted so every RepoSession for the
+   * same repository produces an identical ordering.
+   */
+  async getWorktreeGraphStates(): Promise<WorktreeGraphState[]> {
+    const worktrees = await this.getWorktrees()
+    const states = await Promise.all(worktrees.map(async (worktree): Promise<WorktreeGraphState | null> => {
+      if (!worktree.headSha || worktree.bare || worktree.prunable) return null
+
+      try {
+        const changes = await readWorktreeChanges(worktree.path)
+        const conflictedCount = new Set(
+          changes.unstaged
+            .filter((file) => file.status === 'U')
+            .map((file) => file.path),
+        ).size
+
+        return {
+          path: worktree.path,
+          headSha: changes.headSha || worktree.headSha,
+          ...(changes.branch || worktree.branchShortName
+            ? { branch: changes.branch ?? worktree.branchShortName }
+            : {}),
+          changeCount: changes.staged.length + changes.unstaged.length,
+          conflictedCount,
+          ...(changes.mergeHeadShas ? { mergeHeadShas: changes.mergeHeadShas } : {}),
+          ...(changes.rebaseHeadSha ? { rebaseHeadSha: changes.rebaseHeadSha } : {}),
+        }
+      } catch (err) {
+        console.warn(`[RepoSession.getWorktreeGraphStates] Could not inspect ${worktree.path}:`, err)
+        return null
+      }
+    }))
+
+    return states
+      .filter((state): state is WorktreeGraphState => state !== null)
+      .sort((left, right) => left.path.localeCompare(right.path))
   }
 
   private async getGitImage(revision: string, path: string): Promise<ImagePreview | null> {
@@ -915,14 +961,14 @@ export class RepoSession {
       .join('\n') || err.message
   }
 
-  async checkout(ref: string): Promise<void> {
+  async checkout(ref: string, options: CheckoutOptions = {}): Promise<void> {
     const resolved = await this.resolveRef(ref)
     const targetBranchRef = resolved?.kind === 'head'
       ? resolved.fullName
       : resolved?.kind === 'remote' && resolved.remoteBranch
         ? `refs/heads/${resolved.remoteBranch}`
         : null
-    if (targetBranchRef) {
+    if (targetBranchRef && !options.ignoreOtherWorktrees) {
       const occupiedWorktree = (await this.getWorktrees()).find(
         (worktree) => !worktree.isCurrent && worktree.branchRef === targetBranchRef,
       )
@@ -941,14 +987,24 @@ export class RepoSession {
           throw new Error(`Cannot checkout remote ref ${ref}`)
         }
 
-        await runGit(['checkout', '-B', localBranchName, ref], this.rootPath)
+        await runGit([
+          'checkout',
+          ...(options.ignoreOtherWorktrees ? ['--ignore-other-worktrees'] : []),
+          '-B',
+          localBranchName,
+          ref,
+        ], this.rootPath)
         switched = true
         await runGit(['branch', `--set-upstream-to=${ref}`, localBranchName], this.rootPath)
       } else {
         // Use git CLI — ziggit FFI only does tree checkout without switching HEAD.
         // The worktree is clean while the auto-stash is held, so checkout can
         // switch branches even when the user originally had staged files.
-        await runGit(['checkout', ref], this.rootPath)
+        await runGit([
+          'checkout',
+          ...(options.ignoreOtherWorktrees ? ['--ignore-other-worktrees'] : []),
+          ref,
+        ], this.rootPath)
         switched = true
       }
     } catch (checkoutErr) {

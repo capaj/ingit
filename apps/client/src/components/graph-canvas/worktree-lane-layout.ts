@@ -10,10 +10,16 @@ import type { CommitRow } from '@ingit/rpc-contract'
 export function routeUpstreamAroundWorktree(
   rows: CommitRow[],
   currentBranch: string | null,
+  headSha?: string,
 ): CommitRow[] {
-  if (!currentBranch) return rows
-
-  const headIndex = rows.findIndex((row) => row.refNames.includes(currentBranch))
+  const branchHeadIndex = currentBranch
+    ? rows.findIndex((row) => row.refNames.includes(currentBranch))
+    : -1
+  const headIndex = branchHeadIndex >= 0
+    ? branchHeadIndex
+    : headSha
+      ? rows.findIndex((row) => row.sha === headSha)
+      : -1
   if (headIndex <= 0) return rows
 
   const head = rows[headIndex]

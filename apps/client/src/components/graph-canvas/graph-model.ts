@@ -3,6 +3,7 @@ import type {
   HistoryWindowResponse,
   RefSummary,
   WorktreeChangesResponse,
+  WorktreeGraphState,
 } from '@ingit/rpc-contract'
 import {
   buildLayout,
@@ -52,10 +53,54 @@ function currentBranchName(refs: RefSummary[]): string | null {
 
 function referenceVariantKey(
   currentBranch: string | null,
-  hasWorktreeChanges: boolean,
+  dirtyWorktrees: WorktreeGraphState[],
   extraLeftGutter: number,
 ): string {
-  return `${currentBranch ?? ''}\u0000${hasWorktreeChanges ? 1 : 0}\u0000${extraLeftGutter}`
+  const worktreeKey = dirtyWorktrees
+    .map((worktree) => `${worktree.path}\u0003${worktree.branch ?? ''}\u0003${worktree.headSha}`)
+    .join('\u0004')
+  return `${currentBranch ?? ''}\u0000${worktreeKey}\u0000${extraLeftGutter}`
+}
+
+function graphWorktrees(
+  currentWorktreePath: string | null,
+  worktreeChanges: WorktreeChangesResponse | null,
+  worktreeGraphStates: WorktreeGraphState[] | null,
+  normalizeAcrossWorktrees: boolean,
+): WorktreeGraphState[] {
+  if (!normalizeAcrossWorktrees) {
+    if (!worktreeChanges || worktreeChangeCount(worktreeChanges) === 0) return []
+    return [{
+      path: currentWorktreePath ?? '',
+      headSha: worktreeChanges.headSha,
+      ...(worktreeChanges.branch ? { branch: worktreeChanges.branch } : {}),
+      changeCount: worktreeChangeCount(worktreeChanges),
+      conflictedCount: 0,
+    }]
+  }
+
+  // Null means the shared scan is still loading. Do not let only the current
+  // worktree affect geometry during that window, or linked views would briefly
+  // disagree again.
+  if (worktreeGraphStates === null) return []
+
+  const byPath = new Map(worktreeGraphStates.map((state) => [state.path, state]))
+  if (currentWorktreePath && worktreeChanges) {
+    const existing = byPath.get(currentWorktreePath)
+    byPath.set(currentWorktreePath, {
+      path: currentWorktreePath,
+      headSha: worktreeChanges.headSha,
+      ...(worktreeChanges.branch ? { branch: worktreeChanges.branch } : {}),
+      changeCount: worktreeChangeCount(worktreeChanges),
+      conflictedCount: existing?.conflictedCount ?? 0,
+      ...(worktreeChanges.mergeHeadShas ? { mergeHeadShas: worktreeChanges.mergeHeadShas } : {}),
+      ...(worktreeChanges.rebaseHeadSha ? { rebaseHeadSha: worktreeChanges.rebaseHeadSha } : {}),
+    })
+  }
+
+  return [...byPath.values()]
+    .filter((state) => state.changeCount > 0)
+    .sort((left, right) => left.path.localeCompare(right.path))
 }
 
 function topologyKey(rows: CommitRow[], extraLeftGutter: number): string {
@@ -83,6 +128,9 @@ export function deriveGraphModel(
   historyWindow: HistoryWindowResponse | null,
   refs: RefSummary[],
   worktreeChanges: WorktreeChangesResponse | null,
+  currentWorktreePath: string | null,
+  worktreeGraphStates: WorktreeGraphState[] | null,
+  normalizeAcrossWorktrees: boolean,
   showCommitMessages: boolean,
 ): GraphModel | null {
   if (!historyWindow || historyWindow.rows.length === 0) return null
@@ -90,9 +138,14 @@ export function deriveGraphModel(
 
   const sourceRows = historyWindow.rows
   const currentBranch = currentBranchName(refs)
-  const hasWorktreeChanges = worktreeChangeCount(worktreeChanges) > 0
+  const dirtyWorktrees = graphWorktrees(
+    currentWorktreePath,
+    worktreeChanges,
+    worktreeGraphStates,
+    normalizeAcrossWorktrees,
+  )
   const extraLeftGutter = showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0
-  const variantKey = referenceVariantKey(currentBranch, hasWorktreeChanges, extraLeftGutter)
+  const variantKey = referenceVariantKey(currentBranch, dirtyWorktrees, extraLeftGutter)
   const variants = referenceCache.get(sourceRows)
   const referenceHit = variants?.get(variantKey)
   if (referenceHit) {
@@ -100,9 +153,14 @@ export function deriveGraphModel(
     return referenceHit
   }
 
-  const renderedRows = hasWorktreeChanges
-    ? routeUpstreamAroundWorktree(sourceRows, currentBranch)
-    : sourceRows
+  const renderedRows = dirtyWorktrees.reduce(
+    (rows, worktree) => routeUpstreamAroundWorktree(
+      rows,
+      worktree.branch ?? null,
+      worktree.headSha,
+    ),
+    sourceRows,
+  )
   const key = topologyKey(renderedRows, extraLeftGutter)
   const cached = topologyCache.get(key)
   let layout: GraphLayout

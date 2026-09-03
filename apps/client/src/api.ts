@@ -110,6 +110,10 @@ export function getWorktreeChanges(repoId: string) {
   return ensureClient().getWorktreeChanges({ repoId })
 }
 
+export function getWorktreeGraphStates(repoId: string) {
+  return ensureClient().getWorktreeGraphStates({ repoId })
+}
+
 export function getStashes(repoId: string): Promise<StashSummary[]> {
   return ensureClient().getStashes({ repoId })
 }
@@ -216,8 +220,24 @@ export function continueOperation(repoId: string, operation: InProgressOperation
   return ensureClient().continueOperation({ repoId, operation })
 }
 
-export function refAction(repoId: string, action: RefActionKind, refName: string, sha: string, force?: boolean, remote?: string) {
-  return ensureClient().refAction({ repoId, action, refName, sha, force, remote })
+export function refAction(
+  repoId: string,
+  action: RefActionKind,
+  refName: string,
+  sha: string,
+  force?: boolean,
+  remote?: string,
+  ignoreOtherWorktrees?: boolean,
+) {
+  return ensureClient().refAction({
+    repoId,
+    action,
+    refName,
+    sha,
+    force,
+    remote,
+    ignoreOtherWorktrees,
+  })
 }
 
 export function getReflog(repoId: string, ref?: string, maxCount?: number) {

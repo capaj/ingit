@@ -277,9 +277,11 @@ function StashFileRow({ stashSha, file }: { stashSha: string; file: ChangedPath 
             color: '#a6adc8',
             fontFamily: 'monospace',
             fontSize: 12,
+            direction: 'rtl',
+            textAlign: 'left',
           }}
         >
-          {displayPath}
+          <bdi dir="ltr">{displayPath}</bdi>
         </span>
       </button>
       {expanded && diffEntry && <DiffView entry={diffEntry} path={file.path} />}

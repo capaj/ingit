@@ -110,6 +110,17 @@ export interface WorktreeSummary {
   prunableReason?: string
 }
 
+/** Lightweight dirty-state metadata used to render every linked worktree. */
+export interface WorktreeGraphState {
+  path: string
+  headSha: CommitSha
+  branch?: string
+  changeCount: number
+  conflictedCount: number
+  mergeHeadShas?: CommitSha[]
+  rebaseHeadSha?: CommitSha
+}
+
 export interface HistoryAnchor {
   kind: 'head' | 'ref' | 'sha' | 'row' | 'mergeBase'
   value?: string
@@ -128,6 +139,8 @@ export interface HistoryQuery {
   afterRows: number
   firstParent: boolean
   topoOrder: boolean
+  /** Give every linked worktree the same revision roots and lane geometry. */
+  normalizeAcrossWorktrees?: boolean
 }
 
 export interface CommitRow {

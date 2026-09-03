@@ -8,6 +8,7 @@ import type {
   WorktreeChangesResponse,
   WorktreeDiffArea,
   WorktreeFile,
+  WorktreeGraphState,
   WorktreeSummary,
 } from '@ingit/rpc-contract'
 
@@ -40,6 +41,8 @@ export interface WorktreeSlice {
   stashDiff: StashDiffResponse | null
   stashFileDiffs: Record<string, WorktreeDiffEntry>
   worktrees: WorktreeSummary[]
+  /** Null until the cross-worktree dirty-state scan has completed. */
+  worktreeGraphStates: WorktreeGraphState[] | null
   worktreeChanges: WorktreeChangesResponse | null
   worktreeSelected: boolean
   /** In-progress commit message; kept while the working-tree panel is hidden. */
@@ -98,6 +101,7 @@ export function createWorktreeSliceState(): WorktreeSliceState {
     stashDiff: null,
     stashFileDiffs: {},
     worktrees: [],
+    worktreeGraphStates: null,
     worktreeChanges: null,
     worktreeSelected: false,
     worktreeCommitMessage: '',
