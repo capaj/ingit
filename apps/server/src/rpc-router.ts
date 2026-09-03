@@ -120,9 +120,12 @@ export const router = os.router({
   }),
 
   removeWorktree: os.removeWorktree.handler(async ({ input }) => {
-    const session = getSession(input.repoId)
-    const worktrees = await session.removeWorktree(input.path).catch(rethrowWithDetail)
-    return { ok: true, worktrees }
+    const result = await sessionManager.removeWorktree(
+      input.repoId,
+      input.path,
+      input.moveCurrentBranchToMain,
+    ).catch(rethrowWithDetail)
+    return { ok: true, ...result }
   }),
 
   getStatus: os.getStatus.handler(async ({ input }) => {

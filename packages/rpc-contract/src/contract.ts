@@ -325,10 +325,15 @@ export const contract = {
     .output(z.array(WorktreeSummary)),
 
   removeWorktree: oc
-    .input(z.object({ repoId: RepoId, path: z.string() }))
+    .input(z.object({
+      repoId: RepoId,
+      path: z.string(),
+      moveCurrentBranchToMain: z.boolean().optional(),
+    }))
     .output(z.object({
       ok: z.boolean(),
       worktrees: z.array(WorktreeSummary),
+      nextWorktreePath: z.string().optional(),
     })),
 
   getStatus: oc

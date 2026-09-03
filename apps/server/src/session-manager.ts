@@ -2,7 +2,11 @@ import { stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { ORPCError } from '@orpc/server'
-import { GitCommandError, RepoSession } from '@ingit/git-core'
+import {
+  GitCommandError,
+  RepoSession,
+  type RemoveWorktreeResult,
+} from '@ingit/git-core'
 import type { OpenRepoResponse } from '@ingit/rpc-contract'
 import { RecentReposStore } from './recent-repos-store.js'
 
@@ -74,8 +78,52 @@ export class SessionManager {
     return this.sessions.get(repoId)
   }
 
+  async removeWorktree(
+    repoId: string,
+    path: string,
+    moveCurrentBranchToMain = false,
+  ): Promise<RemoveWorktreeResult> {
+    const session = this.sessions.get(repoId)
+    if (!session) throw new Error(`No session found for repoId: ${repoId}`)
+
+    try {
+      const result = await session.removeWorktree(path, { moveCurrentBranchToMain })
+
+      if (result.nextWorktreePath) {
+        // The current session points at a directory that no longer exists. A
+        // main-worktree session may also have cached the branch that was just
+        // replaced, so force both paths to reopen with fresh state.
+        this.closeSessionsAtPaths([session.rootPath, result.nextWorktreePath])
+      }
+
+      return result
+    } catch (err) {
+      // Removing the current worktree closes its long-lived git processes so
+      // Windows can delete the directory. If Git then rejects the removal,
+      // recreate the same logical session so the client remains usable.
+      if (session.isClosed) {
+        try {
+          const replacement = await RepoSession.open(session.rootPath, { repoId })
+          this.sessions.set(repoId, replacement)
+        } catch {
+          this.sessions.delete(repoId)
+        }
+      }
+      throw err
+    }
+  }
+
   getRecentRepos(): Promise<string[]> {
     return this.recentReposStore.list()
+  }
+
+  private closeSessionsAtPaths(paths: string[]): void {
+    const normalizedPaths = new Set(paths.map((path) => resolve(path)))
+    for (const [repoId, session] of this.sessions) {
+      if (!normalizedPaths.has(resolve(session.rootPath))) continue
+      session.close()
+      this.sessions.delete(repoId)
+    }
   }
 
   closeAll(): void {

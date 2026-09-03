@@ -63,4 +63,28 @@ describe('SessionManager.openRepo', () => {
 
     expect(await manager.getRecentRepos()).toEqual([secondRepo, firstRepo])
   })
+
+  test('drops stale sessions after moving a current linked worktree into the main checkout', async () => {
+    const storeFile = join(await makeTempDir('ingit-session-store-'), 'recent-repos.json')
+    const manager = new SessionManager(new RecentReposStore(storeFile))
+    const mainPath = await createRepo('ingit-session-main-')
+    const linkedParent = await makeTempDir('ingit-session-linked-')
+    const linkedPath = join(linkedParent, 'feature')
+
+    await runGit(['branch', 'feature'], mainPath)
+    await runGit(['worktree', 'add', linkedPath, 'feature'], mainPath)
+
+    const opened = await manager.openRepo(linkedPath)
+    const result = await manager.removeWorktree(opened.repoId, linkedPath, true)
+
+    expect(result.nextWorktreePath).toBe(mainPath)
+    expect(manager.getSession(opened.repoId)).toBeUndefined()
+    expect((await runGit(['symbolic-ref', '--short', 'HEAD'], mainPath)).stdout.trim()).toBe('feature')
+    expect(await Bun.file(linkedPath).exists()).toBe(false)
+
+    const reopened = await manager.openRepo(mainPath)
+    expect(reopened.currentWorktreePath).toBe(mainPath)
+    expect(reopened.head.refName).toBe('refs/heads/feature')
+    manager.closeAll()
+  })
 })

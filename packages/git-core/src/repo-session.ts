@@ -57,6 +57,17 @@ export interface CheckoutOptions {
   ignoreOtherWorktrees?: boolean
 }
 
+export interface RemoveWorktreeOptions {
+  /** Move a currently-open linked worktree's branch to the main worktree first. */
+  moveCurrentBranchToMain?: boolean
+}
+
+export interface RemoveWorktreeResult {
+  worktrees: WorktreeSummary[]
+  /** The worktree the caller should open after removing its current one. */
+  nextWorktreePath?: string
+}
+
 export class BranchCheckedOutError extends Error {
   readonly branchRef: string
   readonly worktreePath: string
@@ -82,6 +93,7 @@ export class RepoSession {
   private readonly ziggit: ZiggitRepo | null
   private readonly forcePushEligibleBranches = new Map<string, string>()
   private inProgressRebaseBranch: string | null = null
+  private closed = false
 
   private constructor(
     repoId: string,
@@ -106,7 +118,7 @@ export class RepoSession {
     this.ziggit = ziggit
   }
 
-  static async open(repoPath: string): Promise<RepoSession> {
+  static async open(repoPath: string, options: { repoId?: string } = {}): Promise<RepoSession> {
     // Validate and resolve root path (no ziggit equivalent for --show-toplevel)
     const { stdout: toplevel } = await runGit(
       ['rev-parse', '--show-toplevel'],
@@ -198,7 +210,7 @@ export class RepoSession {
     }
     console.log('[RepoSession.open]', rootPath, 'source:', source, 'raw:', JSON.stringify(raw), '→ githubUrl:', githubUrl)
 
-    const repoId = randomBytes(4).toString('hex')
+    const repoId = options.repoId ?? randomBytes(4).toString('hex')
     const scheduler = new GitCommandScheduler(rootPath)
     const catFile = new CatFileProcess(rootPath)
 
@@ -391,16 +403,125 @@ export class RepoSession {
     return parseWorktreeList(stdout, this.rootPath)
   }
 
-  async removeWorktree(path: string): Promise<WorktreeSummary[]> {
+  async removeWorktree(
+    path: string,
+    options: RemoveWorktreeOptions = {},
+  ): Promise<RemoveWorktreeResult> {
     const requestedPath = resolve(path)
     const worktrees = await this.getWorktrees()
     const target = worktrees.find((worktree) => resolve(worktree.path) === requestedPath)
 
     if (!target) throw new Error(`Worktree is not registered: ${path}`)
-    if (target.isCurrent) throw new Error('The current worktree cannot be removed')
+    if (!target.isCurrent) {
+      await runGit(['worktree', 'remove', target.path], this.rootPath)
+      return { worktrees: await this.getWorktrees() }
+    }
 
-    await runGit(['worktree', 'remove', target.path], this.rootPath)
-    return this.getWorktrees()
+    if (!options.moveCurrentBranchToMain) {
+      throw new Error('Removing the current worktree requires moving its branch to the main worktree')
+    }
+
+    // `git worktree list` always reports the main worktree first. Unlike a
+    // linked worktree, it is the repository itself and cannot be removed.
+    const mainWorktree = worktrees[0]
+    if (!mainWorktree || resolve(mainWorktree.path) === requestedPath) {
+      throw new Error('The main worktree cannot be removed')
+    }
+    if (mainWorktree.bare) {
+      throw new Error('The current branch cannot be moved into a bare main worktree')
+    }
+    if (!target.branchShortName) {
+      throw new Error('The current worktree has a detached HEAD, so there is no branch to move')
+    }
+    if (target.locked) {
+      const reason = target.lockedReason ? `: ${target.lockedReason}` : ''
+      throw new Error(`The current worktree is locked${reason}`)
+    }
+
+    await this.assertWorktreeClean(target.path, 'current')
+    await this.assertWorktreeClean(mainWorktree.path, 'main')
+
+    const mainCheckoutChanged = mainWorktree.branchRef !== target.branchRef
+    if (mainCheckoutChanged) {
+      await runGit(
+        ['checkout', '--ignore-other-worktrees', target.branchShortName],
+        mainWorktree.path,
+      )
+    }
+
+    // On Windows an open cat-file process keeps its working directory from
+    // being deleted. Shut down this session only after every fallible
+    // preflight and checkout has succeeded. SessionManager recreates it if the
+    // final removal still fails.
+    await this.closeForWorktreeRemoval()
+
+    try {
+      await runGit(['worktree', 'remove', target.path], mainWorktree.path)
+    } catch (removeError) {
+      if (mainCheckoutChanged) {
+        try {
+          await this.restoreWorktreeCheckout(mainWorktree)
+        } catch (restoreError) {
+          const removeMessage = removeError instanceof Error ? removeError.message : String(removeError)
+          const restoreMessage = restoreError instanceof Error ? restoreError.message : String(restoreError)
+          throw new Error(`${removeMessage}\nThe main worktree could not be restored: ${restoreMessage}`)
+        }
+      }
+      throw removeError
+    }
+
+    return {
+      worktrees: worktrees
+        .filter((worktree) => resolve(worktree.path) !== requestedPath)
+        .map((worktree) => ({
+          ...worktree,
+          isCurrent: resolve(worktree.path) === resolve(mainWorktree.path),
+          ...(resolve(worktree.path) === resolve(mainWorktree.path)
+            ? {
+                branchRef: target.branchRef,
+                branchShortName: target.branchShortName,
+                headSha: target.headSha,
+                detached: false,
+              }
+            : {}),
+        })),
+      nextWorktreePath: mainWorktree.path,
+    }
+  }
+
+  private async assertWorktreeClean(path: string, label: 'current' | 'main'): Promise<void> {
+    const { stdout } = await runGit(
+      ['status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=none'],
+      path,
+    )
+    if (stdout.length > 0) {
+      throw new Error(
+        `The ${label} worktree at '${path}' has uncommitted changes. Commit or stash them first.`,
+      )
+    }
+  }
+
+  private async restoreWorktreeCheckout(worktree: WorktreeSummary): Promise<void> {
+    if (worktree.branchShortName) {
+      await runGit(['checkout', '--ignore-other-worktrees', worktree.branchShortName], worktree.path)
+      return
+    }
+    if (worktree.headSha) {
+      await runGit(['checkout', '--detach', worktree.headSha], worktree.path)
+      return
+    }
+    throw new Error(`The previous checkout at '${worktree.path}' has no commit to restore`)
+  }
+
+  private async closeForWorktreeRemoval(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    this.ziggit?.close()
+    await this.catFile.closeAndWait()
+  }
+
+  get isClosed(): boolean {
+    return this.closed
   }
 
   getStatus(): Promise<WorktreeStatusResponse> {
@@ -1571,6 +1692,8 @@ export class RepoSession {
   }
 
   close(): void {
+    if (this.closed) return
+    this.closed = true
     this.catFile.close()
     this.ziggit?.close()
   }

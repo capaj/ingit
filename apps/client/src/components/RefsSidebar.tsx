@@ -6,6 +6,7 @@ import type {
   StashSummary,
   WorktreeSummary,
 } from '@ingit/rpc-contract'
+import { NativeConfirmDialog } from './NativeDialogs'
 
 interface RefsSidebarProps {
   refs: RefSummary[]
@@ -19,7 +20,7 @@ interface RefsSidebarProps {
   onSelectStash: (stashSha: string) => void
   onSelectStashParent: (parentSha: string) => void
   onOpenWorktree: (path: string) => void
-  onRemoveWorktree: (path: string) => Promise<boolean>
+  onRemoveWorktree: (path: string, moveCurrentBranchToMain?: boolean) => Promise<boolean>
   onSelectRemote: (name: string) => Promise<void>
   onAddRemote: (name: string, url: string) => Promise<boolean>
   onRemoveRemote: (name: string) => Promise<boolean>
@@ -67,6 +68,7 @@ export function RefsSidebar({
   const [stashesExpanded, setStashesExpanded] = useState(false)
   const [worktreesExpanded, setWorktreesExpanded] = useState(true)
   const [removingWorktreePath, setRemovingWorktreePath] = useState<string | null>(null)
+  const [currentWorktreeToRemove, setCurrentWorktreeToRemove] = useState<WorktreeSummary | null>(null)
   const [addRemoteOpen, setAddRemoteOpen] = useState(false)
   const [remoteName, setRemoteName] = useState('')
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -103,16 +105,26 @@ export function RefsSidebar({
     setCollapsed((prev) => ({ ...prev, [kind]: !prev[kind] }))
   }
 
-  async function removeWorktree(worktree: WorktreeSummary) {
-    if (worktree.isCurrent || removingWorktreePath) return
+  const mainWorktree = worktrees[0] ?? null
+
+  function requestRemoveWorktree(worktree: WorktreeSummary) {
+    if (removingWorktreePath || worktree.path === mainWorktree?.path) return
+    if (worktree.isCurrent) {
+      setCurrentWorktreeToRemove(worktree)
+      return
+    }
+
     const confirmed = window.confirm(
       `Remove the worktree at ${worktree.path}? Git will refuse if it contains uncommitted changes.`,
     )
-    if (!confirmed) return
+    if (confirmed) void removeWorktree(worktree, false)
+  }
 
+  async function removeWorktree(worktree: WorktreeSummary, moveCurrentBranchToMain: boolean) {
+    if (removingWorktreePath) return
     setRemovingWorktreePath(worktree.path)
     try {
-      await onRemoveWorktree(worktree.path)
+      await onRemoveWorktree(worktree.path, moveCurrentBranchToMain)
     } finally {
       setRemovingWorktreePath(null)
     }
@@ -178,6 +190,20 @@ export function RefsSidebar({
         userSelect: 'none',
       }}
     >
+      <NativeConfirmDialog
+        open={currentWorktreeToRemove !== null}
+        title="Move branch and remove worktree?"
+        message={currentWorktreeToRemove && mainWorktree
+          ? `This will check out "${worktreeDisplayName(currentWorktreeToRemove)}" in the main worktree at ${mainWorktree.path}, switch Ingit there, and permanently remove ${currentWorktreeToRemove.path}. The branch and its commits will be kept. Both worktrees must be clean.`
+          : ''}
+        confirmLabel="Move and remove"
+        onConfirm={() => {
+          const worktree = currentWorktreeToRemove
+          setCurrentWorktreeToRemove(null)
+          if (worktree) void removeWorktree(worktree, true)
+        }}
+        onClose={() => setCurrentWorktreeToRemove(null)}
+      />
       <div
         style={{
           padding: '8px 14px',
@@ -440,6 +466,7 @@ export function RefsSidebar({
             ) : filteredWorktrees.map((worktree) => {
               const displayName = worktreeDisplayName(worktree)
               const removing = removingWorktreePath === worktree.path
+              const isMainWorktree = worktree.path === mainWorktree?.path
               return (
                 <div
                   key={worktree.path}
@@ -502,11 +529,13 @@ export function RefsSidebar({
                   </button>
                   <button
                     type="button"
-                    onClick={() => { void removeWorktree(worktree) }}
-                    disabled={worktree.isCurrent || removingWorktreePath !== null}
-                    title={worktree.isCurrent
-                      ? 'The current worktree cannot be removed'
-                      : `Remove worktree ${worktree.path}`}
+                    onClick={() => { requestRemoveWorktree(worktree) }}
+                    disabled={isMainWorktree || removingWorktreePath !== null}
+                    title={isMainWorktree
+                      ? 'The main worktree is the repository itself and cannot be removed'
+                      : worktree.isCurrent
+                        ? `Move ${displayName} to the main worktree and remove this worktree`
+                        : `Remove worktree ${worktree.path}`}
                     aria-label={removing ? `Removing worktree ${displayName}` : `Remove worktree ${displayName}`}
                     style={{
                       width: 32,
@@ -517,8 +546,8 @@ export function RefsSidebar({
                       border: 'none',
                       background: 'none',
                       color: removing ? '#f9e2af' : '#f38ba8',
-                      cursor: worktree.isCurrent || removingWorktreePath !== null ? 'default' : 'pointer',
-                      opacity: worktree.isCurrent ? 0.25 : removingWorktreePath && !removing ? 0.4 : 0.8,
+                      cursor: isMainWorktree || removingWorktreePath !== null ? 'default' : 'pointer',
+                      opacity: isMainWorktree ? 0.25 : removingWorktreePath && !removing ? 0.4 : 0.8,
                     }}
                   >
                     <TrashIcon />

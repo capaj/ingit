@@ -202,4 +202,14 @@ export class CatFileProcess {
       stdin.end()
     }
   }
+
+  async closeAndWait(): Promise<void> {
+    this.close()
+    try {
+      await this.proc.exited
+    } catch {
+      // The process is already unusable once close() has run. A shutdown
+      // failure must not prevent callers from releasing the worktree itself.
+    }
+  }
 }

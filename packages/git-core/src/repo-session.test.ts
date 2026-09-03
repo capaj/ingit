@@ -302,12 +302,75 @@ describe('RepoSession.checkout', () => {
       await session.checkout('main')
 
       await expect(session.removeWorktree(repoDir)).rejects.toThrow('current worktree')
-      const remainingWorktrees = await session.removeWorktree(worktreePath)
+      await expect(session.removeWorktree(repoDir, {
+        moveCurrentBranchToMain: true,
+      })).rejects.toThrow('main worktree cannot be removed')
+      const { worktrees: remainingWorktrees } = await session.removeWorktree(worktreePath)
       expect(remainingWorktrees).toHaveLength(1)
       expect(remainingWorktrees[0]?.path).toBe(repoDir)
       expect(await Bun.file(join(worktreePath, 'dev.txt')).exists()).toBe(false)
     } finally {
       await runGit(['worktree', 'remove', '--force', worktreePath], repoDir, { okCodes: [128] })
+      await rm(worktreeParent, { recursive: true, force: true })
+    }
+  })
+
+  test('moves a current linked-worktree branch to the main worktree before removing it', async () => {
+    const worktreeParent = await mkdtemp(join(tmpdir(), 'ingit-current-worktree-'))
+    const mainPath = join(worktreeParent, 'main')
+    const linkedPath = join(worktreeParent, 'feature')
+    let linkedSession: RepoSession | null = null
+
+    try {
+      await runGit(['init', '--initial-branch=main', 'main'], worktreeParent)
+      await runGit(['config', 'user.email', 'test@test.com'], mainPath)
+      await runGit(['config', 'user.name', 'Test'], mainPath)
+      await Bun.write(join(mainPath, 'README.md'), '# main\n')
+      await runGit(['add', '.'], mainPath)
+      await runGit(['commit', '-m', 'initial'], mainPath)
+      await runGit(['branch', 'feature'], mainPath)
+      await runGit(['worktree', 'add', linkedPath, 'feature'], mainPath)
+      await Bun.write(join(linkedPath, 'feature.txt'), 'feature\n')
+      await runGit(['add', '.'], linkedPath)
+      await runGit(['commit', '-m', 'feature'], linkedPath)
+
+      linkedSession = await RepoSession.open(linkedPath)
+      await expect(linkedSession.removeWorktree(linkedPath)).rejects.toThrow(
+        'requires moving its branch',
+      )
+
+      await Bun.write(join(linkedPath, 'pending.txt'), 'pending\n')
+      await expect(linkedSession.removeWorktree(linkedPath, {
+        moveCurrentBranchToMain: true,
+      })).rejects.toThrow('current worktree')
+      expect(await currentBranch(mainPath)).toBe('main')
+      await runGit(['clean', '-fd'], linkedPath)
+
+      await Bun.write(join(mainPath, 'main-pending.txt'), 'pending\n')
+      await expect(linkedSession.removeWorktree(linkedPath, {
+        moveCurrentBranchToMain: true,
+      })).rejects.toThrow('main worktree')
+      expect(await currentBranch(mainPath)).toBe('main')
+      await runGit(['clean', '-fd'], mainPath)
+
+      const result = await linkedSession.removeWorktree(linkedPath, {
+        moveCurrentBranchToMain: true,
+      })
+
+      expect(result.nextWorktreePath).toBe(mainPath)
+      expect(result.worktrees).toHaveLength(1)
+      expect(result.worktrees[0]).toMatchObject({
+        path: mainPath,
+        branchRef: 'refs/heads/feature',
+        branchShortName: 'feature',
+        isCurrent: true,
+      })
+      expect(linkedSession.isClosed).toBe(true)
+      expect(await currentBranch(mainPath)).toBe('feature')
+      expect(await Bun.file(join(mainPath, 'feature.txt')).exists()).toBe(true)
+      expect(await Bun.file(join(linkedPath, 'feature.txt')).exists()).toBe(false)
+    } finally {
+      linkedSession?.close()
       await rm(worktreeParent, { recursive: true, force: true })
     }
   })

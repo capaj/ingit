@@ -795,12 +795,17 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     }
   },
 
-  removeWorktree: async (path) => {
+  removeWorktree: async (path, moveCurrentBranchToMain = false) => {
     const { repoId } = get()
     if (!repoId) return false
     try {
-      const result = await removeWorktreeApi(repoId, path)
-      if (get().repoId === repoId) set({ worktrees: result.worktrees })
+      const result = await removeWorktreeApi(repoId, path, moveCurrentBranchToMain)
+      if (get().repoId !== repoId) return false
+      if (result.nextWorktreePath) {
+        await get().openRepoByPath(result.nextWorktreePath)
+      } else {
+        set({ worktrees: result.worktrees })
+      }
       return true
     } catch (err) {
       get().showError('Remove worktree failed', err)
