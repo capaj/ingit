@@ -255,3 +255,7 @@ export function focusAgentSession(pid: number, cwd?: string) {
 export function installWindowCalls() {
   return ensureClient().installWindowCalls({})
 }
+
+export function setRemoteUrl(repoId: string, name: string, expectedUrl: string, url: string) {
+  return ensureClient().setRemoteUrl({ repoId, name, expectedUrl, url })
+}

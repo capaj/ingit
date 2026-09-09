@@ -28,6 +28,7 @@ import { customSvgIconError } from './graph-canvas/CustomSvgIcon'
 
 interface SettingsDialogProps {
   open: boolean
+  initialSection?: 'appearance' | 'remotes'
   onClose: () => void
 }
 
@@ -820,6 +821,19 @@ function ConflictResolverSettings({
   )
 }
 
+function RemoteSettings() {
+  const enabled = useAppStore((state) => state.offerSshConversion)
+  const setEnabled = useAppStore((state) => state.setOfferSshConversion)
+  return <div style={{ padding: 18 }}>
+    <h2 style={{ marginTop: 0, fontSize: 16 }}>Remotes</h2>
+    <label style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: 'pointer' }}>
+      <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+      Offer to convert HTTPS remotes to SSH
+    </label>
+    <p style={{ color: '#7f849c', fontSize: 12 }}>Show a prompt when opening a repository whose default remote uses HTTPS. Changes are saved automatically.</p>
+  </div>
+}
+
 function GraphAppearanceSettings({ onClose }: { onClose: () => void }) {
   const showGutterColors = useAppStore((state) => state.showGutterColors)
   const setShowGutterColors = useAppStore((state) => state.setShowGutterColors)
@@ -917,10 +931,10 @@ function settingsNavButtonStyle(active: boolean): CSSProperties {
   }
 }
 
-export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose, initialSection = 'appearance' }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const [section, setSection] = useState<'appearance' | 'commit-icons' | 'conflict-resolvers'>('appearance')
+  const [section, setSection] = useState<'appearance' | 'commit-icons' | 'conflict-resolvers' | 'remotes'>(initialSection)
   const [commitIconsDirty, setCommitIconsDirty] = useState(false)
   const [conflictResolversDirty, setConflictResolversDirty] = useState(false)
 
@@ -989,6 +1003,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             </button>
           </div>
           <div style={{ padding: '12px 8px' }}>
+            <button type="button" onClick={() => setSection('remotes')} aria-current={section === 'remotes' ? 'page' : undefined} style={settingsNavButtonStyle(section === 'remotes')}>Remotes</button>
             <div style={{ padding: '0 8px 6px', color: '#585b70', fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Graph</div>
             <button
               type="button"
@@ -1023,6 +1038,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         <main style={{ minWidth: 0, minHeight: 0 }}>
           {open && (
             <>
+              {section === 'remotes' && <RemoteSettings />}
               <div style={{ display: section === 'appearance' ? 'block' : 'none', height: '100%' }}>
                 <GraphAppearanceSettings onClose={requestClose} />
               </div>

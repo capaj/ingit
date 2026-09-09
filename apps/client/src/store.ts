@@ -438,6 +438,7 @@ async function openRepoByPathImpl(
     totalCommitCount: 0,
     refs: [],
     remotes: [],
+    sshConversionRemote: null,
     selectedRemoteName: null,
     githubForkSuggestion: null,
     stashes: [],
@@ -518,6 +519,9 @@ async function openRepoByPathImpl(
       refs,
       remotes,
       selectedRemoteName,
+      sshConversionRemote: s.offerSshConversion
+        ? remotes.find((remote: RemoteSummary) => remote.name === selectedRemoteName && /^https:\/\//i.test(remote.url)) ?? null
+        : null,
       stashes,
       worktrees,
       worktreeGraphStates: null,
@@ -684,6 +688,11 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     ...createGraphSliceState(),
     ...createWorktreeSliceState(),
     ...createUiSliceState(),
+
+  setOfferSshConversion: (value) => {
+    try { localStorage.setItem('offerSshConversion', String(value)) } catch {}
+    set({ offerSshConversion: value, ...(!value ? { sshConversionRemote: null } : {}) })
+  },
 
   setShowCommitMessages: (value) => {
     try { localStorage.setItem('showCommitMessages', String(value)) } catch {}
@@ -1370,6 +1379,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       totalCommitCount: 0,
       refs: [],
       remotes: [],
+      sshConversionRemote: null,
       selectedRemoteName: null,
       githubForkSuggestion: null,
       stashes: [],

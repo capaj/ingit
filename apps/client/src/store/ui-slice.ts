@@ -16,6 +16,8 @@ export interface UiSlice {
   showCommitMessages: boolean
   showGutterColors: boolean
   normalizeAcrossWorktrees: boolean
+  offerSshConversion: boolean
+  setOfferSshConversion: (value: boolean) => void
   graphZoom: number
 
   setViewMode: (mode: ViewMode) => void
@@ -29,6 +31,7 @@ export interface UiSlice {
 
 export type UiSliceState = Omit<
   UiSlice,
+  | 'setOfferSshConversion'
   | 'setViewMode'
   | 'setShowCommitMessages'
   | 'setShowGutterColors'
@@ -72,6 +75,7 @@ function readGraphZoomPreference(): number {
 
 export function createUiSliceState(): UiSliceState {
   return {
+    offerSshConversion: readBooleanPreference('offerSshConversion', true),
     viewMode: 'history',
     errorDialog: null,
     showCommitMessages: readBooleanPreference('showCommitMessages', true),

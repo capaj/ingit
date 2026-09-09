@@ -310,6 +310,18 @@ export const contract = {
       remotes: z.array(RemoteSummary),
     })),
 
+  setRemoteUrl: oc
+    .input(z.object({
+      repoId: RepoId,
+      name: z.string().min(1).max(255),
+      expectedUrl: z.string(),
+      url: z.string().trim().min(1).max(4_096),
+    }))
+    .output(z.object({
+      ok: z.boolean(),
+      remotes: z.array(RemoteSummary),
+    })),
+
   removeRemote: oc
     .input(z.object({
       repoId: RepoId,

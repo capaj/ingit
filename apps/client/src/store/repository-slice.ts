@@ -12,6 +12,7 @@ export interface RepositorySlice {
   discoveredFolder: string | null
   discoveredRepos: string[]
   remotes: RemoteSummary[]
+  sshConversionRemote: RemoteSummary | null
   selectedRemoteName: string | null
   githubForkSuggestion: GithubForkSuggestion | null
   githubUrl: string | null
@@ -52,6 +53,7 @@ export function createRepositorySliceState(): RepositorySliceState {
     discoveredFolder: null,
     discoveredRepos: [],
     remotes: [],
+    sshConversionRemote: null,
     selectedRemoteName: null,
     githubForkSuggestion: null,
     githubUrl: null,

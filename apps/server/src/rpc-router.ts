@@ -108,6 +108,12 @@ export const router = os.router({
     return { ok: true, remotes }
   }),
 
+  setRemoteUrl: os.setRemoteUrl.handler(async ({ input }) => {
+    const session = getSession(input.repoId)
+    const remotes = await session.setRemoteUrl(input.name, input.expectedUrl, input.url).catch(rethrowWithDetail)
+    return { ok: true, remotes }
+  }),
+
   removeRemote: os.removeRemote.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     const remotes = await session.removeRemote(input.name).catch(rethrowWithDetail)

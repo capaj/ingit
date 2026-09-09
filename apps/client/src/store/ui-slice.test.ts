@@ -65,3 +65,9 @@ describe('graph zoom preference', () => {
     expect(normalizeGraphZoom(MAX_GRAPH_ZOOM + 1)).toBe(MAX_GRAPH_ZOOM)
   })
 })
+
+test('SSH conversion prompts default on and restore an opt-out', () => {
+  expect(createUiSliceState().offerSshConversion).toBe(true)
+  values.set('offerSshConversion', 'false')
+  expect(createUiSliceState().offerSshConversion).toBe(false)
+})

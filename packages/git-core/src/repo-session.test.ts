@@ -162,6 +162,28 @@ describe('RepoSession.squash', () => {
 })
 
 describe('RepoSession remotes', () => {
+  test('converts only the selected remote and preserves push URLs and tracking configuration', async () => {
+    const https = 'https://github.com/acme/project.git'
+    const ssh = 'git@github.com:acme/project.git'
+    try {
+      await session.addRemote('convert-me', https)
+      await session.addRemote('leave-me', 'https://github.com/acme/other.git')
+      await runGit(['config', 'remote.convert-me.pushurl', 'git@example.com:custom/push.git'], repoDir)
+      const before = await runGit(['config', '--get-all', 'remote.convert-me.fetch'], repoDir)
+      const remotes = await session.setRemoteUrl('convert-me', https, ssh)
+      expect(remotes).toContainEqual({ name: 'convert-me', url: ssh })
+      expect(remotes).toContainEqual({ name: 'leave-me', url: 'https://github.com/acme/other.git' })
+      expect((await runGit(['remote', 'get-url', '--push', 'convert-me'], repoDir)).stdout.trim()).toBe('git@example.com:custom/push.git')
+      expect((await runGit(['config', '--get-all', 'remote.convert-me.fetch'], repoDir)).stdout).toBe(before.stdout)
+      await expect(session.setRemoteUrl('convert-me', https, ssh)).rejects.toThrow('has changed')
+      await expect(session.setRemoteUrl('convert-me', ssh, '-bad')).rejects.toThrow('valid SSH')
+      await expect(session.setRemoteUrl('missing', https, ssh)).rejects.toThrow('has changed')
+    } finally {
+      await runGit(['remote', 'remove', 'convert-me'], repoDir, { okCodes: [0, 2, 128] })
+      await runGit(['remote', 'remove', 'leave-me'], repoDir, { okCodes: [0, 2, 128] })
+    }
+  })
+
   test('lists configured remotes and supports adding and removing them', async () => {
     const originUrl = 'https://example.com/acme/project.git'
     const upstreamUrl = 'git@example.com:acme/upstream.git'

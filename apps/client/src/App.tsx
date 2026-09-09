@@ -1,6 +1,7 @@
 import { lazy, Profiler, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from './store'
+import { SshConversionDialog } from './components/SshConversionDialog'
 import { recordGraphRender } from './performance-metrics'
 import { listDirectory as fetchDirectory } from './api'
 import { RepoOpen } from './components/RepoOpen'
@@ -53,6 +54,7 @@ function uncommittedFileCount(changes: WorktreeChangesResponse | null): number {
 export function App() {
   const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'remotes'>('appearance')
   const [fetching, setFetching] = useState(false)
   const [repoPathInput, setRepoPathInput] = useState('')
   const [repoPathEditing, setRepoPathEditing] = useState(false)
@@ -277,9 +279,10 @@ export function App() {
         </button>
         {settingsOpen && (
           <Suspense fallback={null}>
-            <SettingsDialog open onClose={() => setSettingsOpen(false)} />
+            <SettingsDialog open initialSection={settingsInitialSection} onClose={() => setSettingsOpen(false)} />
           </Suspense>
         )}
+        <SshConversionDialog onOpenSettings={() => { setSettingsInitialSection('remotes'); setSettingsOpen(true) }} />
         <ErrorDialog error={errorDialog} onDismiss={dismissError} />
       </>
     )
@@ -617,10 +620,11 @@ export function App() {
 
       <RepositoryDetailPane />
 
+      <SshConversionDialog onOpenSettings={() => { setSettingsInitialSection('remotes'); setSettingsOpen(true) }} />
       <ErrorDialog error={errorDialog} onDismiss={dismissError} />
       {settingsOpen && (
         <Suspense fallback={null}>
-          <SettingsDialog open onClose={() => setSettingsOpen(false)} />
+          <SettingsDialog open initialSection={settingsInitialSection} onClose={() => setSettingsOpen(false)} />
         </Suspense>
       )}
     </div>

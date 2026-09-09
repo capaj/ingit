@@ -303,6 +303,18 @@ export class RepoSession {
     return refs
   }
 
+  async setRemoteUrl(name: string, expectedUrl: string, url: string): Promise<RemoteSummary[]> {
+    const remote = (await this.getRemotes()).find((remote) => remote.name === name)
+    if (!remote || remote.url !== expectedUrl) {
+      throw new Error('The remote URL has changed. Reopen the repository before converting it.')
+    }
+    if (!/^(ssh:\/\/[^\s]+|[^\s@:]+@[^\s:]+:.+)$/.test(url) || /[\r\n]/.test(url)) {
+      throw new Error('Enter a valid SSH remote URL.')
+    }
+    await runGit(['remote', 'set-url', '--', name, url], this.rootPath)
+    return this.getRemotes()
+  }
+
   async getRemotes(): Promise<RemoteSummary[]> {
     const { stdout } = await runGit(['remote'], this.rootPath)
     const names = stdout
