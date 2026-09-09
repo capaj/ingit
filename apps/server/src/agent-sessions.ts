@@ -147,6 +147,15 @@ function isCodexAppServer(info: ProcInfo): boolean {
   return hasExecutableName(info, 'codex') && info.argv.slice(1).includes('app-server')
 }
 
+/** The outer app owns the UI; nested helper bundles do not. */
+export function codexDesktopAppPath(
+  info: ProcInfo,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (platform !== 'darwin' || !isCodexAppServer(info)) return null
+  return info.exe.match(/^(\/.*?\.app)\/Contents\//)?.[1] ?? null
+}
+
 export function detectAgent(
   info: ProcInfo,
   platform: NodeJS.Platform = process.platform,
@@ -203,6 +212,14 @@ export function classifyAgentProcess(
   platform: NodeJS.Platform = process.platform,
 ): Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'> | null {
   if (info.state.startsWith('Z') || !info.cwd) return null
+
+  const desktopApp = codexDesktopAppPath(info, platform)
+  if (desktopApp) {
+    return {
+      pid: info.pid, agent, kind: 'ide', cwd: info.cwd, tty: null,
+      ide: basename(desktopApp, '.app'),
+    }
+  }
 
   const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.command) || m.pattern.test(info.exe))
   if (ideMarker) {
@@ -1126,13 +1143,16 @@ export async function listAgentSessions(): Promise<{
   const cpuByPid = new Map(
     [...procs.map(({ info }) => info), ...codexAppServers].map((info) => [info.pid, info.cpuTicks]))
 
-  // The VS Code codex extension runs one app-server per window; each open
-  // conversation holds its rollout file open, whose meta names the workspace.
+  // Codex desktop and IDE app-servers hold an open rollout per conversation,
+  // whose metadata names the workspace.
   const appServerItems: Array<{
     session: Omit<AgentSession, 'focusable' | 'gitRoot' | 'busy' | 'title'>
     rollout: string
   }> = []
+  const desktopPids = new Set<number>()
   for (const info of codexAppServers) {
+    const desktopApp = codexDesktopAppPath(info)
+    if (desktopApp) desktopPids.add(info.pid)
     const ideMarker = IDE_MARKERS.find((m) => m.pattern.test(info.command) || m.pattern.test(info.exe))
     for (const rollout of await openCodexRollouts(info.pid)) {
       const cwd = await codexRolloutCwd(rollout)
@@ -1144,7 +1164,9 @@ export async function listAgentSessions(): Promise<{
           kind: 'ide',
           cwd,
           tty: null,
-          ide: ideMarker?.ide ?? 'vscode',
+          ide: desktopApp
+            ? basename(desktopApp, '.app')
+            : ideMarker?.ide ?? 'vscode',
         },
         rollout,
       })
@@ -1165,10 +1187,10 @@ export async function listAgentSessions(): Promise<{
       gitRoot: await findGitRoot(s.cwd),
       busy: sampleBusy(s.pid, cpuByPid.get(s.pid) ?? 0),
       focusable:
-        s.kind === 'ide'
+        desktopPids.has(s.pid) || (s.kind === 'ide'
           ? canFocusTerminals || (caps.ideClis.get(ideCliFor(s.ide!) ?? '') ?? false)
         : s.kind === 'terminal' ? canFocusTerminals
-        : false,
+        : false),
     },
     rollout,
   }))))
@@ -1286,6 +1308,15 @@ export async function focusAgentSession(pid: number, cwdOverride?: string): Prom
   const agent = info ? (isCodexAppServer(info) ? 'codex' : detectAgent(info)) : null
   if (!info || !agent) {
     return { ok: false, error: `No agent session with pid ${pid} (it may have exited)` }
+  }
+  const desktopApp = codexDesktopAppPath(info)
+  if (desktopApp) {
+    try {
+      await execFile('/usr/bin/open', ['-a', desktopApp], { timeout: 5_000 })
+      return { ok: true, method: 'macos-app' }
+    } catch (err) {
+      return { ok: false, error: `Could not activate ${basename(desktopApp, '.app')}: ${err instanceof Error ? err.message : String(err)}` }
+    }
   }
   const session = classifyAgentProcess(info, agent)
   if (!session) return { ok: false, error: `Process ${pid} is not a focusable agent session` }

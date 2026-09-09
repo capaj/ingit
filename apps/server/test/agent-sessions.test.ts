@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { setTimeout as sleep } from 'node:timers/promises'
 import {
   classifyAgentProcess,
+  codexDesktopAppPath,
   detectAgent,
   listAgentSessions,
 } from '../src/agent-sessions.js'
@@ -66,6 +67,37 @@ describe('listAgentSessions', () => {
       await child.exited
       await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     }
+  })
+})
+
+describe('macOS Codex desktop sessions', () => {
+  const desktopProcess = (app: string) => processInfo({
+    exe: `${app}/Contents/Resources/codex`,
+    comm: `${app}/Contents/Resources/codex`,
+    argv: [`${app}/Contents/Resources/codex`, '-c', 'key=value', 'app-server'],
+    cwd: '/Users/me/project',
+  })
+
+  test.each(['/Applications/ChatGPT.app', '/Users/me/Applications/Codex Preview.app'])(
+    'recognizes the app-server inside %s as a desktop session', (app) => {
+      const info = desktopProcess(app)
+      expect(codexDesktopAppPath(info, 'darwin')).toBe(app)
+      expect(classifyAgentProcess(info, 'codex', 'darwin')).toMatchObject({
+        kind: 'ide', tty: null, ide: app.split('/').at(-1)!.replace('.app', ''),
+      })
+    },
+  )
+
+  test('selects the outer application instead of a nested helper', () => {
+    const info = desktopProcess('/Applications/ChatGPT.app/Contents/Helpers/Service.app')
+    expect(codexDesktopAppPath(info, 'darwin')).toBe('/Applications/ChatGPT.app')
+  })
+
+  test('does not activate a desktop app for CLI, extension, or non-macOS sessions', () => {
+    const info = desktopProcess('/Applications/ChatGPT.app')
+    expect(codexDesktopAppPath({ ...info, argv: [info.exe, 'exec'] }, 'darwin')).toBeNull()
+    expect(codexDesktopAppPath({ ...info, exe: '/Users/me/.vscode/extensions/openai/bin/codex' }, 'darwin')).toBeNull()
+    expect(codexDesktopAppPath(info, 'linux')).toBeNull()
   })
 })
 
