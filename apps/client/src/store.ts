@@ -723,7 +723,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
   setWorktreeCommitMessage: (message) => set({ worktreeCommitMessage: message }),
 
   reloadFromServer: async () => {
-    const { repoPath } = get()
+    const { repoPath, remotes: remotesBeforeReload } = get()
     const normalizeAcrossWorktrees = get().normalizeAcrossWorktrees
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
@@ -760,10 +760,15 @@ export const useAppStore = create<AppState>((baseSet, get) => {
         }
       }
 
+      if (get().repoId !== repoId) return
       set((s) => ({
         refs,
-        remotes,
-        selectedRemoteName: reconcileSelectedRemote(remotes, s.selectedRemoteName),
+        // A remote mutation may finish while the other refresh requests are
+        // still running. Do not replace its result with this older snapshot.
+        ...(s.remotes === remotesBeforeReload ? {
+          remotes,
+          selectedRemoteName: reconcileSelectedRemote(remotes, s.selectedRemoteName),
+        } : {}),
         stashes,
         selectedStashSha: s.selectedStashSha && stashes.some((stash) => stash.sha === s.selectedStashSha)
           ? s.selectedStashSha
