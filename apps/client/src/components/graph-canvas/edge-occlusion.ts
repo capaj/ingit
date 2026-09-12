@@ -178,6 +178,52 @@ export function findClearTargetLeadXAroundRails(
   return undefined
 }
 
+function intermediateNodes(
+  from: OcclusionRouteNode,
+  to: OcclusionRouteNode,
+  occupiedLanes: number[],
+  geometry: EdgeOcclusionGeometry,
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
+): EdgeRoutePoint[] {
+  const firstIntermediateRow = Math.min(from.idx, to.idx) + 1
+  const lastIntermediateRow = Math.max(from.idx, to.idx) - 1
+  const nodes: EdgeRoutePoint[] = []
+  for (let idx = firstIntermediateRow; idx <= lastIntermediateRow; idx++) {
+    const lane = occupiedLanes[idx]
+    const lanes = [
+      ...(lane === undefined ? [] : [lane]),
+      ...(additionalOccupiedLanes?.get(idx) ?? []),
+    ]
+    for (const occupiedLane of lanes) {
+      nodes.push({
+        x: from.x + (occupiedLane - from.lane) * geometry.laneWidth,
+        y: from.y + (idx - from.idx) * geometry.rowHeight,
+      })
+    }
+  }
+  return nodes
+}
+
+/** Keep the actual side-entry polyline clear of commits, including worktrees. */
+export function findClearTargetLeadXAroundNodes(
+  from: OcclusionRouteNode,
+  to: OcclusionRouteNode,
+  occupiedLanes: number[],
+  geometry: EdgeOcclusionGeometry,
+  points: EdgeRoutePoint[],
+  targetSide: 'left' | 'right',
+  additionalOccupiedLanes?: ReadonlyMap<number, readonly number[]>,
+): number | undefined {
+  const nodes = intermediateNodes(from, to, occupiedLanes, geometry, additionalOccupiedLanes)
+  // A zero-length rail has the same distance test as a circular node.
+  return findClearTargetLeadXAroundRails(
+    points,
+    targetSide,
+    nodes.map((node) => ({ x: node.x, startY: node.y, endY: node.y })),
+    geometry.nodeRadius + geometry.clearance,
+  )
+}
+
 function curveIntersectsIntermediateNode(
   from: OcclusionRouteNode,
   to: OcclusionRouteNode,
@@ -193,31 +239,14 @@ function curveIntersectsIntermediateNode(
   const controlB = { x: end.x, y: end.y - curveDy * geometry.curveControlRatio }
   const collisionRadiusSquared = (geometry.nodeRadius + geometry.clearance) ** 2
 
-  // The short curves checked here span only a handful of rows. Sampling them
-  // into small line segments keeps the collision check simple while remaining
-  // comfortably sub-pixel at graph scale.
+  // Sample short curves into line segments, comfortably sub-pixel at graph scale.
   const sampleCount = Math.max(32, Math.ceil(Math.hypot(end.x - start.x, end.y - start.y) / 4))
-  const firstIntermediateRow = Math.min(from.idx, to.idx) + 1
-  const lastIntermediateRow = Math.max(from.idx, to.idx) - 1
-  const intermediateNodes: EdgeRoutePoint[] = []
-  for (let idx = firstIntermediateRow; idx <= lastIntermediateRow; idx++) {
-    const lane = occupiedLanes[idx]
-    const lanes = [
-      ...(lane === undefined ? [] : [lane]),
-      ...(additionalOccupiedLanes?.get(idx) ?? []),
-    ]
-    for (const occupiedLane of lanes) {
-      intermediateNodes.push({
-        x: from.x + (occupiedLane - from.lane) * geometry.laneWidth,
-        y: from.y + (idx - from.idx) * geometry.rowHeight,
-      })
-    }
-  }
+  const nodes = intermediateNodes(from, to, occupiedLanes, geometry, additionalOccupiedLanes)
 
   let previous = start
   for (let sample = 1; sample <= sampleCount; sample++) {
     const current = cubicPoint(start, controlA, controlB, end, sample / sampleCount)
-    if (intermediateNodes.some((node) => (
+    if (nodes.some((node) => (
       squaredDistanceToSegment(node, previous, current) <= collisionRadiusSquared
     ))) return true
     previous = current

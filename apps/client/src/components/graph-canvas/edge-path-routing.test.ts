@@ -493,6 +493,36 @@ describe('outer rail path', () => {
     expect(plan.targetLeadOffset).toBeGreaterThan(LANE_WIDTH)
   })
 
+  test('bends a side-entry edge around an intermediate commit on either side', () => {
+    for (const side of [-1, 1]) {
+      const rows = [
+        row('skip-churned', side * 2),
+        row('indexnow-merge', -side),
+        row('indexnow', -side),
+        row('recover-ads', side),
+        row('main', 0),
+        row('main-parent', 0),
+        row('recover-parent', side),
+      ]
+      const layout = buildLayout(rows)
+      const edge = (key: string, from: number, to: number) => ({
+        key, from: layout.nodes[from], to: layout.nodes[to], isMerge: false,
+      })
+      const routing = buildEdgeRoutingData([
+        edge('skip-main', 0, 4),
+        edge('main-continuation', 4, 5),
+        edge('recover-continuation', 3, 6),
+      ], rows.map((entry) => entry.lane))
+
+      const plan = routing.plans.get('skip-main')
+      expect(plan?.mode).toBe('curve')
+      if (plan?.mode !== 'curve') throw new Error('expected a curve route')
+      // Hold the diagonal outside the intervening node, then enter main
+      // horizontally below it. Crossing its rail below the node is safe.
+      expect(side * (plan.targetLeadOffset ?? 0)).toBeGreaterThan(LANE_WIDTH + 16)
+    }
+  })
+
   test('leaves at 45 degrees when the source also continues vertically', () => {
     const rows = [
       row('source', 2),

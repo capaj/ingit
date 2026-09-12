@@ -37,6 +37,7 @@ import {
 import {
   findClearEndpointRail,
   findClearTargetLeadXAroundRails,
+  findClearTargetLeadXAroundNodes,
   findOcclusionHookTrack,
 } from './graph-canvas/edge-occlusion'
 import {
@@ -2389,11 +2390,26 @@ export function buildEdgeRoutingData(
   for (const edge of visibleEdges) {
     const plan = plans.get(edge.key)
     if (plan?.mode !== 'curve' || !plan.targetSide) continue
-    const targetLeadX = findClearCurveTargetLeadX(
+    let targetLeadX = findClearCurveTargetLeadX(
       edge,
       plan,
       verticalRailClearanceSegments,
     )
+    // Side entry changes the original cubic into a rounded polyline. Check
+    // that final shape too: it may hit a commit the cubic safely passed.
+    // A rail crossing below a node is preferable to hiding the edge under it.
+    const geometry = buildSideEntryCurvePoints(
+      edge.from, edge.to, plan.targetSide, NODE_RADIUS, plan.sourceSide, targetLeadX,
+    )
+    targetLeadX = findClearTargetLeadXAroundNodes(
+      { ...edge.from, lane: edge.from.row.lane },
+      { ...edge.to, lane: edge.to.row.lane },
+      occupiedLanes,
+      EDGE_OCCLUSION_GEOMETRY,
+      geometry.points,
+      plan.targetSide,
+      additionalOccupiedLanes,
+    ) ?? targetLeadX
     if (targetLeadX === undefined) continue
 
     plans.set(edge.key, {

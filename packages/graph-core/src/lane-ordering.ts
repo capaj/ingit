@@ -98,6 +98,7 @@ export function orderLaneSegmentsByContinuity(
 
 function buildSegments(rows: LaneRow[]): SegmentModel {
   const rowBySha = new Map(rows.map((row) => [row.sha, row]))
+  const lastRow = rows.reduce((last, row) => Math.max(last, row.row), 0)
   const firstParentChildren = new Map<string, LaneRow[]>()
   for (const row of rows) {
     const firstParent = row.parentShas[0]
@@ -259,6 +260,11 @@ function buildSegments(rows: LaneRow[]): SegmentModel {
       if (parent.lane !== row.lane) {
         extendSegmentToRow(segment, parent.row)
       }
+    } else if (firstParent) {
+      // Missing parents render as continuations to the bottom of the loaded
+      // graph. The rail still occupies this gutter after its last commit.
+      segment.continuity += lastRow - row.row
+      extendSegmentToRow(segment, lastRow)
     }
   }
 

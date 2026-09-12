@@ -89,12 +89,12 @@ export class Projection {
   }
 
   /**
-   * For lane allocation we only keep continuations for parents that are
-   * actually present in the loaded projection. Parents outside the loaded
-   * window still get edge segments, but they should not occupy visible lanes.
+   * First-parent rails continue to the bottom of the graph when their parent
+   * is not loaded, so keep their gutters reserved. Unloaded merge parents do
+   * not need a separate lane until their commits are available.
    */
   private getKnownParentShas(parentShas: string[]): string[] {
-    return parentShas.filter((sha) => this.shaIndex.has(sha))
+    return parentShas.filter((sha, index) => index === 0 || this.shaIndex.has(sha))
   }
 
   /**
