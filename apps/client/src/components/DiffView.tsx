@@ -224,7 +224,8 @@ function ImageDiffView({ imageDiff, path }: { imageDiff: ImageDiff; path: string
         <figure
           key={label}
           style={{
-            flex: '1 1 220px',
+            flex: '0 1 256px',
+            width: '100%',
             minWidth: 0,
             margin: 0,
             display: 'flex',
@@ -262,21 +263,39 @@ function ImageDiffView({ imageDiff, path }: { imageDiff: ImageDiff; path: string
               backgroundSize: '16px 16px',
             }}
           >
-            <img
-              src={preview.dataUrl}
+            <ImageThumbnail
+              key={preview.dataUrl}
+              preview={preview}
               alt={`${path} ${label.toLowerCase()}`}
-              draggable={false}
-              style={{
-                display: 'block',
-                maxWidth: '100%',
-                maxHeight: 410,
-                objectFit: 'contain',
-              }}
             />
           </div>
         </figure>
       ))}
     </div>
+  )
+}
+
+function ImageThumbnail({ preview, alt }: { preview: ImagePreview; alt: string }) {
+  const [failed, setFailed] = useState(false)
+
+  if (failed) {
+    return <span style={{ color: '#6c7086', fontSize: 11 }}>Image preview unavailable</span>
+  }
+
+  return (
+    <img
+      src={preview.dataUrl}
+      alt={alt}
+      draggable={false}
+      decoding="async"
+      onError={() => setFailed(true)}
+      style={{
+        display: 'block',
+        maxWidth: '100%',
+        maxHeight: 160,
+        objectFit: 'contain',
+      }}
+    />
   )
 }
 
