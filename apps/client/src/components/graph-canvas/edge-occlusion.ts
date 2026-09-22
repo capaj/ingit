@@ -119,12 +119,26 @@ function polylineClearsVerticalRails(
   points: EdgeRoutePoint[],
   rails: VerticalClearanceRail[],
   clearanceSquared: number,
+  allowHorizontalCrossings: boolean,
 ) {
   return rails.every((rail) => {
     for (let index = 1; index < points.length; index++) {
+      const start = points[index - 1]
+      const end = points[index]
+      // A perpendicular crossing is readable. Keep it away from the rounded
+      // corner and node attachment so the diagonal still clears the rail.
+      if (
+        allowHorizontalCrossings
+        && index === points.length - 1
+        && Math.abs(start.y - end.y) < 0.001
+        && rail.x > Math.min(start.x, end.x)
+        && rail.x < Math.max(start.x, end.x)
+        && (start.x - rail.x) ** 2 >= clearanceSquared
+        && (end.x - rail.x) ** 2 >= clearanceSquared
+      ) continue
       if (squaredDistanceToVerticalRail(
-        points[index - 1],
-        points[index],
+        start,
+        end,
         rail,
       ) < clearanceSquared) return false
     }
@@ -135,16 +149,18 @@ function polylineClearsVerticalRails(
 /**
  * Extend a side-entry curve's target lead past a nearby vertical rail, but
  * only when the resulting polyline has the requested clearance from all rails.
+ * Optionally let the horizontal target segment cross rails at right angles.
  */
 export function findClearTargetLeadXAroundRails(
   points: EdgeRoutePoint[],
   targetSide: 'left' | 'right',
   rails: VerticalClearanceRail[],
   clearance: number,
+  allowHorizontalCrossings = false,
 ): number | undefined {
   if (points.length < 4) return undefined
   const clearanceSquared = clearance ** 2
-  if (polylineClearsVerticalRails(points, rails, clearanceSquared)) return undefined
+  if (polylineClearsVerticalRails(points, rails, clearanceSquared, allowHorizontalCrossings)) return undefined
 
   const targetEnd = points[points.length - 1]
   const defaultTargetLead = points[points.length - 2]
@@ -171,7 +187,7 @@ export function findClearTargetLeadXAroundRails(
       ...defaultTargetLead,
       x: targetLeadX,
     }
-    if (polylineClearsVerticalRails(candidatePoints, rails, clearanceSquared)) {
+    if (polylineClearsVerticalRails(candidatePoints, rails, clearanceSquared, allowHorizontalCrossings)) {
       return targetLeadX
     }
   }

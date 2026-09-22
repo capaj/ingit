@@ -371,16 +371,51 @@ describe('outer rail path', () => {
       rows.map((entry) => entry.lane),
     )
 
-    expect(routing.plans.get('branch')).toEqual({
-      mode: 'straight',
-      bundleJoinY: layout.nodes[2].y + 16,
-    })
+    expect(routing.plans.get('branch')).toEqual({ mode: 'straight' })
     expect(routing.plans.get('upper-merge')?.mode).toBe('outer-rail')
     expect(routing.plans.get('lower-merge')?.mode).toBe('outer-rail')
     expect(routing.plans.get('side-curve')).toEqual({ mode: 'curve', targetSide: 'left' })
-    expect(routing.bundleOffsets.get('branch')).toBe(-6.25)
-    expect(routing.bundleOffsets.get('upper-merge')).toBe(0)
-    expect(routing.bundleOffsets.get('lower-merge')).toBe(5)
+    expect(routing.bundleOffsets.get('branch')).toBe(0)
+    expect(routing.bundleOffsets.get('upper-merge')).toBe(20)
+    expect(routing.bundleOffsets.get('lower-merge')).toBe(25)
+  })
+
+  test('keeps a commit chain straight with incoming rails on their approach side', () => {
+    // The reported topology: two branches merge main at row 10, while the
+    // latest three main commits sit inside the first merge edge's interval.
+    for (const side of [-1, 1]) {
+      const rows = [
+        row('outreach', side),
+        row('main', 0),
+        row('main-parent', 0),
+        row('b5968f541c5b', 0),
+        row('daily', side * 2),
+        ...Array.from({ length: 5 }, (_, index) => row(`filler-${index}`, -side * 2)),
+        row('3aa36e76f330', 0),
+        row('older-main', 0),
+      ]
+      const layout = buildLayout(rows)
+      const edge = (key: string, from: number, to: number, isMerge = false) => ({
+        key, from: layout.nodes[from], to: layout.nodes[to], isMerge,
+      })
+      const chain = [edge('tip', 1, 2), edge('parent', 2, 3), edge('reported', 3, 10), edge('older', 10, 11)]
+      const edges = [edge('outreach-merge', 0, 10, true), ...chain, edge('daily-merge', 4, 10, true)]
+      for (const orderedEdges of [edges, [...edges].reverse()]) {
+        const routing = buildEdgeRoutingData(orderedEdges, rows.map((entry) => entry.lane))
+        for (const segment of chain) {
+          expect(routing.plans.get(segment.key)).toEqual({ mode: 'straight' })
+          expect(routing.bundleOffsets.get(segment.key)).toBe(0)
+          expect(buildStraightEdgePath(segment.from, segment.to, routing.bundleOffsets.get(segment.key)))
+            .toBe(`M${segment.from.x},${segment.from.y + 15}L${segment.to.x},${segment.to.y - 15}`)
+        }
+        // Both rails clear the intervening nodes; the later arrival stays
+        // farther outside so it does not cross the earlier vertical rail.
+        const inner = side * routing.bundleOffsets.get('outreach-merge')!
+        const outer = side * routing.bundleOffsets.get('daily-merge')!
+        expect(inner).toBeGreaterThan(16)
+        expect(outer - inner).toBeGreaterThanOrEqual(5)
+      }
+    }
   })
 
   test('starts a bundled straight rail centered before jogging onto its track', () => {
@@ -396,6 +431,49 @@ describe('outer rail path', () => {
     expect(path).toContain('100,270')
     expect(path).toContain('93.75,280')
     expect(path).toMatch(/L93\.75,386\.3641098567\d+$/)
+  })
+
+  test('keeps overlapping straight branches close together on distinct tracks', () => {
+    for (const side of [-1, 1]) {
+      const rows = Array.from({ length: 9 }, (_, index) => row(
+        index === 3 ? 'e047e8b23759' : index === 5 ? 'ade88b2f1098' : `node-${index}`,
+        [0, 3, 5, 8].includes(index) ? side * 2 : 0,
+      ))
+      const layout = buildLayout(rows)
+      const edges = [
+        { key: 'passing-branch', from: layout.nodes[0], to: layout.nodes[8], isMerge: false },
+        { key: 'shopify', from: layout.nodes[3], to: layout.nodes[5], isMerge: false },
+      ]
+      for (const orderedEdges of [edges, [...edges].reverse()]) {
+        const routing = buildEdgeRoutingData(orderedEdges, rows.map((entry) => entry.lane))
+        expect(routing.bundleOffsets.get('shopify')).toBe(0)
+        // Two 4.5px strokes with a 3px gap, rather than overlapping or moving
+        // a whole node radius apart as incoming merge rails do.
+        expect(routing.bundleOffsets.get('passing-branch')).toBe(side * 7.5)
+        const passing = edges[0]
+        expect(buildStraightEdgePath(passing.from, passing.to, routing.bundleOffsets.get(passing.key)))
+          .toContain(`L${passing.from.x + side * 7.5},`)
+      }
+    }
+  })
+
+  test('keeps every straight track distinct even beyond the node radius', () => {
+    for (const side of [-1, 1]) {
+      const offsets = buildVerticalBundleOffsets([
+        { key: 'center', railKey: 'gutter', topIdx: 3, bottomIdx: 5, centered: true, side: side < 0 ? 'left' : 'right', strokeWidth: 4.5 },
+        ...[0, 1, 2].map((index) => ({
+          key: `passing-${index}`, railKey: 'gutter', topIdx: index, bottomIdx: 8 - index,
+          centered: true, side: side < 0 ? 'left' as const : 'right' as const, strokeWidth: 4.5,
+        })),
+      ])
+      expect(offsets.get('center')).toBe(0)
+      for (let index = 0; index < 3; index++) {
+        const offset = offsets.get(`passing-${index}`)!
+        expect(offset).toBe(side * (index + 1) * 7.5)
+        expect(buildStraightEdgePath({ x: 100, y: 0 }, { x: 100, y: 400 }, offset))
+          .toContain(`L${100 + offset},`)
+      }
+    }
   })
 
   test('bends a side-entry curve into radial segments at both node borders', () => {
@@ -491,6 +569,44 @@ describe('outer rail path', () => {
     if (plan?.mode !== 'curve') throw new Error('expected a curve route')
     expect(plan.targetSide).toBe('right')
     expect(plan.targetLeadOffset).toBeGreaterThan(LANE_WIDTH)
+  })
+
+  test('crosses an intervening branch rail horizontally before turning toward the source', () => {
+    for (const side of [-1, 1]) {
+      const rows = [
+        row('source-presence', side * 2),
+        row('purple-tip', side),
+        row('filler-2', -side * 2),
+        row('filler-3', -side * 2),
+        row('source-parent', side * 2),
+        row('main', 0),
+        row('main-parent', 0),
+        row('purple-parent', side),
+      ]
+      const layout = buildLayout(rows)
+      const edge = (key: string, from: number, to: number, isMerge = false) => ({
+        key, from: layout.nodes[from], to: layout.nodes[to], isMerge,
+      })
+      const routing = buildEdgeRoutingData([
+        edge('source-main', 0, 5, true),
+        edge('source-continuation', 0, 4),
+        edge('main-continuation', 5, 6),
+        edge('purple-continuation', 1, 7),
+      ], rows.map((entry) => entry.lane))
+      const plan = routing.plans.get('source-main')
+      expect(plan?.mode).toBe('curve')
+      if (plan?.mode !== 'curve') throw new Error('expected a curve route')
+      expect(side * (plan.targetLeadOffset ?? 0)).toBeGreaterThan(LANE_WIDTH + 5)
+      expect(side * (plan.targetLeadOffset ?? 0)).toBeLessThan(LANE_WIDTH * 2)
+      const path = buildCurvedEdgePath(
+        layout.nodes[0], layout.nodes[5], plan.targetSide, 16, plan.sourceSide,
+        layout.nodes[5].x + plan.targetLeadOffset!,
+      )
+      // The rounded corner finishes outside the purple rail, leaving the
+      // crossing itself on the horizontal segment into main.
+      expect(path).toContain(`${layout.nodes[5].x + plan.targetLeadOffset! - side * 5},${layout.nodes[5].y}`)
+      expect(path).toEndWith(`L${layout.nodes[5].x + side * 15},${layout.nodes[5].y}`)
+    }
   })
 
   test('bends a side-entry edge around an intermediate commit on either side', () => {

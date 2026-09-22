@@ -1055,6 +1055,12 @@ export function buildStraightEdgePath(
   bundleJoinY?: number,
 ) {
   if (Math.abs(from.x - to.x) < 0.001 && Math.abs(bundleOffset) > 0.001) {
+    // Crowded gutters can place a passing branch beyond the node radius.
+    // Bend back into the endpoints instead of clamping several rails onto
+    // the same X coordinate.
+    if (Math.abs(bundleOffset) > Math.min(NODE_RADIUS - 1, targetNodeRadius - 1)) {
+      return buildOuterRailPath(from, to, from.x + bundleOffset, false, 0, targetNodeRadius, true)
+    }
     const verticalDirection = to.y > from.y ? 1 : -1
     const sourceRadius = NODE_RADIUS - 1
     const targetRadius = Math.max(1, targetNodeRadius - 1)
@@ -1914,7 +1920,8 @@ interface VerticalRailCandidate {
   topIdx: number
   bottomIdx: number
   bundleOrder?: number
-  railStartY?: number
+  centered?: boolean
+  side?: 'left' | 'right'
   strokeWidth?: number
 }
 
@@ -1990,42 +1997,75 @@ export function buildVerticalBundleOffsets(
     }
 
     for (const component of components.values()) {
-      const orderedComponent = [...component].sort((left, right) => (
-        (left.bundleOrder ?? 0) - (right.bundleOrder ?? 0)
-        || left.topIdx - right.topIdx
-        || left.bottomIdx - right.bottomIdx
-        || left.key.localeCompare(right.key)
-      ))
-      const slots: VerticalRailCandidate[][] = []
-      const slotWidths: number[] = []
-      const assignments: Array<{ key: string; slot: number }> = []
-      for (const candidate of orderedComponent) {
-        let slot = slots.findIndex((assigned) => (
-          assigned.every((previous) => !verticalRailCandidatesConflict(previous, candidate))
+      // Give short commit-to-commit segments the center before longer passing
+      // branches. Two straight edges can still overlap in a reused gutter.
+      const centered: VerticalRailCandidate[] = []
+      const straightCandidates = component.filter((candidate) => candidate.centered)
+        .sort((left, right) => (
+          (left.bottomIdx - left.topIdx) - (right.bottomIdx - right.topIdx)
+          || left.topIdx - right.topIdx
+          || left.key.localeCompare(right.key)
         ))
-        if (slot < 0) {
-          slot = slots.length
-          slots.push([])
+      for (const candidate of straightCandidates) {
+        if (centered.every((other) => !verticalRailCandidatesConflict(candidate, other))) {
+          centered.push(candidate)
         }
-        slots[slot].push(candidate)
-        slotWidths[slot] = Math.max(slotWidths[slot] ?? 0, candidate.strokeWidth ?? 3)
-        assignments.push({ key: candidate.key, slot })
       }
+      const centeredKeys = new Set(centered.map((candidate) => candidate.key))
+      const centeredWidth = Math.max(0, ...centered.map((candidate) => candidate.strokeWidth ?? 3))
+      for (const candidate of centered) offsets.set(candidate.key, 0)
+      const bundles = centered.length > 0
+        ? (['left', 'right'] as const).map((side) => ({
+          candidates: component.filter((candidate) => !centeredKeys.has(candidate.key) && candidate.side === side),
+          direction: side === 'left' ? -1 : 1,
+        }))
+        : [{ candidates: component, direction: 0 }]
 
-      const slotPositions = [0]
-      for (let slot = 1; slot < slotWidths.length; slot++) {
-        slotPositions[slot] = slotPositions[slot - 1]
-          + slotWidths[slot - 1] / 2
-          + clearance
-          + slotWidths[slot] / 2
-      }
-      const middleSlot = Math.floor(slotPositions.length / 2)
-      const anchor = slotPositions.length % 2 === 1
-        ? slotPositions[middleSlot]
-        : (slotPositions[middleSlot - 1] + slotPositions[middleSlot]) / 2
+      for (const bundle of bundles) {
+        if (bundle.candidates.length === 0) continue
+        const orderedComponent = [...bundle.candidates].sort((left, right) => (
+          (left.bundleOrder ?? 0) - (right.bundleOrder ?? 0)
+          || left.topIdx - right.topIdx
+          || left.bottomIdx - right.bottomIdx
+          || left.key.localeCompare(right.key)
+        ))
+        const slots: VerticalRailCandidate[][] = []
+        const slotWidths: number[] = []
+        const assignments: Array<{ key: string; slot: number }> = []
+        for (const candidate of orderedComponent) {
+          let slot = slots.findIndex((assigned) => (
+            assigned.every((previous) => !verticalRailCandidatesConflict(previous, candidate))
+          ))
+          if (slot < 0) {
+            slot = slots.length
+            slots.push([])
+          }
+          slots[slot].push(candidate)
+          slotWidths[slot] = Math.max(slotWidths[slot] ?? 0, candidate.strokeWidth ?? 3)
+          assignments.push({ key: candidate.key, slot })
+        }
 
-      for (const assignment of assignments) {
-        offsets.set(assignment.key, slotPositions[assignment.slot] - anchor)
+        const slotPositions: number[] = []
+        for (let slot = 0; slot < slotWidths.length; slot++) {
+          const previousPosition = slot === 0 ? 0 : slotPositions[slot - 1]
+            + slotWidths[slot - 1] / 2 + clearance + slotWidths[slot] / 2
+          // Straight branches hug the centered stroke. Incoming hooks still
+          // need to clear the node envelope when they enter this gutter.
+          const centerClearance = bundle.direction === 0 ? 0
+            : (slots[slot].every((candidate) => candidate.centered) ? centeredWidth / 2 : NODE_RADIUS)
+              + clearance + slotWidths[slot] / 2
+          slotPositions[slot] = Math.max(previousPosition, centerClearance)
+        }
+        const middleSlot = Math.floor(slotPositions.length / 2)
+        const anchor = bundle.direction !== 0
+          ? 0
+          : slotPositions.length % 2 === 1
+            ? slotPositions[middleSlot]
+            : (slotPositions[middleSlot - 1] + slotPositions[middleSlot]) / 2
+
+        for (const assignment of assignments) {
+          offsets.set(assignment.key, (slotPositions[assignment.slot] - anchor) * (bundle.direction || 1))
+        }
       }
     }
   }
@@ -2181,6 +2221,7 @@ function findClearCurveTargetLeadX(
     plan.targetSide,
     rails.filter((rail) => !railSharesEndpoint(edge, rail)),
     EDGE_CURVE_RAIL_CLEARANCE,
+    true,
   )
 }
 
@@ -2284,41 +2325,23 @@ export function buildEdgeRoutingData(
     if (!plan) return []
     const railKey = edgeBundleKey(edge, plan)
     if (!railKey) return []
+    const railX = edgeVerticalRailSegments(edge, plan, 0)[0]?.x ?? edge.from.x
+    const otherEndpointX = Math.abs(edge.from.x - railX) > 0.001 ? edge.from.x : edge.to.x
     return [{
       key: edge.key,
       railKey,
       topIdx: Math.min(edge.from.idx, edge.to.idx),
       bottomIdx: Math.max(edge.from.idx, edge.to.idx),
-      // Keep the first-parent continuation to the left and incoming merge
-      // rails to the right, independent of which interval starts first.
+      centered: plan.mode === 'straight',
+      side: (plan.mode === 'straight' ? edge.from.row.lane < 0 : otherEndpointX < railX)
+        ? 'left' as const : 'right' as const,
+      // Within each side, earlier incoming rails stay nearest the center so
+      // later arrivals can join outside them without crossing the branch.
       bundleOrder: edge.isMerge ? 1 : 0,
-      railStartY: Math.min(edge.from.y, edge.to.y) + NODE_RADIUS + 8,
       strokeWidth: edge.isMerge ? 2 : 4.5,
     }]
   })
   const bundleOffsets = buildVerticalBundleOffsets(verticalRailCandidates)
-
-  for (const candidate of verticalRailCandidates) {
-    const plan = plans.get(candidate.key)
-    if (plan?.mode !== 'straight' || Math.abs(bundleOffsets.get(candidate.key) ?? 0) < 0.001) continue
-
-    const firstCompetingRail = verticalRailCandidates
-      .filter((other) => (
-        other.key !== candidate.key
-        && other.railKey === candidate.railKey
-        && other.topIdx > candidate.topIdx
-        && other.topIdx < candidate.bottomIdx
-        && verticalRailCandidatesConflict(candidate, other)
-      ))
-      .sort((left, right) => left.topIdx - right.topIdx || left.key.localeCompare(right.key))[0]
-    if (firstCompetingRail?.railStartY === undefined) continue
-
-    plans.set(candidate.key, {
-      mode: 'straight',
-      // Complete the jog just before the competing line reaches this gutter.
-      bundleJoinY: firstCompetingRail.railStartY - 8,
-    })
-  }
 
   const bundledIncomingByTarget = new Map<string, string[]>()
   const targetsWithCenteredContinuation = new Set<string>()
@@ -2375,9 +2398,8 @@ export function buildEdgeRoutingData(
     })
   }
 
-  // A short side-entry curve can still skim an unrelated vertical edge near
-  // its target. If the space beyond that rail is clear, hold the curve there
-  // until the rail has ended, then make the horizontal target join.
+  // Keep the diagonal beyond intervening rails, then cross them horizontally
+  // on the way into the target so the connections remain easy to follow.
   const verticalRailClearanceSegments = visibleEdges.flatMap((edge) => {
     const plan = plans.get(edge.key)
     if (!plan) return []
