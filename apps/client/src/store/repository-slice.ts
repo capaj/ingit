@@ -18,7 +18,7 @@ export interface RepositorySlice {
   githubUrl: string | null
   openError: string | null
 
-  reloadFromServer: () => Promise<void>
+  reloadFromServer: () => Promise<boolean>
   openRepoByPath: (path: string) => Promise<void>
   closeRepo: () => void
   loadRecentRepos: () => Promise<void>

@@ -16,6 +16,7 @@ import { discoverRepos, listDirectory } from './discover-repos.js'
 import { listAgentSessions, focusAgentSession, installWindowCalls } from './agent-sessions.js'
 import { openDefaultTerminal } from './open-terminal.js'
 import { installAndResolveLockfile } from './lockfile-install.js'
+import { getRepositoryVersion } from './repository-version.js'
 
 const sessionManager = new SessionManager()
 
@@ -75,6 +76,10 @@ export const router = os.router({
   getRefs: os.getRefs.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     return session.getRefs()
+  }),
+
+  getRepositoryVersion: os.getRepositoryVersion.handler(({ input }) => {
+    return getRepositoryVersion(getSession(input.repoId))
   }),
 
   getRemotes: os.getRemotes.handler(async ({ input }) => {

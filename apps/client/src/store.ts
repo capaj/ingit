@@ -310,6 +310,7 @@ async function fetchCheckoutState(
 function fetchRepositoryState(
   repoId: string,
   normalizeAcrossWorktrees: boolean,
+  afterRows = INITIAL_ROWS,
 ): Promise<[
   RefSummary[],
   HistoryWindowResponse,
@@ -326,7 +327,7 @@ function fetchRepositoryState(
       scope: { kind: 'all' },
       anchor: { kind: 'head' },
       beforeRows: 0,
-      afterRows: INITIAL_ROWS,
+      afterRows,
       firstParent: false,
       topoOrder: true,
       normalizeAcrossWorktrees,
@@ -660,12 +661,15 @@ function updatesGraphModel(partial: Partial<AppState>): boolean {
 
 export const useAppStore = create<AppState>((baseSet, get) => {
   let stableLanes = new StableLaneLayout()
+  let mutationVersion = 0
+  let reloadVersion = 0
   // Keep cross-domain actions in one bounded store so checkout can still
   // publish one atomic snapshot. Every graph-input publication derives the
   // render model here, before React subscribers run.
   const set: StoreSetter = (update) => {
     baseSet((state) => {
       const partial = typeof update === 'function' ? update(state) : update
+      if (partial.pendingMutation && !state.pendingMutation) mutationVersion++
       const graphInputsChanged = updatesGraphModel(partial)
       recordStorePublication(graphInputsChanged)
       if (!graphInputsChanged) return partial
@@ -730,9 +734,18 @@ export const useAppStore = create<AppState>((baseSet, get) => {
   reloadFromServer: async () => {
     const { repoPath, remotes: remotesBeforeReload } = get()
     const normalizeAcrossWorktrees = get().normalizeAcrossWorktrees
+    const afterRows = Math.max(INITIAL_ROWS, get().historyWindow?.rows.length ?? 0)
     let repoId = get().repoId as string
-    if (!repoId || !repoPath) return
-    if (get().pendingMutation) return
+    if (!repoId || !repoPath) return false
+    if (get().pendingMutation) return false
+    const initialRepoId = repoId
+    const startedMutationVersion = mutationVersion
+    const thisReload = ++reloadVersion
+    const isCurrent = () => get().repoPath === repoPath
+      && !get().pendingMutation
+      && mutationVersion === startedMutationVersion
+      && reloadVersion === thisReload
+      && get().normalizeAcrossWorktrees === normalizeAcrossWorktrees
 
     try {
       let refs: RefSummary[]
@@ -746,13 +759,15 @@ export const useAppStore = create<AppState>((baseSet, get) => {
         [refs, hist, changes, worktrees, stashes, remotes, worktreeGraphStates] = await fetchRepositoryState(
           repoId,
           normalizeAcrossWorktrees,
+          afterRows,
         )
       } catch (err) {
         if (isSessionError(err) || isConnectionLostError(err)) {
           const res = await openRepo({ path: repoPath })
+          if (!isCurrent() || get().repoId !== initialRepoId) return false
           repoId = res.repoId
           set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-          const fresh = await fetchRepositoryState(repoId, normalizeAcrossWorktrees)
+          const fresh = await fetchRepositoryState(repoId, normalizeAcrossWorktrees, afterRows)
           refs = fresh[0]
           hist = fresh[1]
           changes = fresh[2]
@@ -765,7 +780,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
         }
       }
 
-      if (get().repoId !== repoId) return
+      if (!isCurrent() || get().repoId !== repoId) return false
       set((s) => ({
         refs,
         // A remote mutation may finish while the other refresh requests are
@@ -798,8 +813,10 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             : false,
       }))
       if (get().viewMode === 'reflog') void get().loadReflog()
+      return true
     } catch (err) {
       console.error('Failed to reload repository state:', err)
+      return false
     }
   },
 

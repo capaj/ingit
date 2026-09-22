@@ -277,6 +277,10 @@ export const contract = {
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RefSummary)),
 
+  getRepositoryVersion: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.string()),
+
   getRemotes: oc
     .input(z.object({ repoId: RepoId }))
     .output(z.array(RemoteSummary)),

@@ -70,6 +70,10 @@ export function getRefs(repoId: string) {
   return ensureClient().getRefs({ repoId })
 }
 
+export function getRepositoryVersion(repoId: string): Promise<string> {
+  return ensureClient().getRepositoryVersion({ repoId })
+}
+
 export function getRemotes(repoId: string) {
   return ensureClient().getRemotes({ repoId })
 }

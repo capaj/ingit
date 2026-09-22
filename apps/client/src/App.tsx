@@ -3,7 +3,8 @@ import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from './store'
 import { SshConversionDialog } from './components/SshConversionDialog'
 import { recordGraphRender } from './performance-metrics'
-import { listDirectory as fetchDirectory } from './api'
+import { getRepositoryVersion, listDirectory as fetchDirectory } from './api'
+import { observeRepository } from './repository-observer'
 import { RepoOpen } from './components/RepoOpen'
 import { RefsSidebar } from './components/RefsSidebar'
 import { GraphCanvas } from './components/GraphCanvas'
@@ -125,6 +126,18 @@ export function App() {
     if (status !== 'ready' || !repoId) return
     void handleFetch()
   }, [repoId, status])
+
+  useEffect(() => {
+    if (status !== 'ready' || !repoId) return
+    return observeRepository({
+      getVersion: () => getRepositoryVersion(repoId),
+      reload: reloadFromServer,
+      canReload: () => {
+        const state = useAppStore.getState()
+        return state.repoId === repoId && state.status === 'ready' && !state.pendingMutation
+      },
+    })
+  }, [repoId, status, reloadFromServer])
 
   useEffect(() => {
     setRepoPathInput(repoPath ?? '')

@@ -55,3 +55,42 @@ test('a delayed refresh cannot publish to a different repository', async () => {
   expect(useAppStore.getState().remotes).toEqual([])
   expect(useAppStore.getState().historyWindow).toBe(initialState.historyWindow)
 })
+
+test('a delayed refresh cannot overwrite an optimistic mutation', async () => {
+  const refresh = useAppStore.getState().reloadFromServer()
+  useAppStore.setState({ pendingMutation: true })
+  finishHistory(history)
+  expect(await refresh).toBe(false)
+  expect(useAppStore.getState().historyWindow).toBe(initialState.historyWindow)
+})
+
+test('a refresh started before a completed mutation is discarded', async () => {
+  spies.push(spyOn(api, 'createStash').mockResolvedValue({
+    ok: true, message: 'created', stashes: [], changes: { headSha: '', staged: [], unstaged: [] },
+  }))
+  const refresh = useAppStore.getState().reloadFromServer()
+  expect(await useAppStore.getState().createStash()).toBe(true)
+  finishHistory(history)
+  expect(await refresh).toBe(false)
+  expect(useAppStore.getState().historyWindow).toBe(initialState.historyWindow)
+})
+
+test('an older refresh cannot overwrite a newer refresh', async () => {
+  const older = useAppStore.getState().reloadFromServer()
+  const finishOlder = finishHistory
+  const newer = useAppStore.getState().reloadFromServer()
+  const newerHistory = { ...history, projectionId: 'newer' }
+  finishHistory(newerHistory)
+  expect(await newer).toBe(true)
+  finishOlder(history)
+  expect(await older).toBe(false)
+  expect(useAppStore.getState().historyWindow).toEqual(newerHistory)
+})
+
+test('automatic refresh preserves the loaded history depth', async () => {
+  useAppStore.setState({ historyWindow: { ...history, rows: new Array(2_000) } })
+  const refresh = useAppStore.getState().reloadFromServer()
+  expect(api.queryHistory).toHaveBeenLastCalledWith('test', expect.objectContaining({ afterRows: 2_000 }))
+  finishHistory(history)
+  expect(await refresh).toBe(true)
+})
