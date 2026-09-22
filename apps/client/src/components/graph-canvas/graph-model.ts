@@ -12,6 +12,7 @@ import {
   type GraphLayout,
 } from './layout'
 import { routeUpstreamAroundWorktree } from './worktree-lane-layout'
+import type { StableLaneLayout } from './stable-lanes'
 
 export interface GraphModel {
   currentBranch: string | null
@@ -132,6 +133,7 @@ export function deriveGraphModel(
   worktreeGraphStates: WorktreeGraphState[] | null,
   normalizeAcrossWorktrees: boolean,
   showCommitMessages: boolean,
+  stableLanes?: StableLaneLayout,
 ): GraphModel | null {
   if (!historyWindow || historyWindow.rows.length === 0) return null
   stats.requests++
@@ -145,22 +147,19 @@ export function deriveGraphModel(
     normalizeAcrossWorktrees,
   )
   const extraLeftGutter = showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0
+  const worktreeRows = dirtyWorktrees.reduce(
+    (rows, worktree) => routeUpstreamAroundWorktree(rows, worktree.branch ?? null, worktree.headSha),
+    sourceRows,
+  )
+  const renderedRows = stableLanes?.stabilize(worktreeRows) ?? worktreeRows
   const variantKey = referenceVariantKey(currentBranch, dirtyWorktrees, extraLeftGutter)
-  const variants = referenceCache.get(sourceRows)
+  const variants = referenceCache.get(renderedRows)
   const referenceHit = variants?.get(variantKey)
   if (referenceHit) {
     stats.referenceHits++
     return referenceHit
   }
 
-  const renderedRows = dirtyWorktrees.reduce(
-    (rows, worktree) => routeUpstreamAroundWorktree(
-      rows,
-      worktree.branch ?? null,
-      worktree.headSha,
-    ),
-    sourceRows,
-  )
   const key = topologyKey(renderedRows, extraLeftGutter)
   const cached = topologyCache.get(key)
   let layout: GraphLayout
@@ -182,7 +181,7 @@ export function deriveGraphModel(
   const model = { currentBranch, renderedRows, layout }
   const nextVariants = variants ?? new Map<string, GraphModel>()
   nextVariants.set(variantKey, model)
-  if (!variants) referenceCache.set(sourceRows, nextVariants)
+  if (!variants) referenceCache.set(renderedRows, nextVariants)
   return model
 }
 

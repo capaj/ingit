@@ -107,29 +107,28 @@ describe('responsive graph layout', () => {
     expect(renderedScreenX).toBe(browserWidth / 2)
   })
 
-  test('shifts lane zero to center the occupied gutters without leaving the viewport envelope', () => {
+  test('expands right without recentering existing nodes', () => {
     const fit = fitGraphToViewport(1440, 260)
-    const laneFrame = fitLaneFrameToRows([
-      row('center', 0),
-      row('right-1', 1),
-      row('right-2', 2),
-      row('right-3', 3),
-    ], fit)
+    const initial = fitLaneFrameToRows([row('center', 0)], fit)
+    const expanded = fitLaneFrameToRows([row('center', 0), row('outer', 12)], fit, initial)
+    expect(expanded.laneCenterX).toBe(initial.laneCenterX)
+    expect(expanded.totalWidth).toBeGreaterThan(fit.layoutWidth)
+    expect(expanded.laneRadius).toBeGreaterThanOrEqual(12)
+    expect(fitLaneFrameToRows([row('center', 0)], fit, expanded)).toEqual(expanded)
+  })
 
-    expect(laneFrame.laneCenterX).toBe(fit.laneCenterX - 1.5 * LANE_WIDTH)
-    expect(laneFrame.laneCenterX).toBeLessThan(fit.laneCenterX)
-
-    const layout = buildLayout(
-      [row('center', 0), row('right-3', 3)],
-      fit.extraLeftGutter,
-      fit.rightGutter,
-      laneFrame,
-    )
-    const occupiedMidpoint = (
-      (layout.shaToNode.get('center')?.x ?? 0)
-      + (layout.shaToNode.get('right-3')?.x ?? 0)
-    ) / 2
-    expect(occupiedMidpoint).toBe(fit.laneCenterX)
+  test('left growth preserves screen positions when the scroll origin is compensated', () => {
+    const fit = fitGraphToViewport(1440, 260)
+    const initial = fitLaneFrameToRows([row('center', 0)], fit)
+    const expanded = fitLaneFrameToRows([row('left', -12), row('center', 0)], fit, initial)
+    for (const zoom of [0.5, 1, 2]) {
+      const previousScroll = 150
+      const nextScroll = previousScroll + (expanded.laneCenterX - initial.laneCenterX) * zoom
+      expect(expanded.laneCenterX * zoom - nextScroll).toBe(initial.laneCenterX * zoom - previousScroll)
+    }
+    const graph = buildLayout([row('left', -12)], 0, 0, expanded)
+    expect(graph.nodes[0].x).toBeGreaterThan(0)
+    expect(fitLaneFrameToRows([row('center', 0)], fit, expanded)).toEqual(expanded)
   })
 
   test('leaves lane zero fixed when occupied gutters are already symmetric', () => {

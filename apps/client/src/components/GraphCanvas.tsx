@@ -1,4 +1,4 @@
-import { Fragment, useRef, useEffect, useCallback, useState, useMemo, useReducer } from 'react'
+import { Fragment, useRef, useEffect, useLayoutEffect, useCallback, useState, useMemo, useReducer } from 'react'
 import { createPortal } from 'react-dom'
 import { animated, to, useSpring } from '@react-spring/web'
 import { prepareWithSegments, measureNaturalWidth } from '@chenglou/pretext'
@@ -44,7 +44,6 @@ import {
   buildLayout,
   colorForBranchName,
   COMMIT_MESSAGE_GUTTER,
-  compactRowsToLaneRadius,
   fitGraphToBrowserWindow,
   fitLaneFrameToRows,
   GRAPH_TOP_HEADROOM,
@@ -55,6 +54,7 @@ import {
   NODE_SPACING_Y,
   PAD_TOP,
   pickBestRef,
+  type GraphLaneFrame,
   type GraphLayout,
   type GraphViewportFit,
   type LayoutNode,
@@ -532,10 +532,10 @@ function buildActionPreviewGeometry(
 ): ActionPreviewGeometry | null {
   if (preview.kind === 'uncommit') return null
 
-  const previewRows = compactRowsToLaneRadius(
-    prediction.rows,
-    viewportFit.maxLaneRadius,
-  )
+  const existingLanes = new Map(baseLayout.nodes.map((node) => [node.row.sha, node.row.lane]))
+  const previewRows = prediction.rows.map((row) => ({
+    ...row, lane: existingLanes.get(row.sha) ?? row.lane,
+  }))
   const baseLaneZeroX = baseLayout.nodes.find((node) => node.row.lane === 0)?.x
     ?? viewportFit.laneCenterX
   const previewLayout = buildLayout(
@@ -2568,6 +2568,7 @@ export function GraphCanvas() {
   const pendingScrollTopRef = useRef(0)
   const [zoomIndicatorVisible, setZoomIndicatorVisible] = useState(false)
   const [scrollTop, setScrollTop] = useState(0)
+  const [scrollLeft, setScrollLeft] = useState(0)
   const [browserWidth, setBrowserWidth] = useState(
     () => (typeof window === 'undefined' ? 0 : window.innerWidth),
   )
@@ -2653,9 +2654,7 @@ export function GraphCanvas() {
     }
   }, [])
 
-  // The store retains the semantic, viewport-independent lanes. Rendering
-  // compacts those segments into a hard physical gutter budget so resizing or
-  // zooming cannot create horizontal scroll.
+  // Lane ownership is retained by the store; the canvas only expands its frame.
   const currentBranch = graphModel?.currentBranch
     ?? refs.find((ref) => ref.isCurrent)?.shortName
     ?? null
@@ -2671,34 +2670,31 @@ export function GraphCanvas() {
     ),
     [effectiveBrowserWidth, graphLeft, showCommitMessages, zoom],
   )
-  const compactedRows = useMemo(
-    () => (graphModel
-      ? compactRowsToLaneRadius(
-          graphModel.renderedRows,
-          viewportFit.maxLaneRadius,
-        )
-      : null),
-    [graphModel, viewportFit.maxLaneRadius],
-  )
+  const stableRows = graphModel?.renderedRows ?? null
   // While previewing a rebase, slide the live branch line ascending from the
   // target into a free side gutter so the stacked ghost chain does not cover
   // the commits it replaces.
   const displayRows = useMemo(() => {
-    if (!compactedRows || actionPreview?.kind !== 'rebase') return compactedRows
+    if (!stableRows || actionPreview?.kind !== 'rebase') return stableRows
     const currentRef = refs.find((ref) => ref.kind === 'head' && ref.isCurrent)
     const targetRef = refs.find((ref) => ref.shortName === actionPreview.targetRefName)
     const targetSha = targetRef ? targetRef.peeledSha ?? targetRef.targetSha : undefined
-    if (!currentRef || !targetSha) return compactedRows
+    if (!currentRef || !targetSha) return stableRows
     return displaceBranchAboveTarget(
-      compactedRows,
+      stableRows,
       currentRef.targetSha,
       targetSha,
       viewportFit.maxLaneRadius,
-    ) ?? compactedRows
-  }, [compactedRows, actionPreview, refs, viewportFit.maxLaneRadius])
+    ) ?? stableRows
+  }, [stableRows, actionPreview, refs, viewportFit.maxLaneRadius])
+  const frameStateRef = useRef<{ repoId: string | null; frame: GraphLaneFrame } | null>(null)
   const laneFrame = useMemo(
-    () => (displayRows ? fitLaneFrameToRows(displayRows, viewportFit) : null),
-    [displayRows, viewportFit],
+    () => (displayRows ? fitLaneFrameToRows(
+      displayRows,
+      viewportFit,
+      frameStateRef.current?.repoId === repoId ? frameStateRef.current.frame : undefined,
+    ) : null),
+    [displayRows, viewportFit, repoId],
   )
   const layout = useMemo(() => {
     if (!displayRows || !laneFrame) return null
@@ -3138,6 +3134,22 @@ export function GraphCanvas() {
     clearAddRefHoverTimer()
   }, [clearAddRefHoverTimer])
 
+  useLayoutEffect(() => {
+    if (!laneFrame || !layout || !scrollRef.current) return
+    const previous = frameStateRef.current
+    const sameRepo = previous?.repoId === repoId
+    const oldCenter = sameRepo ? previous.frame.laneCenterX : viewportFit.laneCenterX
+    const shift = (laneFrame.laneCenterX - oldCenter) * zoom
+    if (!sameRepo) scrollRef.current.scrollLeft = Math.max(0, shift)
+    else if (shift !== 0) scrollRef.current.scrollLeft += shift
+    if (shift !== 0) {
+      previousLayoutRef.current = layout
+      previousRowsRef.current = histWindow?.rows ?? null
+      stopGraphAnimation()
+    }
+    frameStateRef.current = { repoId, frame: laneFrame }
+  }, [repoId, laneFrame, layout, histWindow, viewportFit.laneCenterX, zoom, stopGraphAnimation])
+
   useEffect(() => {
     if (!layout || !histWindow) {
       previousRowsRef.current = histWindow?.rows ?? null
@@ -3290,7 +3302,7 @@ export function GraphCanvas() {
     // Let the follow-scroll ride alongside an in-flight graph animation instead
     // of cancelling it (see programmaticScrollUntilRef).
     programmaticScrollUntilRef.current = Date.now() + 700
-    el.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+    el.scrollTo({ top: Math.max(0, targetTop), left: Math.max(0, node.x * zoom - el.clientWidth / 2), behavior: 'smooth' })
   }, [scrollToSha, scrollToKey, layout, zoom])
 
   // Scroll + resize handler: re-render only when we're about to run out of rendered nodes
@@ -3301,8 +3313,8 @@ export function GraphCanvas() {
     const check = () => {
       if (!layout) return
       const nextScrollTop = el.scrollTop
+      setScrollLeft(el.scrollLeft)
       const didScroll = Math.abs(nextScrollTop - lastObservedScrollTopRef.current) > 0.5
-      if (el.scrollLeft !== 0) el.scrollLeft = 0
       viewportMetricsRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight }
       setBrowserWidth(window.innerWidth)
       setGraphLeft(el.getBoundingClientRect().left)
@@ -4461,10 +4473,11 @@ export function GraphCanvas() {
         flex: 1,
         height: '100%',
         overflowY: 'auto',
-        overflowX: 'hidden',
+        overflowX: 'auto',
         position: 'relative',
         background: '#1e1e2e',
-        touchAction: 'pan-y',
+        touchAction: 'pan-x pan-y',
+        overflowAnchor: 'none',
       }}
       onClick={() => {
         setMergePreviewVisible(false)
@@ -4664,7 +4677,7 @@ export function GraphCanvas() {
             onClick={(e) => handleRefSelect(e, label.name)}
             style={{
               position: 'absolute',
-              left: label.x * renderedZoom + graphTranslateX - 4,
+              left: label.x * renderedZoom + graphTranslateX - scrollLeft - 4,
               top: 4 + label.row * 22,
               padding: '2px 8px',
               borderRadius: 4,

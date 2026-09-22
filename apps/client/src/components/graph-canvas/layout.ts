@@ -1,5 +1,4 @@
 import type { CommitRow } from '@ingit/rpc-contract'
-import { orderLaneSegmentsByContinuity } from '@ingit/graph-core'
 
 export const NODE_SPACING_Y = 56
 export const LANE_WIDTH = 80
@@ -171,9 +170,9 @@ export function fitGraphToViewport(
 
 /**
  * Fit lanes against the whole browser window, not the graph element. Opening a
- * sibling panel can shrink the graph canvas without changing this lane budget.
- * The local base center compensates for a left sidebar; occupied-lane fitting
- * may subsequently move lane 0 away from that browser midpoint.
+ * sibling panel can shrink the graph canvas without changing the initial frame.
+ * The local base center compensates for a left sidebar. Additional gutters grow
+ * the scrollable frame; they do not squeeze branches into this initial budget.
  */
 export function fitGraphToBrowserWindow(
   browserWidth: number,
@@ -193,58 +192,31 @@ export function fitGraphToBrowserWindow(
   }
 }
 
-/**
- * Center the occupied lane span inside the viewport's existing gutter envelope.
- * Lane 0 remains the checked-out branch semantically, but it may move away from
- * the browser midpoint when most branch families live on one side. Keeping the
- * occupied extrema inside the original symmetric envelope preserves the
- * responsive side reserves for commit messages, ref pills, and actions.
- */
+/** Grow the scrollable frame without recentering or shrinking existing gutters. */
 export function fitLaneFrameToRows(
   rows: Pick<CommitRow, 'lane'>[],
   viewportFit: GraphViewportFit,
+  previous?: GraphLaneFrame,
 ): GraphLaneFrame {
-  if (rows.length === 0) {
-    return {
-      laneCenterX: viewportFit.laneCenterX,
-      laneRadius: viewportFit.maxLaneRadius,
-      totalWidth: viewportFit.layoutWidth,
-    }
-  }
-
-  let minLane = Infinity
-  let maxLane = -Infinity
+  let minLane = 0
+  let maxLane = 0
   for (const row of rows) {
     minLane = Math.min(minLane, row.lane)
     maxLane = Math.max(maxLane, row.lane)
   }
-
-  const radius = viewportFit.maxLaneRadius
-  const desiredShift = -((minLane + maxLane) / 2) * LANE_WIDTH
-  const minimumShift = (-radius - minLane) * LANE_WIDTH
-  const maximumShift = (radius - maxLane) * LANE_WIDTH
-  const shift = Math.max(minimumShift, Math.min(maximumShift, desiredShift))
-
+  const laneCenterX = Math.max(
+    previous?.laneCenterX ?? viewportFit.laneCenterX,
+    LANE_ORIGIN_X_BASE + viewportFit.extraLeftGutter - minLane * LANE_WIDTH,
+  )
   return {
-    laneCenterX: viewportFit.laneCenterX + shift,
-    laneRadius: radius,
-    totalWidth: viewportFit.layoutWidth,
+    laneCenterX,
+    laneRadius: Math.max(previous?.laneRadius ?? 0, -minLane, maxLane, viewportFit.maxLaneRadius),
+    totalWidth: Math.max(
+      previous?.totalWidth ?? 0,
+      viewportFit.layoutWidth,
+      laneCenterX + maxLane * LANE_WIDTH + PAD_LEFT * 2 + viewportFit.rightGutter,
+    ),
   }
-}
-
-export function compactRowsToLaneRadius(
-  rows: CommitRow[],
-  maxLaneRadius: number,
-): CommitRow[] {
-  const laneBySha = orderLaneSegmentsByContinuity(rows, maxLaneRadius)
-  let changed = false
-  const compacted = rows.map((row) => {
-    const lane = laneBySha.get(row.sha) ?? 0
-    if (lane === row.lane) return row
-    changed = true
-    return { ...row, lane }
-  })
-  return changed ? compacted : rows
 }
 
 function stableColorForNode(sha: string, shaToBranch: Map<string, string>): string {

@@ -10,6 +10,7 @@ import {
   getGraphModelCacheStats,
   resetGraphModelCacheStats,
 } from './graph-model'
+import { StableLaneLayout } from './stable-lanes'
 
 function row(sha: string, parentShas: string[], lane: number, refNames: string[] = []): CommitRow {
   return {
@@ -65,6 +66,23 @@ const dirtyWorktree: WorktreeChangesResponse = {
 }
 
 describe('derived graph model cache', () => {
+  test('keeps rendered lanes across refreshed projections and growing history', () => {
+    const stableLanes = new StableLaneLayout()
+    const derive = (rows: CommitRow[]) => deriveGraphModel(
+      history(rows), refs, cleanWorktree, '/repo', [], true, false, stableLanes,
+    )!
+    const initial = derive([row('tip', ['base'], 0), row('branch', ['older'], -2)])
+    const refreshed = derive([
+      row('new-tip', ['branch'], 3), row('tip', ['base'], 1),
+      row('branch', ['older'], 3), row('base', [], 1), row('older', [], 3),
+    ])
+    const initialLanes = Object.fromEntries(initial.renderedRows.map((row) => [row.sha, row.lane]))
+    expect(Object.fromEntries(refreshed.renderedRows.map((row) => [row.sha, row.lane])))
+      .toMatchObject({ ...initialLanes, 'new-tip': -1, base: 0, older: -1 })
+    expect(derive([row('tip', ['base'], -3), row('branch', ['older'], 8)]).renderedRows.map((row) => row.lane))
+      .toEqual([0, -1])
+  })
+
   test('reuses the complete model for unchanged graph input references', () => {
     const input = history([
       row('tip', ['base'], 0, ['main']),

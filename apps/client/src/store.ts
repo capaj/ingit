@@ -74,6 +74,7 @@ import {
 import { mergeHistory } from './history-pagination'
 import { recordStorePublication } from './performance-metrics'
 import { deriveGraphModel } from './components/graph-canvas/graph-model'
+import { StableLaneLayout } from './components/graph-canvas/stable-lanes'
 import {
   createRepositorySliceState,
   type RepositorySlice,
@@ -643,6 +644,7 @@ function ciPollTick() {
 }
 
 const GRAPH_MODEL_INPUT_KEYS = new Set<keyof AppState>([
+  'repoId',
   'historyWindow',
   'refs',
   'worktreeChanges',
@@ -657,6 +659,7 @@ function updatesGraphModel(partial: Partial<AppState>): boolean {
 }
 
 export const useAppStore = create<AppState>((baseSet, get) => {
+  let stableLanes = new StableLaneLayout()
   // Keep cross-domain actions in one bounded store so checkout can still
   // publish one atomic snapshot. Every graph-input publication derives the
   // render model here, before React subscribers run.
@@ -668,6 +671,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       if (!graphInputsChanged) return partial
 
       const nextState = { ...state, ...partial }
+      if (nextState.repoId !== state.repoId) stableLanes = new StableLaneLayout()
       return {
         ...partial,
         graphModel: deriveGraphModel(
@@ -678,6 +682,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
           nextState.worktreeGraphStates,
           nextState.normalizeAcrossWorktrees,
           nextState.showCommitMessages,
+          stableLanes,
         ),
       }
     })
