@@ -1,0 +1,56 @@
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: #11111bf5;
+  color: #cdd6f4;
+  overflow: hidden;
+}
+.image-lightbox[open] { display: flex; flex-direction: column; }
+.image-lightbox::backdrop { background: #11111b; }
+.image-lightbox-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #313244;
+}
+.image-lightbox-title {
+  flex: 1 1 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.image-lightbox-toolbar button {
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: inherit;
+  cursor: pointer;
+}
+.image-lightbox-toolbar button:hover { background: #45475a; }
+.image-lightbox-toolbar button:focus-visible { outline: 2px solid #89b4fa; outline-offset: 2px; }
+.image-lightbox-toolbar output { min-width: 48px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.image-lightbox-viewport { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; }
+.image-lightbox-canvas {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  height: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 24px;
+}
+.image-lightbox-canvas img { display: block; flex-shrink: 0; max-width: none; cursor: zoom-in; }
+.image-lightbox-hint { padding: 8px 16px; color: #a6adc8; font-size: 11px; text-align: center; }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { ImageLightbox } from './ImageLightbox'
 import { highlightHTML } from '@speed-highlight/core'
 import type { ShjLanguage } from '@speed-highlight/core'
 import type { ImageDiff, ImagePreview } from '@ingit/rpc-contract'
@@ -277,25 +278,36 @@ function ImageDiffView({ imageDiff, path }: { imageDiff: ImageDiff; path: string
 
 function ImageThumbnail({ preview, alt }: { preview: ImagePreview; alt: string }) {
   const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false)
 
   if (failed) {
     return <span style={{ color: '#6c7086', fontSize: 11 }}>Image preview unavailable</span>
   }
 
   return (
-    <img
-      src={preview.dataUrl}
-      alt={alt}
-      draggable={false}
-      decoding="async"
-      onError={() => setFailed(true)}
-      style={{
-        display: 'block',
-        maxWidth: '100%',
-        maxHeight: 160,
-        objectFit: 'contain',
-      }}
-    />
+    <>
+      <button
+        type="button"
+        aria-label={`Open ${alt} full screen`}
+        onClick={() => setOpen(true)}
+        style={{ display: 'flex', justifyContent: 'center', padding: 0, border: 0, background: 'transparent', maxWidth: '100%', cursor: 'zoom-in' }}
+      >
+        <img
+          src={preview.dataUrl}
+          alt={alt}
+          draggable={false}
+          decoding="async"
+          onError={() => setFailed(true)}
+          style={{
+            display: 'block',
+            maxWidth: '100%',
+            maxHeight: 160,
+            objectFit: 'contain',
+          }}
+        />
+      </button>
+      {open && <ImageLightbox src={preview.dataUrl} alt={alt} onClose={() => setOpen(false)} />}
+    </>
   )
 }
 
