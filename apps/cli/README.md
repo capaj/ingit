@@ -56,7 +56,35 @@ ingit --no-open       # don't open the browser automatically
 | `-p, --port <n>` | Preferred port (default `8449`; next free port if taken). |
 | `--host <h>` | Host to bind (default `127.0.0.1`). |
 | `--no-open` | Don't open the browser automatically. |
+| `--no-auto-update` | Skip the automatic update check for this launch. |
 | `-v, --version` | Print version. |
 | `-h, --help` | Show help. |
 
 `git` must be installed and on your `PATH`.
+
+## Automatic updates
+
+Global installations check npm's `latest` release when `ingit` starts. When a
+newer version is available, the launcher runs the owning package manager's
+global install command and starts the updated CLI with the same arguments:
+
+| Package manager | Command (with the detected version) |
+| --- | --- |
+| npm | `npm install --global @ingit/cli@<version>` |
+| pnpm | `pnpm add --global @ingit/cli@<version>` |
+| Yarn Classic | `yarn global add @ingit/cli@<version>` |
+| Bun | `bun add --global @ingit/cli@<version>` |
+
+Turn off **Settings → Updates → Install updates automatically** to opt out.
+The preference is saved on the server machine in
+`$XDG_CONFIG_HOME/ingit/settings.json` (default `~/.config/ingit/settings.json`),
+or `%APPDATA%\ingit\settings.json` on Windows. It applies across repositories
+and browser sessions. `INGIT_AUTO_UPDATE=0` also disables updates, and
+`ingit --no-auto-update` skips them for one launch.
+
+Help/version commands and development builds skip checks. Local/temporary
+installations are not updated globally, and ambiguous package-manager ownership
+is left for manual updating. Registry checks time out after three seconds;
+offline checks or failed installs report a warning and continue startup.
+Updates never invoke sudo. If an install requires elevated permissions, update
+it manually. Close other ingit processes first if Windows reports a locked binary.

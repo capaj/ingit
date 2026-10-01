@@ -144,12 +144,22 @@ async function buildTarget(target: Target): Promise<void> {
   console.log(`  ✓ ${pkgDir}`)
 }
 
-function buildLauncher(): void {
+async function buildLauncher(): Promise<void> {
   const pkgDir = join(RELEASE_DIR, 'cli')
   rmSync(pkgDir, { recursive: true, force: true })
   mkdirSync(join(pkgDir, 'bin'), { recursive: true })
 
   cpSync(join(CLI_DIR, 'bin/ingit.cjs'), join(pkgDir, 'bin/ingit.cjs'))
+  const updater = await Bun.build({
+    entrypoints: [join(CLI_DIR, 'src/auto-update.ts')],
+    target: 'node',
+    // Bundle workspace source without requiring a prior server/dist build.
+    conditions: ['bun'],
+    format: 'cjs',
+    outdir: join(pkgDir, 'bin'),
+    naming: 'auto-update.cjs',
+  })
+  if (!updater.success) throw new AggregateError(updater.logs, 'Could not build the auto-updater')
   if (process.platform !== 'win32') {
     chmodSync(join(pkgDir, 'bin/ingit.cjs'), 0o755)
   }
@@ -197,7 +207,7 @@ async function main(): Promise<void> {
   await buildSharedPackages()
   await buildClient()
   for (const target of targets) await buildTarget(target)
-  buildLauncher()
+  await buildLauncher()
 
   console.log(`\n✓ Done. Artifacts in ${RELEASE_DIR}`)
   console.log('  Publish each platform package, then the `@ingit/cli` launcher package.')

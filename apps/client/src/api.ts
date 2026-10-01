@@ -1,5 +1,6 @@
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
+import type { contract, ContractRouterClient } from '@ingit/rpc-contract'
 import type {
   HistoryQuery,
   InProgressOperationKind,
@@ -47,6 +48,14 @@ export function isConnectionLostError(err: unknown): boolean {
 
 export function openRepo(req: { path: string }) {
   return ensureClient().openRepo(req)
+}
+
+export function getAppSettings() {
+  return (ensureClient() as ContractRouterClient<typeof contract>).getAppSettings({})
+}
+
+export function setAutoUpdate(autoUpdate: boolean) {
+  return (ensureClient() as ContractRouterClient<typeof contract>).setAutoUpdate({ autoUpdate })
 }
 
 export async function openTerminal(repoId: string): Promise<void> {

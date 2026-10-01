@@ -234,6 +234,9 @@ export const FocusCapabilities = z.object({
 // ---------------------------------------------------------------------------
 
 export const contract = {
+  getAppSettings: oc.input(z.object({})).output(z.object({ autoUpdate: z.boolean() })),
+  setAutoUpdate: oc.input(z.object({ autoUpdate: z.boolean() })).output(z.object({ autoUpdate: z.boolean() })),
+
   openRepo: oc
     .input(z.object({ path: z.string() }))
     .output(z.object({

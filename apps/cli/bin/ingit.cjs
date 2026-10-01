@@ -9,50 +9,76 @@ const { spawnSync } = require('node:child_process')
 const { chmodSync, existsSync } = require('node:fs')
 const { join } = require('node:path')
 
-const platform = process.platform
-const arch = process.arch
-const pkgName = `@ingit/cli-${platform}-${arch}`
-const platformId = `${platform}-${arch}`
-const binaryName = platform === 'win32' ? 'ingit.exe' : 'ingit'
-
-let binPath
-try {
-  binPath = require.resolve(`${pkgName}/${binaryName}`)
-} catch {
-  const localBinPath = join(
-    __dirname,
-    '..',
-    'release',
-    `cli-${platformId}`,
-    binaryName,
-  )
-  if (existsSync(localBinPath)) {
-    binPath = localBinPath
-  } else {
-    console.error(`ingit: no prebuilt binary available for ${platform}-${arch}.`)
-    console.error(`Expected the optional dependency "${pkgName}" to be installed.`)
-    console.error(`For local testing, run "bun run --filter '@ingit/cli' release ${platformId}" from the repo root.`)
-    console.error('Supported: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64.')
-    process.exit(1)
+async function main() {
+  const args = process.argv.slice(2)
+  const skipUpdate = process.env.INGIT_SKIP_AUTO_UPDATE === '1'
+  delete process.env.INGIT_SKIP_AUTO_UPDATE
+  const updaterPath = join(__dirname, 'auto-update.cjs')
+  if (!skipUpdate && existsSync(updaterPath)) {
+    const { autoUpdate } = require(updaterPath)
+    const launcher = await autoUpdate({ packageDir: join(__dirname, '..'), args })
+    if (launcher) {
+      // Start a fresh launcher: pnpm can move the package to a new store path,
+      // and require.resolve would otherwise retain the old dependency paths.
+      const result = spawnSync(process.execPath, [launcher, ...args], {
+        stdio: 'inherit',
+        env: { ...process.env, INGIT_SKIP_AUTO_UPDATE: '1' },
+      })
+      if (result.error) throw result.error
+      process.exit(result.status === null ? 1 : result.status)
+    }
   }
-}
 
-// GitHub Actions artifacts do not preserve executable bits. Repair the mode in
-// case the platform package was published from a downloaded artifact.
-if (platform !== 'win32') {
+  const platform = process.platform
+  const arch = process.arch
+  const pkgName = `@ingit/cli-${platform}-${arch}`
+  const platformId = `${platform}-${arch}`
+  const binaryName = platform === 'win32' ? 'ingit.exe' : 'ingit'
+
+  let binPath
   try {
-    chmodSync(binPath, 0o755)
-  } catch (error) {
-    console.error(`ingit: failed to make the binary executable: ${error.message}`)
+    binPath = require.resolve(`${pkgName}/${binaryName}`)
+  } catch {
+    const localBinPath = join(
+      __dirname,
+      '..',
+      'release',
+      `cli-${platformId}`,
+      binaryName,
+    )
+    if (existsSync(localBinPath)) {
+      binPath = localBinPath
+    } else {
+      console.error(`ingit: no prebuilt binary available for ${platform}-${arch}.`)
+      console.error(`Expected the optional dependency "${pkgName}" to be installed.`)
+      console.error(`For local testing, run "bun run --filter '@ingit/cli' release ${platformId}" from the repo root.`)
+      console.error('Supported: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64.')
+      process.exit(1)
+    }
+  }
+
+  // GitHub Actions artifacts do not preserve executable bits. Repair the mode in
+  // case the platform package was published from a downloaded artifact.
+  if (platform !== 'win32') {
+    try {
+      chmodSync(binPath, 0o755)
+    } catch (error) {
+      console.error(`ingit: failed to make the binary executable: ${error.message}`)
+      process.exit(1)
+    }
+  }
+
+  const result = spawnSync(binPath, args.filter((arg) => arg !== '--no-auto-update'), { stdio: 'inherit' })
+
+  if (result.error) {
+    console.error(`ingit: failed to launch binary: ${result.error.message}`)
     process.exit(1)
   }
+
+  process.exit(result.status === null ? 1 : result.status)
 }
 
-const result = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' })
-
-if (result.error) {
-  console.error(`ingit: failed to launch binary: ${result.error.message}`)
+main().catch((error) => {
+  console.error(`ingit: ${error.message}`)
   process.exit(1)
-}
-
-process.exit(result.status === null ? 1 : result.status)
+})

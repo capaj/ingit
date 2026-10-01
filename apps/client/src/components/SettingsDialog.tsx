@@ -25,6 +25,7 @@ import {
   type CommitIconRule,
 } from './graph-canvas/CommitIcons'
 import { customSvgIconError } from './graph-canvas/CustomSvgIcon'
+import { UpdateSettings } from './UpdateSettings'
 
 interface SettingsDialogProps {
   open: boolean
@@ -934,7 +935,7 @@ function settingsNavButtonStyle(active: boolean): CSSProperties {
 export function SettingsDialog({ open, onClose, initialSection = 'appearance' }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const [section, setSection] = useState<'appearance' | 'commit-icons' | 'conflict-resolvers' | 'remotes'>(initialSection)
+  const [section, setSection] = useState<'appearance' | 'commit-icons' | 'conflict-resolvers' | 'remotes' | 'updates'>(initialSection)
   const [commitIconsDirty, setCommitIconsDirty] = useState(false)
   const [conflictResolversDirty, setConflictResolversDirty] = useState(false)
 
@@ -1003,6 +1004,7 @@ export function SettingsDialog({ open, onClose, initialSection = 'appearance' }:
             </button>
           </div>
           <div style={{ padding: '12px 8px' }}>
+            <button type="button" onClick={() => setSection('updates')} aria-current={section === 'updates' ? 'page' : undefined} style={settingsNavButtonStyle(section === 'updates')}>Updates</button>
             <button type="button" onClick={() => setSection('remotes')} aria-current={section === 'remotes' ? 'page' : undefined} style={settingsNavButtonStyle(section === 'remotes')}>Remotes</button>
             <div style={{ padding: '0 8px 6px', color: '#585b70', fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Graph</div>
             <button
@@ -1039,6 +1041,7 @@ export function SettingsDialog({ open, onClose, initialSection = 'appearance' }:
           {open && (
             <>
               {section === 'remotes' && <RemoteSettings />}
+              {section === 'updates' && <UpdateSettings />}
               <div style={{ display: section === 'appearance' ? 'block' : 'none', height: '100%' }}>
                 <GraphAppearanceSettings onClose={requestClose} />
               </div>

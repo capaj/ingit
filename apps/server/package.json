@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./app-settings": {
+      "bun": "./src/app-settings.ts",
+      "types": "./dist/app-settings.d.ts",
+      "import": "./dist/app-settings.js"
+    },
     ".": {
       "bun": "./src/main.ts",
       "import": "./dist/main.js",

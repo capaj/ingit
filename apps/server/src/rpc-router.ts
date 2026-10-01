@@ -17,6 +17,7 @@ import { listAgentSessions, focusAgentSession, installWindowCalls } from './agen
 import { openDefaultTerminal } from './open-terminal.js'
 import { installAndResolveLockfile } from './lockfile-install.js'
 import { getRepositoryVersion } from './repository-version.js'
+import { getAppSettings, setAutoUpdate } from './app-settings.js'
 
 const sessionManager = new SessionManager()
 
@@ -44,6 +45,9 @@ function rethrowWithDetail(err: unknown): never {
 }
 
 export const router = os.router({
+  getAppSettings: os.getAppSettings.handler(() => getAppSettings().catch(rethrowWithDetail)),
+  setAutoUpdate: os.setAutoUpdate.handler(({ input }) => setAutoUpdate(input.autoUpdate).catch(rethrowWithDetail)),
+
   openRepo: os.openRepo.handler(async ({ input }) => {
     return sessionManager.openRepo(input.path)
   }),

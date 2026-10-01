@@ -76,6 +76,7 @@ Options:
   -p, --port <n>    Preferred port (default 8449; reuses ingit, else next free).
       --host <h>    Host to bind (default 127.0.0.1).
       --no-open     Don't open the browser automatically.
+      --no-auto-update  Skip the automatic update check for this launch.
   -v, --version     Print version and exit.
   -h, --help        Show this help and exit.
 `
