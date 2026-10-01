@@ -4296,6 +4296,24 @@ export function GraphCanvas() {
       }))
   }, [layout, currentBranchShas, renderedZoom, graphTranslateY, showCommitMessages])
 
+  // Different lanes can share a row, but their messages share the left gutter.
+  // Put pending-worktree messages on separate lines below any commit message.
+  const worktreeLabelOffsets = useMemo(() => {
+    const linesByY = new Map(commitMessageLabels.map((label) => [label.y, 1]))
+    const offsets = new Map<string, number>()
+    const nodes = [
+      ...(renderedWorktreeNode ? [renderedWorktreeNode] : []),
+      ...linkedWorktreeNodes,
+    ]
+    for (const node of nodes) {
+      const y = node.y * renderedZoom + graphTranslateY
+      const line = linesByY.get(y) ?? 0
+      offsets.set(node.path, line * 18)
+      linesByY.set(y, line + 1)
+    }
+    return offsets
+  }, [commitMessageLabels, renderedWorktreeNode, linkedWorktreeNodes, renderedZoom, graphTranslateY])
+
   const floatingCommitLabels = useMemo(
     () => commitMessageLabels.filter((label) => label.y - scrollTop > 28),
     [commitMessageLabels, scrollTop],
@@ -4744,7 +4762,8 @@ export function GraphCanvas() {
                 left: 20,
                 top: to(
                   worktreeY,
-                  (y) => y * renderedZoom + graphTranslateY - 7,
+                  (y) => y * renderedZoom + graphTranslateY - 7
+                    + (worktreeLabelOffsets.get(renderedWorktreeNode.path) ?? 0),
                 ),
                 opacity: worktreeOpacity,
                 maxWidth: (LANE_ORIGIN_X_BASE + viewportFit.extraLeftGutter - 40) * renderedZoom,
@@ -4782,7 +4801,8 @@ export function GraphCanvas() {
                 style={{
                   position: 'absolute',
                   left: 20,
-                  top: node.y * renderedZoom + graphTranslateY - 7,
+                  top: node.y * renderedZoom + graphTranslateY - 7
+                    + (worktreeLabelOffsets.get(node.path) ?? 0),
                   maxWidth: (LANE_ORIGIN_X_BASE + viewportFit.extraLeftGutter - 40) * renderedZoom,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',

@@ -4,12 +4,14 @@ import type {
   HistoryWindowResponse,
   RefSummary,
   WorktreeChangesResponse,
+  WorktreeGraphState,
 } from '@ingit/rpc-contract'
 import {
   deriveGraphModel,
   getGraphModelCacheStats,
   resetGraphModelCacheStats,
 } from './graph-model'
+import { LANE_WIDTH, NODE_SPACING_Y } from './layout'
 import { StableLaneLayout } from './stable-lanes'
 
 function row(sha: string, parentShas: string[], lane: number, refNames: string[] = []): CommitRow {
@@ -157,6 +159,7 @@ describe('derived graph model cache', () => {
       sharedStates,
       true,
       false,
+      new StableLaneLayout(),
     )
     const fromLinked = deriveGraphModel(
       input,
@@ -166,11 +169,46 @@ describe('derived graph model cache', () => {
       sharedStates,
       true,
       false,
+      new StableLaneLayout(),
     )
 
     expect(fromMain?.renderedRows.map((entry) => entry.lane)).toEqual([1, 0, 0])
     expect(fromLinked?.renderedRows.map((entry) => entry.lane)).toEqual(
       fromMain?.renderedRows.map((entry) => entry.lane),
     )
+  })
+
+  test.each([false, true])('keeps a linked rebase clear of commits with stable lanes (already loaded: %s)', (alreadyLoaded) => {
+    const input = history([
+      row('tip', ['upstream'], 0, ['main']),
+      row('upstream', ['base'], 0, ['origin/main']),
+      row('base', [], 0),
+    ])
+    const stableLanes = new StableLaneLayout()
+    const sharedStates: WorktreeGraphState[] = [{
+      path: '/repo/linked',
+      headSha: 'upstream',
+      rebaseHeadSha: 'replayed',
+      changeCount: 6,
+      conflictedCount: 6,
+    }]
+    const derive = (states: WorktreeGraphState[]) => deriveGraphModel(
+      input, refs, dirtyWorktree, '/repo/main', states, true, false, stableLanes,
+    )!
+    if (alreadyLoaded) derive([])
+
+    const model = derive(sharedStates)
+    const main = model.layout.shaToNode.get('tip')!
+    const linkedHead = model.layout.shaToNode.get('upstream')!
+    // The pending rebase occupies the row above its HEAD. Its circle and
+    // conflict badge must not cover the main commit or its branch label.
+    expect(linkedHead.y - NODE_SPACING_Y).toBe(main.y)
+    expect(main.x - linkedHead.x).toBeGreaterThanOrEqual(LANE_WIDTH)
+    expect(derive(sharedStates).renderedRows.map((entry) => entry.lane))
+      .toEqual(model.renderedRows.map((entry) => entry.lane))
+
+    // Once the rebase is resolved, restore the underlying stable lanes.
+    expect(derive([]).renderedRows.map((entry) => entry.lane)).toEqual([0, 0, 0])
+    expect(input.rows.map((entry) => entry.lane)).toEqual([0, 0, 0])
   })
 })

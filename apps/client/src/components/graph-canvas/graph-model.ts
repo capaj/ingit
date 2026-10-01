@@ -147,11 +147,14 @@ export function deriveGraphModel(
     normalizeAcrossWorktrees,
   )
   const extraLeftGutter = showCommitMessages ? COMMIT_MESSAGE_GUTTER : 0
-  const worktreeRows = dirtyWorktrees.reduce(
+  // Stabilize commit ownership before reserving worktree space. Otherwise a
+  // remembered lane (or a preferred parent lane on first load) can pull a
+  // displaced commit back underneath a pending node and its conflict badge.
+  const stableRows = stableLanes?.stabilize(sourceRows) ?? sourceRows
+  const renderedRows = dirtyWorktrees.reduce(
     (rows, worktree) => routeUpstreamAroundWorktree(rows, worktree.branch ?? null, worktree.headSha),
-    sourceRows,
+    stableRows,
   )
-  const renderedRows = stableLanes?.stabilize(worktreeRows) ?? worktreeRows
   const variantKey = referenceVariantKey(currentBranch, dirtyWorktrees, extraLeftGutter)
   const variants = referenceCache.get(renderedRows)
   const referenceHit = variants?.get(variantKey)
