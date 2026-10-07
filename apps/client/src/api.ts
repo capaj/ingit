@@ -120,7 +120,7 @@ export function getStatus(repoId: string) {
 }
 
 export function getWorktreeChanges(repoId: string) {
-  return ensureClient().getWorktreeChanges({ repoId })
+  return (ensureClient() as ContractRouterClient<typeof contract>).getWorktreeChanges({ repoId })
 }
 
 export function getWorktreeGraphStates(repoId: string) {
@@ -132,11 +132,11 @@ export function getStashes(repoId: string): Promise<StashSummary[]> {
 }
 
 export function getStashDiff(repoId: string, stashSha: string) {
-  return ensureClient().getStashDiff({ repoId, stashSha })
+  return (ensureClient() as ContractRouterClient<typeof contract>).getStashDiff({ repoId, stashSha })
 }
 
 export function getStashFileDiff(repoId: string, stashSha: string, path: string, oldPath?: string) {
-  return ensureClient().getStashFileDiff({ repoId, stashSha, path, oldPath })
+  return (ensureClient() as ContractRouterClient<typeof contract>).getStashFileDiff({ repoId, stashSha, path, oldPath })
 }
 
 export function createStash(repoId: string, message?: string): Promise<StashActionResponse> {
@@ -165,7 +165,7 @@ export function installAndResolveLockfile(
 }
 
 export function getWorktreeFileDiff(repoId: string, path: string, area: WorktreeDiffArea, oldPath?: string) {
-  return ensureClient().getWorktreeFileDiff({ repoId, path, area, oldPath })
+  return (ensureClient() as ContractRouterClient<typeof contract>).getWorktreeFileDiff({ repoId, path, area, oldPath })
 }
 
 export function commitStaged(repoId: string, message: string, noVerify: boolean, amend: boolean) {
@@ -185,11 +185,11 @@ export function getCommitAuthor(repoId: string, sha: string) {
 }
 
 export function getCommitDiff(repoId: string, sha: string) {
-  return ensureClient().getCommitDiff({ repoId, sha })
+  return (ensureClient() as ContractRouterClient<typeof contract>).getCommitDiff({ repoId, sha })
 }
 
 export function getCommitFileDiff(repoId: string, sha: string, path: string, oldPath?: string) {
-  return ensureClient().getCommitFileDiff({ repoId, sha, path, oldPath })
+  return (ensureClient() as ContractRouterClient<typeof contract>).getCommitFileDiff({ repoId, sha, path, oldPath })
 }
 
 export function getCommitPRs(repoId: string, sha: string) {

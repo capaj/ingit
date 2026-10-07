@@ -9,6 +9,8 @@ import { RepoOpen } from './components/RepoOpen'
 import { RefsSidebar } from './components/RefsSidebar'
 import { GraphCanvas } from './components/GraphCanvas'
 import { ReflogGraph } from './components/ReflogGraph'
+import { PatchGrep } from './components/PatchGrep'
+import { ViewSwitcher } from './components/ViewSwitcher'
 import { CommitDetail } from './components/CommitDetail'
 import { WorkingTreeDetail } from './components/WorkingTreeDetail'
 import { StashDetail } from './components/StashDetail'
@@ -321,7 +323,7 @@ export function App() {
       )}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 14px', borderBottom: '1px solid #313244', background: '#181825', fontSize: 12, color: '#6c7086', gap: 8, overflow: 'hidden' }}>
+        <div className="repository-toolbar" style={{ height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 14px', borderBottom: '1px solid #313244', background: '#181825', fontSize: 12, color: '#6c7086', gap: 8, overflow: 'hidden' }}>
           {!refsSidebarOpen && (
             <button
               onClick={() => setRefsSidebarOpen(true)}
@@ -362,37 +364,7 @@ export function App() {
               {showCommitMessages ? 'Hide messages' : 'Show messages'}
             </button>
           )}
-          <div style={{ flexShrink: 0, display: 'flex', borderRadius: 4, border: '1px solid #313244', overflow: 'hidden' }}>
-            <button
-              onClick={() => setViewMode('history')}
-              style={{
-                padding: '4px 10px',
-                border: 'none',
-                background: viewMode === 'history' ? '#89b4fa20' : 'transparent',
-                color: viewMode === 'history' ? '#89b4fa' : '#6c7086',
-                fontSize: 11,
-                cursor: 'pointer',
-              }}
-              title="Branch history graph"
-            >
-              History
-            </button>
-            <button
-              onClick={() => setViewMode('reflog')}
-              style={{
-                padding: '4px 10px',
-                border: 'none',
-                borderLeft: '1px solid #313244',
-                background: viewMode === 'reflog' ? '#f9e2af20' : 'transparent',
-                color: viewMode === 'reflog' ? '#f9e2af' : '#6c7086',
-                fontSize: 11,
-                cursor: 'pointer',
-              }}
-              title="Reflog time machine — recover lost commits and see where HEAD has been"
-            >
-              Time Machine
-            </button>
-          </div>
+          <ViewSwitcher value={viewMode} onChange={setViewMode} />
           {worktrees.filter((worktree) => !worktree.bare).length > 1 && (
             <>
               <span style={{ color: '#45475a', marginLeft: 8 }}>worktree</span>
@@ -620,7 +592,9 @@ export function App() {
           </button>
         </div>
 
-        {viewMode === 'reflog' ? (
+        {viewMode === 'patch-grep' ? (
+          <PatchGrep key={repoId} />
+        ) : viewMode === 'reflog' ? (
           <ReflogGraph />
         ) : import.meta.env.DEV ? (
           <Profiler id="graph-canvas" onRender={recordGraphRender}>
@@ -631,7 +605,7 @@ export function App() {
         )}
       </div>
 
-      <RepositoryDetailPane />
+      {viewMode !== 'patch-grep' && <RepositoryDetailPane />}
 
       <SshConversionDialog onOpenSettings={() => { setSettingsInitialSection('remotes'); setSettingsOpen(true) }} />
       <ErrorDialog error={errorDialog} onDismiss={dismissError} />

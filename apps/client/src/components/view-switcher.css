@@ -1,0 +1,51 @@
+.repository-toolbar {
+  container-name: repository-toolbar;
+  container-type: inline-size;
+}
+
+.view-switcher { flex-shrink: 0; }
+.view-switcher-tabs {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid #313244;
+  border-radius: 4px;
+}
+
+.view-switcher-tabs button {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: #6c7086;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.view-switcher-tabs button + button { border-left: 1px solid #313244; }
+.view-switcher-tabs button[aria-pressed="true"][data-view="history"] { background: #89b4fa20; color: #89b4fa; }
+.view-switcher-tabs button[aria-pressed="true"][data-view="reflog"] { background: #f9e2af20; color: #f9e2af; }
+.view-switcher-tabs button[aria-pressed="true"][data-view="patch-grep"] { background: #a6e3a120; color: #a6e3a1; }
+.view-switcher-tabs button:focus-visible { outline: 2px solid #89b4fa; outline-offset: -2px; }
+
+.view-switcher-select {
+  display: none;
+  max-width: 130px;
+  padding: 3px 6px;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  background: #1e1e2e;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.view-switcher-select[data-view="history"] { color: #89b4fa; }
+.view-switcher-select[data-view="reflog"] { color: #f9e2af; }
+.view-switcher-select[data-view="patch-grep"] { color: #a6e3a1; }
+.view-switcher-select option { background: #1e1e2e; color: #cdd6f4; }
+.view-switcher-select:focus-visible { outline: 2px solid #89b4fa; outline-offset: 2px; }
+
+@container repository-toolbar (max-width: 800px) {
+  .view-switcher-tabs { display: none; }
+  .view-switcher-select { display: block; }
+}

@@ -1,4 +1,4 @@
-export type ViewMode = 'history' | 'reflog'
+export type ViewMode = 'history' | 'reflog' | 'patch-grep'
 
 export const DEFAULT_GRAPH_ZOOM = 1
 export const MIN_GRAPH_ZOOM = 0.1
