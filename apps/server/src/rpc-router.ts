@@ -17,7 +17,8 @@ import { listAgentSessions, focusAgentSession, installWindowCalls } from './agen
 import { openDefaultTerminal } from './open-terminal.js'
 import { installAndResolveLockfile } from './lockfile-install.js'
 import { getRepositoryVersion } from './repository-version.js'
-import { getAppSettings, setAutoUpdate } from './app-settings.js'
+import { generateCommitMessage, getInstalledCommitMessageAgents } from './commit-message.js'
+import { getAppSettings, setAutoUpdate, setCommitMessageAgent } from './app-settings.js'
 
 const sessionManager = new SessionManager()
 
@@ -47,6 +48,8 @@ function rethrowWithDetail(err: unknown): never {
 export const router = os.router({
   getAppSettings: os.getAppSettings.handler(() => getAppSettings().catch(rethrowWithDetail)),
   setAutoUpdate: os.setAutoUpdate.handler(({ input }) => setAutoUpdate(input.autoUpdate).catch(rethrowWithDetail)),
+  setCommitMessageAgent: os.setCommitMessageAgent.handler(({ input }) => setCommitMessageAgent(input.commitMessageAgent).catch(rethrowWithDetail)),
+  getInstalledCommitMessageAgents: os.getInstalledCommitMessageAgents.handler(() => getInstalledCommitMessageAgents()),
 
   openRepo: os.openRepo.handler(async ({ input }) => {
     return sessionManager.openRepo(input.path)
@@ -211,6 +214,11 @@ export const router = os.router({
   getWorktreeFileDiff: os.getWorktreeFileDiff.handler(async ({ input }) => {
     const session = getSession(input.repoId)
     return session.getWorktreeFileDiff(input.path, input.area, input.oldPath)
+  }),
+
+  generateCommitMessage: os.generateCommitMessage.handler(async ({ input }) => {
+    const settings = await getAppSettings().catch(rethrowWithDetail)
+    return generateCommitMessage(getSession(input.repoId), settings.commitMessageAgent).catch(rethrowWithDetail)
   }),
 
   commit: os.commit.handler(async ({ input }) => {

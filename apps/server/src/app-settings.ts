@@ -2,9 +2,11 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import type { AgentName } from '@ingit/rpc-contract'
 
 export interface AppSettings {
   autoUpdate: boolean
+  commitMessageAgent: AgentName | null
 }
 
 export function appSettingsPath(): string {
@@ -28,23 +30,47 @@ async function readSettings(filePath: string): Promise<Record<string, unknown>> 
   }
 }
 
-export async function getAppSettings(filePath = appSettingsPath()): Promise<AppSettings> {
-  const data = await readSettings(filePath)
+function parseSettings(data: Record<string, unknown>): AppSettings {
   if (data.autoUpdate !== undefined && typeof data.autoUpdate !== 'boolean') {
     throw new Error('Invalid automatic update preference')
   }
-  return { autoUpdate: data.autoUpdate ?? true }
+  if (data.commitMessageAgent != null && data.commitMessageAgent !== 'claude' && data.commitMessageAgent !== 'codex') {
+    throw new Error('Invalid commit message agent preference')
+  }
+  return { autoUpdate: data.autoUpdate ?? true, commitMessageAgent: data.commitMessageAgent ?? null }
 }
 
-export async function setAutoUpdate(autoUpdate: boolean, filePath = appSettingsPath()): Promise<AppSettings> {
+export async function getAppSettings(filePath = appSettingsPath()): Promise<AppSettings> {
+  return parseSettings(await readSettings(filePath))
+}
+
+let pendingWrite: Promise<unknown> = Promise.resolve()
+
+function updateSettings(patch: Partial<AppSettings>, filePath: string): Promise<AppSettings> {
+  const result = pendingWrite.catch(() => {}).then(() => writeSettings(patch, filePath))
+  pendingWrite = result
+  return result
+}
+
+async function writeSettings(patch: Partial<AppSettings>, filePath: string): Promise<AppSettings> {
   const data = await readSettings(filePath)
+  const updated = { ...data, ...patch }
+  const settings = parseSettings(updated)
   await mkdir(dirname(filePath), { recursive: true })
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporaryPath, JSON.stringify({ ...data, autoUpdate }, null, 2) + '\n', { mode: 0o600 })
+    await writeFile(temporaryPath, JSON.stringify(updated, null, 2) + '\n', { mode: 0o600 })
     await rename(temporaryPath, filePath)
   } finally {
     await rm(temporaryPath, { force: true })
   }
-  return { autoUpdate }
+  return settings
+}
+
+export function setAutoUpdate(autoUpdate: boolean, filePath = appSettingsPath()): Promise<AppSettings> {
+  return updateSettings({ autoUpdate }, filePath)
+}
+
+export function setCommitMessageAgent(commitMessageAgent: AgentName, filePath = appSettingsPath()): Promise<AppSettings> {
+  return updateSettings({ commitMessageAgent }, filePath)
 }

@@ -47,10 +47,12 @@ export interface WorktreeSlice {
   worktreeSelected: boolean
   /** In-progress commit message; kept while the working-tree panel is hidden. */
   worktreeCommitMessage: string
+  generatingCommitMessage: boolean
   worktreeFileDiffs: Record<string, WorktreeDiffEntry>
   commitFileDiffs: Record<string, CommitFileDiffEntry>
 
   setWorktreeCommitMessage: (message: string) => void
+  generateWorktreeCommitMessage: () => Promise<void>
   loadWorktrees: () => Promise<void>
   /** Remove a linked worktree, optionally moving the current branch to the main checkout first. */
   removeWorktree: (path: string, moveCurrentBranchToMain?: boolean) => Promise<boolean>
@@ -77,6 +79,7 @@ export interface WorktreeSlice {
 export type WorktreeSliceState = Omit<
   WorktreeSlice,
   | 'setWorktreeCommitMessage'
+  | 'generateWorktreeCommitMessage'
   | 'loadWorktrees'
   | 'removeWorktree'
   | 'loadWorktreeChanges'
@@ -105,6 +108,7 @@ export function createWorktreeSliceState(): WorktreeSliceState {
     worktreeChanges: null,
     worktreeSelected: false,
     worktreeCommitMessage: '',
+    generatingCommitMessage: false,
     worktreeFileDiffs: {},
     commitFileDiffs: {},
   }

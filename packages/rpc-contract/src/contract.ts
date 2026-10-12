@@ -192,6 +192,7 @@ export const DirectoryEntry = z.object({
 
 export const AgentSessionKind = z.enum(['terminal', 'ide', 'background'])
 export const AgentName = z.enum(['claude', 'codex'])
+const AppSettings = z.object({ autoUpdate: z.boolean(), commitMessageAgent: AgentName.nullable() })
 
 export const AgentSession = z.object({
   pid: z.number(),
@@ -234,8 +235,10 @@ export const FocusCapabilities = z.object({
 // ---------------------------------------------------------------------------
 
 export const contract = {
-  getAppSettings: oc.input(z.object({})).output(z.object({ autoUpdate: z.boolean() })),
-  setAutoUpdate: oc.input(z.object({ autoUpdate: z.boolean() })).output(z.object({ autoUpdate: z.boolean() })),
+  getAppSettings: oc.input(z.object({})).output(AppSettings),
+  setAutoUpdate: oc.input(z.object({ autoUpdate: z.boolean() })).output(AppSettings),
+  setCommitMessageAgent: oc.input(z.object({ commitMessageAgent: AgentName })).output(AppSettings),
+  getInstalledCommitMessageAgents: oc.input(z.object({})).output(z.array(AgentName)),
 
   openRepo: oc
     .input(z.object({ path: z.string() }))
@@ -459,6 +462,10 @@ export const contract = {
       isBinary: z.boolean(),
       imageDiff: ImageDiff.optional(),
     })),
+
+  generateCommitMessage: oc
+    .input(z.object({ repoId: RepoId }))
+    .output(z.object({ message: z.string().min(1), agent: AgentName })),
 
   commit: oc
     .input(z.object({

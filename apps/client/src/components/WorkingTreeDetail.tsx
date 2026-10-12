@@ -228,11 +228,13 @@ function Section({
 
 function CommitBox({
   stagedCount,
+  changedCount,
   headSha,
   branch,
   amendable,
 }: {
   stagedCount: number
+  changedCount: number
   headSha?: string
   branch?: string
   amendable: boolean
@@ -245,6 +247,8 @@ function CommitBox({
   const repoId = useAppStore((s) => s.repoId)
   const message = useAppStore((s) => s.worktreeCommitMessage)
   const setMessage = useAppStore((s) => s.setWorktreeCommitMessage)
+  const generateMessage = useAppStore((s) => s.generateWorktreeCommitMessage)
+  const generatingMessage = useAppStore((s) => s.generatingCommitMessage)
   const [noVerify, setNoVerify] = useState(() => {
     try { return localStorage.getItem('commitNoVerify') === 'true' } catch { return false }
   })
@@ -320,11 +324,13 @@ function CommitBox({
     }
   }
 
-  const canCommit = stagedCount > 0
-    && message.trim().length > 0
+  const needsMessage = message.trim().length === 0
+  const canCommit = (needsMessage ? changedCount > 0 : stagedCount > 0)
     && !amendStaging
     && !pendingMutation
-  const canSubmit = canCommit && (submitAction === 'commit' || !!branch)
+    && !generatingMessage
+    && !pushingAfterCommit
+  const canSubmit = canCommit && (needsMessage || submitAction === 'commit' || !!branch)
 
   const chooseSubmitAction = (action: 'commit' | 'commit-and-push') => {
     try { localStorage.setItem('commitSubmitAction', action) } catch { /* ignore */ }
@@ -334,6 +340,10 @@ function CommitBox({
 
   const submit = async () => {
     if (!canSubmit) return
+    if (needsMessage) {
+      await generateMessage()
+      return
+    }
     const ok = await performCommit(message.trim(), noVerify, amending)
     if (!ok) return
 
@@ -371,7 +381,9 @@ function CommitBox({
     }
   }
 
-  const buttonLabel = amendStaging
+  const buttonLabel = generatingMessage
+    ? 'Generating…'
+    : amendStaging
     ? 'Staging…'
     : pushingAfterCommit
     ? 'Pushing…'
@@ -390,7 +402,7 @@ function CommitBox({
             void submit()
           }
         }}
-        placeholder={amending ? 'Amend commit message' : stagedCount > 0 ? 'Commit message' : 'Stage files to commit'}
+        placeholder={amending ? 'Amend commit message' : 'Commit message (leave empty to generate)'}
         rows={3}
         style={{
           resize: 'vertical',
@@ -417,7 +429,7 @@ function CommitBox({
               <input
                 type="checkbox"
                 checked={amend}
-                disabled={amendStaging}
+                disabled={amendStaging || generatingMessage}
                 onChange={(e) => void toggleAmend(e.target.checked)}
                 style={{ accentColor: '#cba6f7', cursor: amendStaging ? 'default' : 'pointer' }}
               />
@@ -448,7 +460,7 @@ function CommitBox({
           <button
             onClick={() => void submit()}
             disabled={!canSubmit}
-            title={submitAction === 'commit-and-push' && !branch ? 'Check out a branch before committing and pushing' : undefined}
+            title={needsMessage ? `Generate a message for ${stagedCount > 0 ? 'staged changes' : 'all changed files'} using Claude or Codex` : submitAction === 'commit-and-push' && !branch ? 'Check out a branch before committing and pushing' : undefined}
             style={{
               background: canSubmit ? '#a6e3a1' : '#313244',
               color: canSubmit ? '#11111b' : '#6c7086',
@@ -469,7 +481,7 @@ function CommitBox({
             aria-label="Choose commit action"
             aria-haspopup="menu"
             aria-expanded={actionMenuOpen}
-            disabled={amendStaging || pendingMutation || pushingAfterCommit}
+            disabled={amendStaging || pendingMutation || pushingAfterCommit || generatingMessage}
             onClick={() => setActionMenuOpen((open) => !open)}
             style={{
               width: 28,
@@ -478,7 +490,7 @@ function CommitBox({
               border: 'none',
               borderLeft: `1px solid ${canCommit ? '#11111b33' : '#45475a'}`,
               borderRadius: '0 6px 6px 0',
-              cursor: amendStaging || pendingMutation || pushingAfterCommit ? 'default' : 'pointer',
+              cursor: amendStaging || pendingMutation || pushingAfterCommit || generatingMessage ? 'default' : 'pointer',
               fontFamily: 'inherit',
               fontSize: 10,
               fontWeight: 700,
@@ -784,6 +796,7 @@ export function WorkingTreeDetail() {
 
       <CommitBox
         stagedCount={staged.length}
+        changedCount={total}
         headSha={changes?.headSha}
         branch={changes?.branch}
         amendable={!operation && !!changes?.headSha}

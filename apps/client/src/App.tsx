@@ -16,6 +16,7 @@ import { WorkingTreeDetail } from './components/WorkingTreeDetail'
 import { StashDetail } from './components/StashDetail'
 import { ErrorDialog } from './components/ErrorDialog'
 import { AgentSessions } from './components/AgentSessions'
+import { CommitMessageSetup } from './components/CommitMessageSettings'
 import type { DirectoryEntry, DirectoryListing, WorktreeChangesResponse } from '@ingit/rpc-contract'
 
 const SettingsDialog = lazy(async () => {
@@ -55,6 +56,10 @@ function uncommittedFileCount(changes: WorktreeChangesResponse | null): number {
 }
 
 export function App() {
+  return <CommitMessageSetup><AppContent /></CommitMessageSetup>
+}
+
+function AppContent() {
   const [refsSidebarOpen, setRefsSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialSection, setSettingsInitialSection] = useState<'appearance' | 'remotes'>('appearance')

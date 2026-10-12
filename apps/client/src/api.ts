@@ -10,6 +10,7 @@ import type {
   StashActionResponse,
   StashSummary,
   WorktreeDiffArea,
+  AgentName,
 } from '@ingit/rpc-contract'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -56,6 +57,14 @@ export function getAppSettings() {
 
 export function setAutoUpdate(autoUpdate: boolean) {
   return (ensureClient() as ContractRouterClient<typeof contract>).setAutoUpdate({ autoUpdate })
+}
+
+export function setCommitMessageAgent(commitMessageAgent: AgentName) {
+  return (ensureClient() as ContractRouterClient<typeof contract>).setCommitMessageAgent({ commitMessageAgent })
+}
+
+export function getInstalledCommitMessageAgents() {
+  return (ensureClient() as ContractRouterClient<typeof contract>).getInstalledCommitMessageAgents({})
 }
 
 export async function openTerminal(repoId: string): Promise<void> {
@@ -172,6 +181,10 @@ export function commitStaged(repoId: string, message: string, noVerify: boolean,
   return ensureClient().commit({ repoId, message, noVerify, amend })
 }
 
+export function generateCommitMessage(repoId: string) {
+  return (ensureClient() as ContractRouterClient<typeof contract>).generateCommitMessage({ repoId })
+}
+
 export function queryHistory(_repoId: string, query: HistoryQuery) {
   return ensureClient().queryHistory(query)
 }
@@ -258,7 +271,7 @@ export function getReflog(repoId: string, ref?: string, maxCount?: number) {
 }
 
 export function listAgentSessions() {
-  return ensureClient().listAgentSessions({})
+  return (ensureClient() as ContractRouterClient<typeof contract>).listAgentSessions({})
 }
 
 export function focusAgentSession(pid: number, cwd?: string) {

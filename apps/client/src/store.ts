@@ -55,6 +55,7 @@ import {
   getWorktreeFileDiff,
   getCommitFileDiff,
   commitStaged,
+  generateCommitMessage,
   isConnectionLostError,
 } from './api'
 import {
@@ -465,6 +466,7 @@ async function openRepoByPathImpl(
     worktreeChanges: null,
     worktreeSelected: false,
     worktreeCommitMessage: '',
+    generatingCommitMessage: false,
     worktreeFileDiffs: {},
     commitFileDiffs: {},
     reflog: null,
@@ -1159,6 +1161,26 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     }
   },
 
+  generateWorktreeCommitMessage: async () => {
+    const { repoId, generatingCommitMessage, pendingMutation } = get()
+    if (!repoId || generatingCommitMessage || pendingMutation) return
+    const requestId = repoOpenRequestId
+    const isCurrentRepo = () => get().repoId === repoId && repoOpenRequestId === requestId
+    set({ generatingCommitMessage: true })
+    try {
+      const { message } = await generateCommitMessage(repoId)
+      // Preserve anything typed while the CLI was running, and never publish
+      // a result into a repository opened after this request started.
+      if (isCurrentRepo() && !get().worktreeCommitMessage.trim()) {
+        set({ worktreeCommitMessage: message })
+      }
+    } catch (err) {
+      if (isCurrentRepo()) get().showError('Commit message generation failed', err)
+    } finally {
+      if (isCurrentRepo()) set({ generatingCommitMessage: false })
+    }
+  },
+
   performCommit: async (message, noVerify, amend = false) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
@@ -1431,6 +1453,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
       worktreeChanges: null,
       worktreeSelected: false,
       worktreeCommitMessage: '',
+      generatingCommitMessage: false,
       worktreeFileDiffs: {},
       commitFileDiffs: {},
       pendingMutation: false,

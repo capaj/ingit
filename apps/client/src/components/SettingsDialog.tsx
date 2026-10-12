@@ -26,6 +26,7 @@ import {
 } from './graph-canvas/CommitIcons'
 import { customSvgIconError } from './graph-canvas/CustomSvgIcon'
 import { UpdateSettings } from './UpdateSettings'
+import { CommitMessageSettings } from './CommitMessageSettings'
 
 interface SettingsDialogProps {
   open: boolean
@@ -935,7 +936,7 @@ function settingsNavButtonStyle(active: boolean): CSSProperties {
 export function SettingsDialog({ open, onClose, initialSection = 'appearance' }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const [section, setSection] = useState<'appearance' | 'commit-icons' | 'conflict-resolvers' | 'remotes' | 'updates'>(initialSection)
+  const [section, setSection] = useState<'appearance' | 'commit-icons' | 'commit-messages' | 'conflict-resolvers' | 'remotes' | 'updates'>(initialSection)
   const [commitIconsDirty, setCommitIconsDirty] = useState(false)
   const [conflictResolversDirty, setConflictResolversDirty] = useState(false)
 
@@ -1024,6 +1025,7 @@ export function SettingsDialog({ open, onClose, initialSection = 'appearance' }:
               Commit icons{commitIconsDirty ? ' •' : ''}
             </button>
             <div style={{ padding: '14px 8px 6px', color: '#585b70', fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Working tree</div>
+            <button type="button" onClick={() => setSection('commit-messages')} aria-current={section === 'commit-messages' ? 'page' : undefined} style={settingsNavButtonStyle(section === 'commit-messages')}>Commit messages</button>
             <button
               type="button"
               onClick={() => setSection('conflict-resolvers')}
@@ -1042,6 +1044,7 @@ export function SettingsDialog({ open, onClose, initialSection = 'appearance' }:
             <>
               {section === 'remotes' && <RemoteSettings />}
               {section === 'updates' && <UpdateSettings />}
+              {section === 'commit-messages' && <CommitMessageSettings />}
               <div style={{ display: section === 'appearance' ? 'block' : 'none', height: '100%' }}>
                 <GraphAppearanceSettings onClose={requestClose} />
               </div>
