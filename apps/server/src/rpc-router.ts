@@ -1,7 +1,6 @@
 import assert from 'node:assert'
 import { implement, ORPCError } from '@orpc/server'
 import {
-  BranchCheckedOutError,
   GitCommandError,
   isNonFastForwardPushRejection,
 } from '@ingit/git-core'
@@ -383,26 +382,9 @@ export const router = os.router({
     const session = getSession(input.repoId)
     let message = ''
     switch (input.action) {
-      case 'checkout': {
-        try {
-          await session.checkout(input.refName, {
-            ignoreOtherWorktrees: input.ignoreOtherWorktrees,
-          })
-        } catch (err) {
-          if (err instanceof BranchCheckedOutError) {
-            throw new ORPCError('CONFLICT', {
-              message: err.message,
-              data: {
-                reason: 'branch-in-use',
-                branchRef: err.branchRef,
-                worktreePath: err.worktreePath,
-              },
-            })
-          }
-          rethrowWithDetail(err)
-        }
+      case 'checkout':
+        await session.checkout(input.refName).catch(rethrowWithDetail)
         break
-      }
       case 'push':
         try {
           message = await session.push(input.refName, input.remote, input.force ?? false)

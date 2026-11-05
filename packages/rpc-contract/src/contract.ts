@@ -678,9 +678,6 @@ export const contract = {
       // For `push`: force-push (--force-with-lease). Needed after a rebase, when
       // the branch diverged from its upstream and a normal push is rejected.
       force: z.boolean().optional(),
-      // For `checkout`: explicitly allow a branch that is checked out in a
-      // different linked worktree to also be checked out in this worktree.
-      ignoreOtherWorktrees: z.boolean().optional(),
       // For `push` and `fetch`: the remote selected in the client.
       remote: z.string().optional(),
     }))

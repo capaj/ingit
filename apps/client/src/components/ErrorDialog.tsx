@@ -4,7 +4,7 @@ import type { ErrorDialogAction } from '../store/ui-slice'
 export interface ErrorDialogState {
   title: string
   message: string
-  /** Optional extra buttons (e.g. "Checkout here") shown next to Close. */
+  /** Optional extra buttons (e.g. "Force push") shown next to Close. */
   actions?: ErrorDialogAction[]
 }
 

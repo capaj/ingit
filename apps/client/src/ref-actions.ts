@@ -1,21 +1,4 @@
-import type { RefSummary, WorktreeSummary } from '@ingit/rpc-contract'
-
-/** Match the local branch that RepoSession.checkout will use, regardless of upstream config. */
-export function findCheckoutWorktree(
-  ref: RefSummary | null,
-  worktrees: WorktreeSummary[],
-): WorktreeSummary | null {
-  if (!ref || ref.kind === 'tag') return null
-
-  const branchRef = ref.kind === 'head'
-    ? ref.name
-    : `refs/heads/${ref.name.slice('refs/remotes/'.length).split('/').slice(1).join('/')}`
-
-  return worktrees.find((worktree) => !worktree.isCurrent
-    && !worktree.bare
-    && !worktree.prunable
-    && worktree.branchRef === branchRef) ?? null
-}
+import type { RefSummary } from '@ingit/rpc-contract'
 
 /**
  * Force push is deliberately opt-in: the server marks a branch after it

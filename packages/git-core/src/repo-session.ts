@@ -52,11 +52,6 @@ export interface ResolvedRef {
   remoteBranch?: string
 }
 
-export interface CheckoutOptions {
-  /** Allow the target branch to remain checked out in another linked worktree. */
-  ignoreOtherWorktrees?: boolean
-}
-
 export interface RemoveWorktreeOptions {
   /** Move a currently-open linked worktree's branch to the main worktree first. */
   moveCurrentBranchToMain?: boolean
@@ -66,18 +61,6 @@ export interface RemoveWorktreeResult {
   worktrees: WorktreeSummary[]
   /** The worktree the caller should open after removing its current one. */
   nextWorktreePath?: string
-}
-
-export class BranchCheckedOutError extends Error {
-  readonly branchRef: string
-  readonly worktreePath: string
-
-  constructor(branchRef: string, worktreePath: string) {
-    super(`Branch '${branchRef.slice('refs/heads/'.length)}' is already checked out at '${worktreePath}'`)
-    this.name = 'BranchCheckedOutError'
-    this.branchRef = branchRef
-    this.worktreePath = worktreePath
-  }
 }
 
 export class RepoSession {
@@ -1094,22 +1077,9 @@ export class RepoSession {
       .join('\n') || err.message
   }
 
-  async checkout(ref: string, options: CheckoutOptions = {}): Promise<void> {
+  /** Checkout always operates in this session's path, even when another worktree uses the branch. */
+  async checkout(ref: string): Promise<void> {
     const resolved = await this.resolveRef(ref)
-    const targetBranchRef = resolved?.kind === 'head'
-      ? resolved.fullName
-      : resolved?.kind === 'remote' && resolved.remoteBranch
-        ? `refs/heads/${resolved.remoteBranch}`
-        : null
-    if (targetBranchRef && !options.ignoreOtherWorktrees) {
-      const occupiedWorktree = (await this.getWorktrees()).find(
-        (worktree) => !worktree.isCurrent && worktree.branchRef === targetBranchRef,
-      )
-      if (occupiedWorktree) {
-        throw new BranchCheckedOutError(targetBranchRef, occupiedWorktree.path)
-      }
-    }
-
     const autoStashSha = await this.createCheckoutAutoStash(ref)
     let switched = false
 
@@ -1122,7 +1092,7 @@ export class RepoSession {
 
         await runGit([
           'checkout',
-          ...(options.ignoreOtherWorktrees ? ['--ignore-other-worktrees'] : []),
+          '--ignore-other-worktrees',
           '-B',
           localBranchName,
           ref,
@@ -1135,7 +1105,7 @@ export class RepoSession {
         // switch branches even when the user originally had staged files.
         await runGit([
           'checkout',
-          ...(options.ignoreOtherWorktrees ? ['--ignore-other-worktrees'] : []),
+          '--ignore-other-worktrees',
           ref,
         ], this.rootPath)
         switched = true

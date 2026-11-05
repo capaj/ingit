@@ -73,7 +73,6 @@ export interface GraphSlice {
     refName: string,
     sha: string,
     force?: boolean,
-    ignoreOtherWorktrees?: boolean,
   ) => Promise<void>
   performCommitAction: (action: CommitActionKind, sha: string, message?: string) => Promise<void>
   performMergeRef: (refName: string) => Promise<void>

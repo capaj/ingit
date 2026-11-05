@@ -253,7 +253,6 @@ export function refAction(
   sha: string,
   force?: boolean,
   remote?: string,
-  ignoreOtherWorktrees?: boolean,
 ) {
   return ensureClient().refAction({
     repoId,
@@ -262,7 +261,6 @@ export function refAction(
     sha,
     force,
     remote,
-    ignoreOtherWorktrees,
   })
 }
 

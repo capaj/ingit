@@ -14,7 +14,7 @@ import { openTerminal } from '../api'
 import { useAppStore } from '../store'
 import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
-import { findCheckoutWorktree, isForcePushEligible, isNonFastForwardPushError } from '../ref-actions'
+import { isForcePushEligible, isNonFastForwardPushError } from '../ref-actions'
 import {
   getSquashRange,
   predictAppendOnHead,
@@ -142,21 +142,16 @@ interface VisibleCommitAction {
 }
 
 interface VisibleRefAction {
-  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset' | 'open-worktree'
+  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
   label: string
   tone: 'neutral' | 'warning' | 'danger'
   force?: boolean
-  ignoreOtherWorktrees?: boolean
-  worktreeChoice?: boolean
-  worktreePath?: string
 }
 
-interface PendingRefAction extends Omit<VisibleRefAction, 'action' | 'worktreePath'> {
-  action: 'checkout' | 'push' | 'fetch' | 'delete' | 'move' | 'reset'
+interface PendingRefAction extends VisibleRefAction {
   refName: string
   sha: string
   force: boolean
-  ignoreOtherWorktrees: boolean
 }
 
 function samePendingRefAction(a: PendingRefAction | null, b: PendingRefAction) {
@@ -165,7 +160,6 @@ function samePendingRefAction(a: PendingRefAction | null, b: PendingRefAction) {
     && a.refName === b.refName
     && a.sha === b.sha
     && a.force === b.force
-    && a.ignoreOtherWorktrees === b.ignoreOtherWorktrees
 }
 
 type CreateRefKind = 'branch' | 'tag'
@@ -215,16 +209,6 @@ interface ParsedVersionTag {
   minor: number
   patch: number
   hasVPrefix: boolean
-}
-
-function checkoutConflictWorktreePath(err: unknown): string | null {
-  if (!err || typeof err !== 'object') return null
-  const data = (err as { data?: unknown }).data
-  if (!data || typeof data !== 'object') return null
-  const detail = data as { reason?: unknown; worktreePath?: unknown }
-  return detail.reason === 'branch-in-use' && typeof detail.worktreePath === 'string'
-    ? detail.worktreePath
-    : null
 }
 
 function pathBaseName(path: string): string {
@@ -2732,9 +2716,10 @@ export function GraphCanvas() {
     [refMap, selectedRefName],
   )
 
-  const selectedRefWorktree = useMemo(
-    () => findCheckoutWorktree(selectedRef, worktrees),
-    [selectedRef, worktrees],
+  const selectedRefInOtherWorktree = useMemo(
+    () => selectedRef?.kind === 'head'
+      && (worktreesByBranch.get(selectedRef.shortName)?.some((worktree) => !worktree.isCurrent) ?? false),
+    [selectedRef, worktreesByBranch],
   )
 
   const defaultNextTagName = useMemo(
@@ -3766,54 +3751,17 @@ export function GraphCanvas() {
         ]
       }
 
-      if (selectedRefWorktree) {
-        return [
-          {
-            action: 'open-worktree' as const,
-            label: 'Open worktree',
-            tone: 'neutral' as const,
-            worktreePath: selectedRefWorktree.path,
-            worktreeChoice: true,
-          },
-          {
-            action: 'checkout' as const,
-            label: 'Checkout here',
-            tone: 'neutral' as const,
-            ignoreOtherWorktrees: true,
-            worktreeChoice: true,
-          },
-          ...(canPushSelectedRef ? [pushAction] : []),
-        ]
-      }
-
       return [
         { action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const },
         ...(canPushSelectedRef ? [pushAction] : []),
-        ...(canResetSelectedRef ? [{ action: 'reset' as const, label: 'Reset', tone: 'warning' as const }] : []),
-        { action: 'delete' as const, label: 'Delete', tone: 'danger' as const },
+        ...(canResetSelectedRef && !selectedRefInOtherWorktree ? [{ action: 'reset' as const, label: 'Reset', tone: 'warning' as const }] : []),
+        ...(!selectedRefInOtherWorktree ? [{ action: 'delete' as const, label: 'Delete', tone: 'danger' as const }] : []),
       ]
     }
 
     if (selectedRef.kind === 'remote') {
       return [
-        ...(selectedRefWorktree
-          ? [
-              {
-                action: 'open-worktree' as const,
-                label: 'Open worktree',
-                tone: 'neutral' as const,
-                worktreePath: selectedRefWorktree.path,
-                worktreeChoice: true,
-              },
-              {
-                action: 'checkout' as const,
-                label: 'Checkout here',
-                tone: 'neutral' as const,
-                ignoreOtherWorktrees: true,
-                worktreeChoice: true,
-              },
-            ]
-          : [{ action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const }]),
+        { action: 'checkout' as const, label: 'Checkout', tone: 'neutral' as const },
         { action: 'delete' as const, label: 'Delete', tone: 'danger' as const },
       ]
     }
@@ -3821,14 +3769,14 @@ export function GraphCanvas() {
     return [
       { action: 'push' as const, label: 'Push', tone: 'neutral' as const },
     ]
-  }, [selectedRef, selectedRefWorktree, canPushSelectedRef, canResetSelectedRef])
+  }, [selectedRef, selectedRefInOtherWorktree, canPushSelectedRef, canResetSelectedRef])
 
   const movableRef = useMemo(() => {
     if (!selectedRef) return null
     if (selectedRef.kind === 'tag') return selectedRef
-    if (selectedRef.kind === 'head' && !selectedRefWorktree) return selectedRef
+    if (selectedRef.kind === 'head' && !selectedRefInOtherWorktree) return selectedRef
     return null
-  }, [selectedRef, selectedRefWorktree])
+  }, [selectedRef, selectedRefInOtherWorktree])
 
   const showMergeButton = useMemo(() => (
     !!currentHeadNode
@@ -3946,7 +3894,6 @@ export function GraphCanvas() {
       pendingAction.refName,
       pendingAction.sha,
       pendingAction.force,
-      pendingAction.ignoreOtherWorktrees,
     )
       .finally(() => {
         setPendingRefAction((current) => samePendingRefAction(current, pendingAction) ? null : current)
@@ -3957,10 +3904,6 @@ export function GraphCanvas() {
     if (!selectedRefName || !selectedRef) return
     if (pendingMutation) return
     setMergePreviewVisible(false)
-    if (refAction.action === 'open-worktree') {
-      if (refAction.worktreePath) void openRepoByPath(refAction.worktreePath)
-      return
-    }
     const gitAction: PendingRefAction['action'] = refAction.action
     const sha = selectedRef.targetSha
     const refName = selectedRefName
@@ -3971,8 +3914,6 @@ export function GraphCanvas() {
       refName,
       sha,
       force: !!refAction.force,
-      ignoreOtherWorktrees: !!refAction.ignoreOtherWorktrees,
-      worktreeChoice: refAction.worktreeChoice,
     }
     runRefAction(pendingAction).catch((err) => {
       if (
@@ -3990,43 +3931,16 @@ export function GraphCanvas() {
               label: 'Force push',
               tone: 'warning',
               force: true,
-              ignoreOtherWorktrees: false,
               refName,
               sha,
             }).catch((e) => showError('Force push failed', e))
           },
         })
       } else {
-        const worktreePath = refAction.action === 'checkout'
-          ? checkoutConflictWorktreePath(err)
-          : null
-        if (worktreePath) {
-          const message = err instanceof Error ? err.message : `Branch is already checked out at '${worktreePath}'`
-          showError('Branch is already checked out',
-            `${message}\n\nCheckout here keeps this path and uses the branch in both worktrees. Commits and resets in either worktree move the shared branch.`,
-            [
-              {
-                label: 'Open worktree',
-                run: () => { void openRepoByPath(worktreePath) },
-              },
-              {
-                label: 'Checkout here',
-                run: () => {
-                  runRefAction({
-                    ...pendingAction,
-                    label: 'Checkout here',
-                    ignoreOtherWorktrees: true,
-                  }).catch((checkoutErr) => showError('Checkout failed', checkoutErr))
-                },
-              },
-            ],
-          )
-          return
-        }
         showError(`${refAction.action} failed`, err)
       }
     })
-  }, [selectedRefName, selectedRef, runRefAction, showError, pendingMutation, openRepoByPath])
+  }, [selectedRefName, selectedRef, runRefAction, showError, pendingMutation])
 
   const handleMoveRef = useCallback((targetSha: string) => {
     if (!movableRef) return
@@ -5662,8 +5576,6 @@ export function GraphCanvas() {
           const visibleRowRefActions = refActionInFlight
             ? (pendingRowRefAction ? [pendingRowRefAction] : [])
             : rowRefActions
-          const worktreeChoiceActions = visibleRowRefActions.filter((refAction) => refAction.worktreeChoice)
-          const inlineRefActions = visibleRowRefActions.filter((refAction) => !refAction.worktreeChoice)
           const rowShowsMerge = !refActionInFlight && !!currentBranch && node.row.refNames.includes(currentBranch) && showMergeButton
           const rowShowsAddRef = !pendingMutation
             && !refActionInFlight
@@ -5742,20 +5654,7 @@ export function GraphCanvas() {
                   top: verticalOffsetForHeight(DEFAULT_REF_ACTION_HEIGHT),
                   zIndex: 7,
                 }}>
-                  {worktreeChoiceActions.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {worktreeChoiceActions.map((refAction) => (
-                        <RefActionButton
-                          key={refAction.action}
-                          label={refAction.label}
-                          tone={refAction.tone}
-                          loading={!!pendingRowRefAction && refAction.action === pendingRowRefAction.action}
-                          onClick={() => handleRefActionClick(refAction)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {inlineRefActions.map((refAction) => (
+                  {visibleRowRefActions.map((refAction) => (
                     <RefActionButton
                       key={refAction.action}
                       label={refAction.label}

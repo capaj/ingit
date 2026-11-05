@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { BranchCheckedOutError, RepoSession } from './repo-session.js'
+import { RepoSession } from './repo-session.js'
 import { runGit } from './git-command.js'
 
 let repoDir: string
@@ -279,7 +279,7 @@ describe('RepoSession.checkout', () => {
     expect(devRef2?.isCurrent).toBeUndefined()
   })
 
-  test('lists and removes linked worktrees and reports an occupied branch before checkout', async () => {
+  test('lists and removes linked worktrees and checks out an occupied branch in the current path', async () => {
     const worktreeParent = await mkdtemp(join(tmpdir(), 'ingit-linked-worktree-'))
     const worktreePath = join(worktreeParent, 'dev tree')
 
@@ -311,14 +311,8 @@ describe('RepoSession.checkout', () => {
       })
       await runGit(['clean', '-fd'], worktreePath)
 
-      await expect(session.checkout('dev')).rejects.toMatchObject({
-        name: 'BranchCheckedOutError',
-        branchRef: 'refs/heads/dev',
-        worktreePath,
-      } satisfies Partial<BranchCheckedOutError>)
-      expect(await currentBranch(repoDir)).toBe('main')
-
-      await session.checkout('dev', { ignoreOtherWorktrees: true })
+      await session.checkout('dev')
+      expect(session.rootPath).toBe(repoDir)
       expect(await currentBranch(repoDir)).toBe('dev')
       expect(await currentBranch(worktreePath)).toBe('dev')
       await session.checkout('main')
@@ -337,41 +331,35 @@ describe('RepoSession.checkout', () => {
     }
   })
 
-  test('checks out an occupied remote branch in the current path when explicitly requested', async () => {
+  test('checks out origin/main in a linked worktree while main is open in the primary worktree', async () => {
     const fixture = await createActionFixture()
     const worktreeParent = await mkdtemp(join(tmpdir(), 'ingit-remote-worktree-'))
-    const worktreePath = join(worktreeParent, 'dev tree')
+    const worktreePath = join(worktreeParent, 'topic tree')
     let checkoutSession: RepoSession | null = null
 
     try {
       await runGit(['remote', 'add', 'origin', fixture.repoDir], fixture.repoDir)
-      await runGit(['update-ref', 'refs/remotes/origin/dev', fixture.devSha], fixture.repoDir)
-      await runGit(['worktree', 'add', worktreePath, 'dev'], fixture.repoDir)
-      await Bun.write(join(fixture.repoDir, 'file.txt'), 'hello\ncurrent work\n')
-      await runGit(['add', 'file.txt'], fixture.repoDir)
-      await Bun.write(join(worktreePath, 'pending.txt'), 'other worktree work\n')
-      checkoutSession = await RepoSession.open(fixture.repoDir)
+      await runGit(['update-ref', 'refs/remotes/origin/main', fixture.mainChangeSha], fixture.repoDir)
+      await runGit(['worktree', 'add', '-b', 'topic', worktreePath, 'dev'], fixture.repoDir)
+      await Bun.write(join(worktreePath, 'file.txt'), 'hello\ncurrent work\n')
+      await runGit(['add', 'file.txt'], worktreePath)
+      await Bun.write(join(fixture.repoDir, 'pending.txt'), 'other worktree work\n')
+      checkoutSession = await RepoSession.open(worktreePath)
 
-      expect((await checkoutSession.getRefs()).find((ref) => ref.shortName === 'dev')?.upstream).toBeUndefined()
-      await expect(checkoutSession.checkout('origin/dev')).rejects.toMatchObject({
-        name: 'BranchCheckedOutError',
-        branchRef: 'refs/heads/dev',
-        worktreePath,
-      })
+      expect((await checkoutSession.getRefs()).find((ref) => ref.shortName === 'main')?.upstream).toBeUndefined()
+
+      await checkoutSession.checkout('origin/main')
+
+      expect(checkoutSession.rootPath).toBe(worktreePath)
+      expect(await currentBranch(worktreePath)).toBe('main')
+      expect(await currentHeadSha(worktreePath)).toBe(fixture.mainChangeSha)
+      expect((await runGit(['rev-parse', '--abbrev-ref', '@{u}'], worktreePath)).stdout.trim()).toBe('origin/main')
+      expect(await Bun.file(join(worktreePath, 'file.txt')).text()).toBe('hello\ncurrent work\n')
+      expect(await Bun.file(join(worktreePath, 'main.txt')).text()).toBe('main change\n')
+      expect(await Bun.file(join(worktreePath, 'dev.txt')).exists()).toBe(false)
       expect(await currentBranch(fixture.repoDir)).toBe('main')
-      expect(await workingTreeStatus(fixture.repoDir)).toBe('M  file.txt')
-      expect((await runGit(['stash', 'list'], fixture.repoDir)).stdout.trim()).toBe('')
-
-      await checkoutSession.checkout('origin/dev', { ignoreOtherWorktrees: true })
-
-      expect(checkoutSession.rootPath).toBe(fixture.repoDir)
-      expect(await currentBranch(fixture.repoDir)).toBe('dev')
-      expect(await currentHeadSha(fixture.repoDir)).toBe(fixture.devSha)
-      expect((await runGit(['rev-parse', '--abbrev-ref', '@{u}'], fixture.repoDir)).stdout.trim()).toBe('origin/dev')
-      expect(await Bun.file(join(fixture.repoDir, 'file.txt')).text()).toBe('hello\ncurrent work\n')
-      expect(await currentBranch(worktreePath)).toBe('dev')
-      expect(await Bun.file(join(worktreePath, 'pending.txt')).text()).toBe('other worktree work\n')
-      expect(await workingTreeStatus(worktreePath)).toBe('?? pending.txt')
+      expect(await Bun.file(join(fixture.repoDir, 'pending.txt')).text()).toBe('other worktree work\n')
+      expect(await workingTreeStatus(fixture.repoDir)).toBe('?? pending.txt')
       expect((await runGit(['stash', 'list'], fixture.repoDir)).stdout.trim()).toBe('')
     } finally {
       checkoutSession?.close()

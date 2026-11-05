@@ -1729,7 +1729,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     }
   },
 
-  performRefAction: async (action, refName, sha, force, ignoreOtherWorktrees) => {
+  performRefAction: async (action, refName, sha, force) => {
     const { repoPath } = get()
     let repoId = get().repoId as string
     if (!repoId || !repoPath) return
@@ -1797,7 +1797,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     try {
       await withTimeout((async () => {
         try {
-          await refAction(repoId, action, refName, sha, force, remote, ignoreOtherWorktrees)
+          await refAction(repoId, action, refName, sha, force, remote)
         } catch (err) {
           // Most ref actions are safe to retry after the connection dropped.
           // Checkout may be between its temporary stash and restore phases,
@@ -1807,7 +1807,7 @@ export const useAppStore = create<AppState>((baseSet, get) => {
             const res = await openRepo({ path: repoPath })
             repoId = res.repoId
             set({ repoId, githubUrl: res.githubUrl, totalCommitCount: res.totalCommitCount })
-            await refAction(repoId, action, refName, sha, force, remote, ignoreOtherWorktrees)
+            await refAction(repoId, action, refName, sha, force, remote)
           } else {
             throw err
           }
