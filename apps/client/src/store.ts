@@ -1402,11 +1402,11 @@ export const useAppStore = create<AppState>((baseSet, get) => {
     startCIPolling()
   },
 
-  showError: (title, err, action) => {
+  showError: (title, err, actions) => {
     const message = err instanceof Error ? err.message
       : typeof err === 'string' ? err
       : 'Unknown error'
-    set({ errorDialog: { title, message, action } })
+    set({ errorDialog: { title, message, actions: Array.isArray(actions) ? actions : actions ? [actions] : undefined } })
   },
 
   dismissError: () => set({ errorDialog: null }),

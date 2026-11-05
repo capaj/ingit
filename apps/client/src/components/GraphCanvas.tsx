@@ -14,7 +14,7 @@ import { openTerminal } from '../api'
 import { useAppStore } from '../store'
 import { MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM } from '../store/ui-slice'
 import { shouldApplyCommitScrollRequest, shouldRequestMoreHistory } from '../history-pagination'
-import { isForcePushEligible, isNonFastForwardPushError } from '../ref-actions'
+import { findCheckoutWorktree, isForcePushEligible, isNonFastForwardPushError } from '../ref-actions'
 import {
   getSquashRange,
   predictAppendOnHead,
@@ -2732,25 +2732,10 @@ export function GraphCanvas() {
     [refMap, selectedRefName],
   )
 
-  const selectedRefWorktree = useMemo(() => {
-    if (!selectedRef) return null
-    // Checkout is blocked by a branch being checked out in another worktree,
-    // not merely by a worktree marker sharing the ref's commit. Markers are
-    // placed by head SHA, so a detached worktree at the same commit must not
-    // replace Checkout with Open worktree.
-    if (selectedRef.kind === 'head') {
-      return worktreesByBranch.get(selectedRef.shortName)?.find((worktree) => !worktree.isCurrent) ?? null
-    }
-    if (selectedRef.kind === 'remote') {
-      const trackingBranch = refs.find(
-        (ref) => ref.kind === 'head' && ref.upstream === selectedRef.name,
-      )
-      return trackingBranch
-        ? worktreesByBranch.get(trackingBranch.shortName)?.find((worktree) => !worktree.isCurrent) ?? null
-        : null
-    }
-    return null
-  }, [selectedRef, refs, worktreesByBranch])
+  const selectedRefWorktree = useMemo(
+    () => findCheckoutWorktree(selectedRef, worktrees),
+    [selectedRef, worktrees],
+  )
 
   const defaultNextTagName = useMemo(
     () => nextVersionTagName(refs),
@@ -3792,7 +3777,7 @@ export function GraphCanvas() {
           },
           {
             action: 'checkout' as const,
-            label: 'Checkout branch',
+            label: 'Checkout here',
             tone: 'neutral' as const,
             ignoreOtherWorktrees: true,
             worktreeChoice: true,
@@ -3822,7 +3807,7 @@ export function GraphCanvas() {
               },
               {
                 action: 'checkout' as const,
-                label: 'Checkout branch',
+                label: 'Checkout here',
                 tone: 'neutral' as const,
                 ignoreOtherWorktrees: true,
                 worktreeChoice: true,
@@ -4016,10 +4001,26 @@ export function GraphCanvas() {
           ? checkoutConflictWorktreePath(err)
           : null
         if (worktreePath) {
-          showError('Branch is already checked out', err, {
-            label: 'Open worktree',
-            run: () => { void openRepoByPath(worktreePath) },
-          })
+          const message = err instanceof Error ? err.message : `Branch is already checked out at '${worktreePath}'`
+          showError('Branch is already checked out',
+            `${message}\n\nCheckout here keeps this path and uses the branch in both worktrees. Commits and resets in either worktree move the shared branch.`,
+            [
+              {
+                label: 'Open worktree',
+                run: () => { void openRepoByPath(worktreePath) },
+              },
+              {
+                label: 'Checkout here',
+                run: () => {
+                  runRefAction({
+                    ...pendingAction,
+                    label: 'Checkout here',
+                    ignoreOtherWorktrees: true,
+                  }).catch((checkoutErr) => showError('Checkout failed', checkoutErr))
+                },
+              },
+            ],
+          )
           return
         }
         showError(`${refAction.action} failed`, err)

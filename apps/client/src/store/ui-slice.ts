@@ -4,7 +4,7 @@ export const DEFAULT_GRAPH_ZOOM = 1
 export const MIN_GRAPH_ZOOM = 0.1
 export const MAX_GRAPH_ZOOM = 3
 
-/** Optional extra button shown in the error dialog (e.g. "Force push"). */
+/** An extra button shown in the error dialog (e.g. "Force push"). */
 export interface ErrorDialogAction {
   label: string
   run: () => void
@@ -12,7 +12,7 @@ export interface ErrorDialogAction {
 
 export interface UiSlice {
   viewMode: ViewMode
-  errorDialog: { title: string; message: string; action?: ErrorDialogAction } | null
+  errorDialog: { title: string; message: string; actions?: ErrorDialogAction[] } | null
   showCommitMessages: boolean
   showGutterColors: boolean
   normalizeAcrossWorktrees: boolean
@@ -25,7 +25,7 @@ export interface UiSlice {
   setShowGutterColors: (value: boolean) => void
   setNormalizeAcrossWorktrees: (value: boolean) => void
   setGraphZoom: (value: number) => void
-  showError: (title: string, err: unknown, action?: ErrorDialogAction) => void
+  showError: (title: string, err: unknown, actions?: ErrorDialogAction | ErrorDialogAction[]) => void
   dismissError: () => void
 }
 

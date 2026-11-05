@@ -337,6 +337,49 @@ describe('RepoSession.checkout', () => {
     }
   })
 
+  test('checks out an occupied remote branch in the current path when explicitly requested', async () => {
+    const fixture = await createActionFixture()
+    const worktreeParent = await mkdtemp(join(tmpdir(), 'ingit-remote-worktree-'))
+    const worktreePath = join(worktreeParent, 'dev tree')
+    let checkoutSession: RepoSession | null = null
+
+    try {
+      await runGit(['remote', 'add', 'origin', fixture.repoDir], fixture.repoDir)
+      await runGit(['update-ref', 'refs/remotes/origin/dev', fixture.devSha], fixture.repoDir)
+      await runGit(['worktree', 'add', worktreePath, 'dev'], fixture.repoDir)
+      await Bun.write(join(fixture.repoDir, 'file.txt'), 'hello\ncurrent work\n')
+      await runGit(['add', 'file.txt'], fixture.repoDir)
+      await Bun.write(join(worktreePath, 'pending.txt'), 'other worktree work\n')
+      checkoutSession = await RepoSession.open(fixture.repoDir)
+
+      expect((await checkoutSession.getRefs()).find((ref) => ref.shortName === 'dev')?.upstream).toBeUndefined()
+      await expect(checkoutSession.checkout('origin/dev')).rejects.toMatchObject({
+        name: 'BranchCheckedOutError',
+        branchRef: 'refs/heads/dev',
+        worktreePath,
+      })
+      expect(await currentBranch(fixture.repoDir)).toBe('main')
+      expect(await workingTreeStatus(fixture.repoDir)).toBe('M  file.txt')
+      expect((await runGit(['stash', 'list'], fixture.repoDir)).stdout.trim()).toBe('')
+
+      await checkoutSession.checkout('origin/dev', { ignoreOtherWorktrees: true })
+
+      expect(checkoutSession.rootPath).toBe(fixture.repoDir)
+      expect(await currentBranch(fixture.repoDir)).toBe('dev')
+      expect(await currentHeadSha(fixture.repoDir)).toBe(fixture.devSha)
+      expect((await runGit(['rev-parse', '--abbrev-ref', '@{u}'], fixture.repoDir)).stdout.trim()).toBe('origin/dev')
+      expect(await Bun.file(join(fixture.repoDir, 'file.txt')).text()).toBe('hello\ncurrent work\n')
+      expect(await currentBranch(worktreePath)).toBe('dev')
+      expect(await Bun.file(join(worktreePath, 'pending.txt')).text()).toBe('other worktree work\n')
+      expect(await workingTreeStatus(worktreePath)).toBe('?? pending.txt')
+      expect((await runGit(['stash', 'list'], fixture.repoDir)).stdout.trim()).toBe('')
+    } finally {
+      checkoutSession?.close()
+      await fixture.cleanup()
+      await rm(worktreeParent, { recursive: true, force: true })
+    }
+  })
+
   test('moves a current linked-worktree branch to the main worktree before removing it', async () => {
     const worktreeParent = await mkdtemp(join(tmpdir(), 'ingit-current-worktree-'))
     const mainPath = join(worktreeParent, 'main')

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
+import type { ErrorDialogAction } from '../store/ui-slice'
 
 export interface ErrorDialogState {
   title: string
   message: string
-  /** Optional extra button (e.g. "Force push") shown next to Close. */
-  action?: { label: string; run: () => void }
+  /** Optional extra buttons (e.g. "Checkout here") shown next to Close. */
+  actions?: ErrorDialogAction[]
 }
 
 interface ErrorDialogProps {
@@ -116,6 +117,7 @@ export function ErrorDialog({ error, onDismiss }: ErrorDialogProps) {
 
         <div style={{
           display: 'flex',
+          flexWrap: 'wrap',
           justifyContent: 'flex-end',
           gap: 8,
           padding: '12px 18px',
@@ -137,12 +139,13 @@ export function ErrorDialog({ error, onDismiss }: ErrorDialogProps) {
           >
             {copied ? 'Copied' : 'Copy'}
           </button>
-          {error.action && (
+          {error.actions?.map((action) => (
             <button
+              key={action.label}
               type="button"
               onClick={() => {
-                error.action?.run()
                 onDismiss()
+                action.run()
               }}
               style={{
                 background: '#f9e2af',
@@ -155,9 +158,9 @@ export function ErrorDialog({ error, onDismiss }: ErrorDialogProps) {
                 cursor: 'pointer',
               }}
             >
-              {error.action.label}
+              {action.label}
             </button>
-          )}
+          ))}
           <button
             type="button"
             onClick={onDismiss}
